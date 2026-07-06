@@ -1,0 +1,10 @@
+SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
+
+version is licensed under either of the following terms, at your option:
+
+1. MIT License; see LICENSES/MIT.txt.
+2. Apache License 2.0 with LLVM exception; see:
+   - LICENSES/Apache-2.0.txt
+   - LICENSES/LLVM-exception.txt
+
+This notice matches the license expression declared in alire.toml.

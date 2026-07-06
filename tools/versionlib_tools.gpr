@@ -1,0 +1,37 @@
+with "versionlib.gpr";
+with "project_tools.gpr";
+
+--  Verification tooling for the versionlib library crate. Built on the shared
+--  project_tools helpers; independent of the version (CLI) crate. Run from the
+--  versionlib crate root so the checks see versionlib's own src/, tests/, docs/.
+project Versionlib_Tools is
+
+   for Source_Dirs use (".");
+   for Object_Dir use "obj";
+   for Exec_Dir use "bin";
+
+   for Main use
+     ("check_ref_write_policy.adb",
+      "check_version_metadata.adb",
+      "check_test_scope_completeness.adb",
+      "check_documentation_coherence.adb",
+      "check_release_manifests.adb",
+      "check_release_ready.adb",
+      "zlib_inflate_file.adb",
+      "zlib_deflate_stored_file.adb",
+      "smoke_test.adb",
+      "bench_status.adb",
+      "bench_log.adb",
+      "bench_archive.adb",
+      "bench_object_lookup.adb");
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        ("-gnat2022", "-gnata", "-Wall", "-Wextra");
+   end Compiler;
+
+   package Linker is
+      for Default_Switches ("Ada") use ("-lssl", "-lcrypto");
+   end Linker;
+
+end Versionlib_Tools;

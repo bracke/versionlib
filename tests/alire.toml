@@ -1,0 +1,32 @@
+name = "versionlib_tests"
+description = "functionality test suite for versionlib"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = []
+
+executables = ["tests"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+versionlib = "*"
+
+[[depends-on]]
+aunit = "^26.0.0"
+
+# Shared tooling helpers used by the test support (tooling only; versionlib
+# itself does not depend on project_tools).
+[[depends-on]]
+project_tools = "~0.1.0"
+
+[[pins]]
+versionlib = { path = '..' }
+
+[[pins]]
+project_tools = { path = "../../project_tools" }

@@ -1,0 +1,40 @@
+name = "versionlib"
+description = "Core functionality for the version Git-compatible VCS"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = ["version", "vcs", "git"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+httpclient = "^1.0.0"
+
+[[depends-on]]
+zlib = "~0.1.0-dev"
+
+[[depends-on]]
+i18n = "^1.0.0"
+
+[[depends-on]]
+ssh_lib = "^1.0.0"
+
+# Local development overrides. These path pins make `alr build` use the sibling
+# checkouts; they are dev-only and must NOT appear in the published manifest
+# (each dependency is resolved from the registry on publish).
+[[pins]]
+httpclient = { path = "../HttpClient" }
+
+[[pins]]
+zlib = { path = "../zlib" }
+
+[[pins]]
+i18n = { path = "../i18n" }
+
+[[pins]]
+ssh_lib = { path = "../sshlib" }
