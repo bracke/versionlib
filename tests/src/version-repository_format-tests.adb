@@ -168,20 +168,26 @@ package body Version.Repository_Format.Tests is
               "sha256 config must resolve to the Sha256 algorithm");
    end Sha256_Object_Format_Is_Compatible;
 
-   procedure Reftable_Ref_Storage_Rejected
+   procedure Reftable_Ref_Storage_Is_Compatible
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       Root : constant String :=
         Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
       Git_Dir : constant String := Join (Root, ".git");
+      Info : Version.Repository_Format.Format_Info;
    begin
+      --  reftable is now a supported ref backend (read via Version.Reftable).
       Write_Config
         (Git_Dir,
-         "[extensions]" & Character'Val (10)
+         "[core]" & Character'Val (10)
+         & Character'Val (9) & "repositoryformatversion = 1" & Character'Val (10)
+         & "[extensions]" & Character'Val (10)
          & Character'Val (9) & "refStorage = reftable" & Character'Val (10));
 
-      Assert_Unsupported (Git_Dir, Version.Unsupported.Ref_Storage ("reftable"));
-   end Reftable_Ref_Storage_Rejected;
+      Info := Version.Repository_Format.Read (Git_Dir);
+      Assert (Version.Repository_Format.Is_Supported (Info),
+              "reftable ref-storage repositories must now be compatible");
+   end Reftable_Ref_Storage_Is_Compatible;
 
    procedure Partial_Clone_Format_Is_Compatible
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -300,9 +306,10 @@ package body Version.Repository_Format.Tests is
       Version.Test_Support.Write_Text_File
         (Join (Bare, "config"),
          "[extensions]" & Character'Val (10)
-         & Character'Val (9) & "refStorage = reftable" & Character'Val (10));
+         & Character'Val (9) & "refStorage = unknownbackend" & Character'Val (10));
 
-      Assert_Unsupported (Bare, Version.Unsupported.Ref_Storage ("reftable"));
+      Assert_Unsupported
+        (Bare, Version.Unsupported.Ref_Storage ("unknownbackend"));
    end Bare_Repository_Config_Checked;
 
    procedure Repository_Open_Rejects_Unsupported_Format
@@ -316,7 +323,7 @@ package body Version.Repository_Format.Tests is
       Version.Test_Support.Write_Text_File
         (Join (Join (Root, ".git"), "config"),
          "[extensions]" & Character'Val (10)
-         & Character'Val (9) & "refStorage = reftable" & Character'Val (10));
+         & Character'Val (9) & "refStorage = unknownbackend" & Character'Val (10));
 
       Ada.Directories.Set_Directory (Root);
       declare
@@ -387,9 +394,9 @@ package body Version.Repository_Format.Tests is
       Assert_Unsupported_Branch_Create_Does_Not_Mutate
         (Root,
          "[extensions]" & Character'Val (10)
-         & Character'Val (9) & "refStorage = reftable" & Character'Val (10),
-         Version.Unsupported.Ref_Storage ("reftable"),
-         "reftable ref-storage repository");
+         & Character'Val (9) & "refStorage = unknownbackend" & Character'Val (10),
+         Version.Unsupported.Ref_Storage ("unknownbackend"),
+         "unknown ref-storage repository");
    end Unsupported_Format_Does_Not_Mutate;
 
    procedure Partial_Clone_Branch_Create_Succeeds
@@ -497,8 +504,8 @@ package body Version.Repository_Format.Tests is
          "RepositoryFormat: invalid repositoryformatversion rejected");
       Register_Routine (T, Sha256_Object_Format_Is_Compatible'Access,
                         "RepositoryFormat: sha256 object format is compatible");
-      Register_Routine (T, Reftable_Ref_Storage_Rejected'Access,
-                        "RepositoryFormat: reftable ref storage rejected");
+      Register_Routine (T, Reftable_Ref_Storage_Is_Compatible'Access,
+                        "RepositoryFormat: reftable ref storage compatible");
       Register_Routine (T, Partial_Clone_Format_Is_Compatible'Access,
                         "RepositoryFormat: partialClone format is compatible");
       Register_Routine (T, Unknown_Extension_Rejected'Access,

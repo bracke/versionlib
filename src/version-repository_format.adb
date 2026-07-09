@@ -263,7 +263,10 @@ package body Version.Repository_Format is
          Set_Unsupported (Info, Version.Unsupported.Object_Format (Object_Format));
       end if;
 
-      if Ref_Storage /= "files" then
+      if Ref_Storage /= "files" and then Ref_Storage /= "reftable" then
+         --  "files" and "reftable" are both supported (reftable is read via
+         --  Version.Reftable and written via Version.Reftable.Writer). Any
+         --  other backend is genuinely unknown and rejected.
          Set_Unsupported (Info, Version.Unsupported.Ref_Storage (Ref_Storage));
       end if;
 

@@ -8,6 +8,7 @@ with GNAT.OS_Lib;
 
 with Version.Files;
 with Version.LFS;
+with Version.Text_Filter;
 with Version.Availability;
 with Version.Objects;
 with Version.Path_Safety;
@@ -118,10 +119,14 @@ package body Version.Stage is
 
          Blob_Id := Version.Write.Write_Blob
            (Repo    => Repo,
-            Content => Version.LFS.Clean_Content
+            Content => Version.Text_Filter.Clean_Content
               (Repo          => Repo,
                Relative_Path => Safe_Path,
-               Content       => Version.Files.Read_Binary_File (Full_Path)));
+               Content       => Version.LFS.Clean_Content
+                 (Repo          => Repo,
+                  Relative_Path => Safe_Path,
+                  Content       =>
+                    Version.Files.Read_Binary_File (Full_Path))));
 
          Version.Staging.Replace_Entry
            (Entries,

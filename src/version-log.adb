@@ -5,6 +5,7 @@ with Version.Objects; use Version.Objects;
 with Version.Object_Cache;
 with Version.Shallow_Cache;
 with Version.Ref_Cache;
+with Version.Verify;
 
 package body Version.Log is
 
@@ -174,11 +175,13 @@ package body Version.Log is
    end Format_Commit_Oneline_With_Cache;
 
    function Format_Commit_With_Cache
-     (Repo         : Version.Repository.Repository_Handle;
-      Cache        : in out Version.Object_Cache.Object_Cache;
-      Commit_Id    : Version.Objects.Hex_Object_Id;
-      Full_Message : Boolean := False) return String
+     (Repo           : Version.Repository.Repository_Handle;
+      Cache          : in out Version.Object_Cache.Object_Cache;
+      Commit_Id      : Version.Objects.Hex_Object_Id;
+      Full_Message   : Boolean := False;
+      Show_Signature : Boolean := False) return String
    is
+      use type Version.Verify.Verify_Result;
       Obj     : constant Version.Objects.Git_Object :=
         Version.Object_Cache.Read_Object
           (Repo => Repo, Cache => Cache, Id => Commit_Id);
@@ -195,6 +198,18 @@ package body Version.Log is
       end if;
 
       Append_Line (Result, "commit " & To_String (Commit_Id));
+      if Show_Signature then
+         declare
+            VR       : Version.Verify.Verify_Result;
+            Out_Text : Unbounded_String;
+         begin
+            Version.Verify.Verify_Object_Reporting
+              (Repo, Commit_Id, VR, Out_Text);
+            if VR /= Version.Verify.No_Signature then
+               Append (Result, To_String (Out_Text));
+            end if;
+         end;
+      end if;
       Append_Line (Result, "Author: " & Author_Name_Date (Content));
       Append_Line (Result, "Date:   " & Author_Date (Content));
       Append_Line (Result, "");
@@ -219,8 +234,9 @@ package body Version.Log is
    end Format_Commit;
 
    function Log_From_Commit
-     (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id) return String
+     (Repo           : Version.Repository.Repository_Handle;
+      Commit_Id      : Version.Objects.Hex_Object_Id;
+      Show_Signature : Boolean := False) return String
    is
       Current : Unbounded_String := To_Unbounded_String (To_String (Commit_Id));
       Result  : Unbounded_String;
@@ -252,7 +268,10 @@ package body Version.Log is
                Append
                  (Result,
                   Format_Commit_With_Cache
-                    (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
+                    (Repo           => Repo,
+                     Cache          => Objects,
+                     Commit_Id      => Current_Id,
+                     Show_Signature => Show_Signature));
                Append_Line (Result, "");
                if Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Current_Id)
                then
@@ -321,7 +340,8 @@ package body Version.Log is
    end Log_Oneline_From_Commit;
 
    function Log_Head
-     (Repo : Version.Repository.Repository_Handle) return String
+     (Repo           : Version.Repository.Repository_Handle;
+      Show_Signature : Boolean := False) return String
    is
       Refs    : Version.Ref_Cache.Ref_Cache;
       Current : constant String :=
@@ -336,7 +356,8 @@ package body Version.Log is
            with "corrupt repository: invalid commit id";
       end if;
 
-      return Log_From_Commit (Repo, Version.Objects.To_Object_Id (Current));
+      return Log_From_Commit
+        (Repo, Version.Objects.To_Object_Id (Current), Show_Signature);
    end Log_Head;
 
    function Log_Oneline_Head

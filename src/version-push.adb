@@ -1,12 +1,12 @@
-with Ada.Containers.Vectors;
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Directories;
 with Ada.IO_Exceptions;
-with Ada.Strings.Unbounded;
 
 with GNAT.OS_Lib;
 
 with Version.Files;
 with Version.Availability;
+with Version.Hash;
 with Version.History;
 with Version.Objects;
 with Version.Push.Internal;
@@ -14,6 +14,7 @@ with Version.Receive_Pack;
 with Version.Remotes;
 with Version.Ref_Transaction;
 with Version.Ref_Names;
+with Version.LFS;
 with Version.Refs;
 with Version.Revisions;
 with Version.Config;
@@ -334,6 +335,18 @@ package body Version.Push is
          Remote_Name => Remote_Name,
          Remote_Url  => Url,
          Run_Hooks   => Run_Hooks);
+
+      --  git-lfs pre-push behavior: upload the LFS objects backing any pointer
+      --  blobs reachable from the branch tip to the configured LFS store. Only
+      --  attempted when an LFS store is configured, to avoid walking history on
+      --  ordinary (non-LFS) pushes.
+      if Version.Config.Has_Key (Local_Repo, "lfs.url") then
+         Version.LFS.Upload_Referenced_Objects
+           (Repo        => Local_Repo,
+            Commit_Id   =>
+              Version.Refs.Resolve_Ref (Local_Repo, "refs/heads/" & Branch_Name),
+            Remote_Name => Remote_Name);
+      end if;
 
       case Version.Transport.Detect_Transport (Url) is
          when Version.Transport.Local_Transport =>
@@ -761,6 +774,156 @@ package body Version.Push is
       end case;
    end Push_Refspec;
 
+   procedure Push_Atomic
+     (Remote_Name : String;
+      Commands    : Atomic_Command_Vectors.Vector;
+      Force       : Boolean := False;
+      Run_Hooks   : Boolean := True)
+   is
+      Url : constant String := Remote_Url (Remote_Name);
+      Local_Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+
+      Null_Id : constant String :=
+        [1 .. Version.Hash.Hex_Length
+                (Version.Repository.Algorithm (Local_Repo)) => '0'];
+
+      --  Receive-pack command list for a smart transport (delete -> null id).
+      function Remote_Commands
+        return Version.Receive_Pack.Push_Command_Vectors.Vector
+      is
+         Result : Version.Receive_Pack.Push_Command_Vectors.Vector;
+      begin
+         for C of Commands loop
+            Result.Append
+              (Version.Receive_Pack.Push_Command'
+                 (Ref_Name => C.Dest_Ref,
+                  New_Id   =>
+                    To_Unbounded_String
+                      (if C.Delete then Null_Id
+                       else Version.Objects.To_String
+                              (Version.Revisions.Resolve_Commit
+                                 (Local_Repo, To_String (C.Source))))));
+         end loop;
+         return Result;
+      end Remote_Commands;
+   begin
+      Version.Ref_Names.Require_Remote_Name (Remote_Name);
+      if Commands.Is_Empty then
+         return;
+      end if;
+      for C of Commands loop
+         Version.Ref_Names.Require_Ref_Name (To_String (C.Dest_Ref));
+      end loop;
+
+      Run_Pre_Push_Hook
+        (Repo        => Local_Repo,
+         Remote_Name => Remote_Name,
+         Remote_Url  => Url,
+         Run_Hooks   => Run_Hooks);
+
+      case Version.Transport.Detect_Transport (Url) is
+         when Version.Transport.Local_Transport =>
+            declare
+               Remote_Git_Dir : constant String :=
+                 Remote_Git_Dir_For (Remote_Name);
+               Remote_Repo : constant Version.Repository.Repository_Handle :=
+                 Version.Repository.Open_Git_Dir (Remote_Git_Dir);
+               Copied :
+                 Version.Transport.Local.Copied_Object_Vectors.Vector;
+
+               function Old_Of (Ref : String) return String is
+                 (if Version.Refs.Ref_Exists (Remote_Repo, Ref)
+                  then To_String (Version.Refs.Resolve_Ref (Remote_Repo, Ref))
+                  else "");
+            begin
+               --  Validate all updates before touching the remote.
+               for C of Commands loop
+                  declare
+                     Ref : constant String := To_String (C.Dest_Ref);
+                     Old : constant String := Old_Of (Ref);
+                  begin
+                     if C.Delete then
+                        if Old'Length = 0 then
+                           raise Ada.IO_Exceptions.Data_Error
+                             with "remote ref does not exist: " & Ref;
+                        end if;
+                     elsif Old'Length > 0 and then not Force
+                       and then not Version.History.Is_Ancestor
+                                      (Repo       => Local_Repo,
+                                       Base_Id    =>
+                                         Version.Objects.To_Object_Id (Old),
+                                       Derived_Id =>
+                                         Version.Revisions.Resolve_Commit
+                                           (Local_Repo, To_String (C.Source)))
+                     then
+                        raise Ada.IO_Exceptions.Data_Error with
+                          "cannot push: non-fast-forward update to " & Ref;
+                     end if;
+                  end;
+               end loop;
+
+               Version.Transport.Local.Copy_Object_Store
+                 (Source_Git_Dir =>
+                    Version.Repository.Common_Git_Dir (Local_Repo),
+                  Target_Git_Dir => Remote_Git_Dir,
+                  Copied_Targets => Copied);
+               begin
+                  declare
+                     Tx : Version.Ref_Transaction.Transaction;
+                  begin
+                     Version.Ref_Transaction.Start (Tx, Remote_Repo);
+                     for C of Commands loop
+                        declare
+                           Ref : constant String := To_String (C.Dest_Ref);
+                        begin
+                           if C.Delete then
+                              Version.Ref_Transaction.Add_Delete
+                                (Item         => Tx,
+                                 Ref_Name     => Ref,
+                                 Expected_Old => Old_Of (Ref));
+                           else
+                              Version.Ref_Transaction.Add_Update
+                                (Item         => Tx,
+                                 Ref_Name     => Ref,
+                                 New_Id       =>
+                                   Version.Revisions.Resolve_Commit
+                                     (Local_Repo, To_String (C.Source)),
+                                 Expected_Old => Old_Of (Ref));
+                           end if;
+                        end;
+                     end loop;
+                     Version.Ref_Transaction.Commit (Tx);
+                  end;
+               exception
+                  when others =>
+                     Version.Transport.Local.Rollback_Copied_Objects (Copied);
+                     raise;
+               end;
+            end;
+
+         when Version.Transport.Http_Transport =>
+            Version.Receive_Pack.Push_Atomic
+              (Repo        => Local_Repo,
+               Remote_Name => Remote_Name,
+               Url         => Url,
+               Commands    => Remote_Commands,
+               Force       => Force);
+
+         when Version.Transport.Ssh_Transport =>
+            Version.Receive_Pack.Push_Atomic_Ssh
+              (Repo        => Local_Repo,
+               Remote_Name => Remote_Name,
+               Url         => Url,
+               Commands    => Remote_Commands,
+               Force       => Force);
+
+         when Version.Transport.Unsupported_Transport =>
+            raise Ada.IO_Exceptions.Data_Error with
+              Version.Unsupported.Remote_Url;
+      end case;
+   end Push_Atomic;
+
    procedure Push_Default
      (Remote_Name : String;
       Run_Hooks   : Boolean := True)
@@ -846,5 +1009,72 @@ package body Version.Push is
            & ".push is not configured";
       end if;
    end Push_Default;
+
+   procedure Push_Matching
+     (Remote_Name : String;
+      Force       : Boolean := False;
+      Run_Hooks   : Boolean := True)
+   is
+      package Str_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+      Heads_Prefix : constant String := "refs/heads/";
+
+      Url        : constant String := Remote_Url (Remote_Name);
+      Local_Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Remote     : Str_Sets.Set;
+
+      procedure Note_Remote_Ref (Name : String) is
+      begin
+         if Name'Length > Heads_Prefix'Length
+           and then Name (Name'First .. Name'First + Heads_Prefix'Length - 1)
+                    = Heads_Prefix
+         then
+            Remote.Include
+              (Name (Name'First + Heads_Prefix'Length .. Name'Last));
+         end if;
+      end Note_Remote_Ref;
+   begin
+      Version.Ref_Names.Require_Remote_Name (Remote_Name);
+
+      --  Collect the remote's branch names.
+      case Version.Transport.Detect_Transport (Url) is
+         when Version.Transport.Local_Transport =>
+            declare
+               Remote_Repo : constant Version.Repository.Repository_Handle :=
+                 Version.Repository.Open_Git_Dir
+                   (Remote_Git_Dir_For (Remote_Name));
+            begin
+               for B of Version.Refs.List_Branches (Remote_Repo) loop
+                  Remote.Include (To_String (B));
+               end loop;
+            end;
+
+         when Version.Transport.Http_Transport =>
+            for R of Version.Receive_Pack.Discover_Http (Url).Refs loop
+               Note_Remote_Ref (To_String (R.Name));
+            end loop;
+
+         when Version.Transport.Ssh_Transport =>
+            for R of Version.Receive_Pack.Discover_Ssh (Url).Refs loop
+               Note_Remote_Ref (To_String (R.Name));
+            end loop;
+
+         when Version.Transport.Unsupported_Transport =>
+            raise Ada.IO_Exceptions.Data_Error with
+              Version.Unsupported.Remote_Url;
+      end case;
+
+      --  Push every local branch that also exists on the remote.
+      for B of Version.Refs.List_Branches (Local_Repo) loop
+         if Remote.Contains (To_String (B)) then
+            Push_Refspec
+              (Remote_Name => Remote_Name,
+               Source      => To_String (B),
+               Dest_Ref    => Heads_Prefix & To_String (B),
+               Force       => Force,
+               Run_Hooks   => Run_Hooks);
+         end if;
+      end loop;
+   end Push_Matching;
 
 end Version.Push;

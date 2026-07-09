@@ -55,11 +55,15 @@ package Version.Write is
       return Version.Objects.Hex_Object_Id;
 
    function Write_Tag
-     (Repo      : Version.Repository.Repository_Handle;
-      Target_Id : Version.Objects.Hex_Object_Id;
-      Tag_Name  : String;
-      Message   : String)
+     (Repo        : Version.Repository.Repository_Handle;
+      Target_Id   : Version.Objects.Hex_Object_Id;
+      Tag_Name    : String;
+      Message     : String;
+      Signing_Key : String := "")
       return Version.Objects.Hex_Object_Id;
+   --  When Signing_Key is non-empty the tag payload is signed with gpg and the
+   --  ASCII-armored PGP signature is appended after the message (git `tag -s`
+   --  / `tag -u <key>`; "default" uses the default gpg key).
 
    procedure Save_Amend
      (Message   : String;

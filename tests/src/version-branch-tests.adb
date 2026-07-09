@@ -9,6 +9,7 @@ with Ada.Strings.Unbounded;
 with AUnit.Assertions;
 with AUnit.Test_Cases;
 with GNAT.OS_Lib;
+with GNAT.SHA256;
 with GNAT.Sockets;
 
 with Version.Git_Fixtures;
@@ -17,8 +18,12 @@ with Version.Files;
 with Version.Filesystem_Guard;
 with Version.Objects;
 with Version.Platform;
+with Version.LFS;
 with Version.Refs;
 with Version.Repository;
+with Version.Stage;
+with Version.Tags;
+with Version.Verify;
 with Version.Reflog;
 with Version.Revisions;
 with Version.Status;
@@ -2226,6 +2231,85 @@ package body Version.Branch.Tests is
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
    end Merge_GPG_Sign_Writes_GPGSig_Header;
+
+   --  A signed annotated tag carries a PGP signature block; Verify_Object
+   --  extracts it and runs gpg --verify (fake gpg exits 0 => Good), while an
+   --  unsigned commit yields No_Signature.
+   procedure Tag_Sign_And_Verify_With_Fake_GPG
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Had_Path : constant Boolean := Ada.Environment_Variables.Exists ("PATH");
+      Old_Path : constant String :=
+        (if Had_Path then Ada.Environment_Variables.Value ("PATH") else "");
+      Bin_Dir : constant String := Version.Test_Support.Join (Root, "fake-bin");
+      GPG_Path : constant String := Version.Test_Support.Join (Bin_Dir, "gpg");
+      LF : constant Character := Character'Val (10);
+   begin
+      Configure_Test_Repo (Root);
+      Ada.Directories.Set_Directory (Root);
+      if not Ada.Directories.Exists (Bin_Dir) then
+         Ada.Directories.Create_Directory (Bin_Dir);
+      end if;
+      --  Fake gpg: --verify succeeds; --detach-sign emits a fake armored block.
+      Version.Test_Support.Write_Text_File
+        (GPG_Path,
+         "#!/bin/sh" & LF
+         & "for a in ""$@""; do [ ""$a"" = ""--verify"" ] && exit 0; done" & LF
+         & "out=" & LF
+         & "while [ $# -gt 0 ]; do" & LF
+         & "  if [ ""$1"" = ""--output"" ]; then shift; out=$1; fi" & LF
+         & "  shift" & LF
+         & "done" & LF
+         & "cat > ""$out"" <<'EOF'" & LF
+         & "-----BEGIN PGP SIGNATURE-----" & LF
+         & LF
+         & "fake-signature" & LF
+         & "-----END PGP SIGNATURE-----" & LF
+         & "EOF" & LF);
+      Version.Git_Fixtures.Run (Root, "chmod +x fake-bin/gpg");
+      Ada.Environment_Variables.Set ("PATH", Bin_Dir & ":" & Old_Path);
+
+      Commit_File (Root, "base.txt", "base" & LF, "base");
+
+      Version.Tags.Create_Annotated_Tag
+        (Name => "sgt", Message => "signed tag", Signing_Key => "default");
+
+      --  The tag object embeds the PGP signature block.
+      Version.Git_Fixtures.Run
+        (Root,
+         "git cat-file -p refs/tags/sgt"
+         & " | grep -q '^-----BEGIN PGP SIGNATURE-----'");
+
+      declare
+         use type Version.Verify.Verify_Result;
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Tag_Id : constant Version.Objects.Hex_Object_Id :=
+           Version.Refs.Resolve_Ref (Repo, "refs/tags/sgt");
+         Commit_Id : constant Version.Objects.Hex_Object_Id :=
+           Version.Objects.To_Object_Id (Version.Refs.Current_Commit_Id (Repo));
+      begin
+         Assert
+           (Version.Verify.Verify_Object (Repo, Tag_Id)
+            = Version.Verify.Good_Signature,
+            "verify must accept the signed tag");
+         Assert
+           (Version.Verify.Verify_Object (Repo, Commit_Id)
+            = Version.Verify.No_Signature,
+            "verify must report no signature on an unsigned commit");
+      end;
+
+      Restore_Path (Old_Path, Had_Path);
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Restore_Path (Old_Path, Had_Path);
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Tag_Sign_And_Verify_With_Fake_GPG;
 
    procedure Merge_External_Driver_Resolves_Content_Conflict
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -6352,6 +6436,70 @@ package body Version.Branch.Tests is
          raise;
    end Merge_LFS_Pointer_Fetches_Local_LFS_Url_Media;
 
+   --  Staging an LFS-tracked file caches its media locally and stores a pointer
+   --  blob; Upload_Referenced_Objects then pushes that media to a local-dir LFS
+   --  store (git-lfs pre-push behavior), where a later smudge could fetch it.
+   procedure LFS_Upload_Pushes_Media_To_Local_Store
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Store   : constant String := Version.Test_Support.Join (Root, "lfs-store");
+      Media   : constant String := "large media payload for LFS upload";
+      Oid     : constant String := GNAT.SHA256.Digest (Media);
+      Dest    : constant String :=
+        Version.Test_Support.Join
+          (Version.Test_Support.Join
+             (Version.Test_Support.Join
+                (Version.Test_Support.Join (Store, "objects"),
+                 Oid (Oid'First .. Oid'First + 1)),
+              Oid (Oid'First + 2 .. Oid'First + 3)),
+           Oid);
+   begin
+      Configure_Test_Repo (Root);
+      Version.Git_Fixtures.Run (Root, "git config lfs.url " & Store);
+      Ada.Directories.Set_Directory (Root);
+
+      Version.Files.Write_Binary_File
+        (Version.Test_Support.Join (Root, ".gitattributes"),
+         "*.bin filter=lfs -text" & Character'Val (10));
+      Version.Files.Write_Binary_File
+        (Version.Test_Support.Join (Root, "big.bin"), Media);
+      Version.Stage.Stage_Path (".gitattributes");
+      Version.Stage.Stage_Path ("big.bin");
+      Version.Write.Save ("add lfs media");
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+      begin
+         --  The staged blob is a pointer and the media is cached locally.
+         Version.Git_Fixtures.Run
+           (Root,
+            "git cat-file -p :big.bin | grep -q '^oid sha256:" & Oid & "'");
+
+         Version.LFS.Upload_Referenced_Objects
+           (Repo        => Repo,
+            Commit_Id   =>
+              Version.Objects.To_Object_Id
+                (Version.Refs.Current_Commit_Id (Repo)),
+            Remote_Name => "origin");
+      end;
+
+      Assert
+        (Ada.Directories.Exists (Dest),
+         "LFS upload must copy the media into the local LFS store");
+      Assert
+        (Version.Files.Read_Binary_File (Dest) = Media,
+         "uploaded LFS media must match the original content");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end LFS_Upload_Pushes_Media_To_Local_Store;
 
    procedure Merge_LFS_Pointer_Fetches_HTTP_Batch_Media
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -8607,6 +8755,10 @@ package body Version.Branch.Tests is
         (T,
          Merge_GPG_Sign_Writes_GPGSig_Header'Access,
          "Branch: merge gpg-sign writes gpgsig header");
+      Register_Routine
+        (T,
+         Tag_Sign_And_Verify_With_Fake_GPG'Access,
+         "Verify: signed tag verifies, unsigned commit has no signature");
 
       Register_Routine
         (T,
@@ -8907,6 +9059,10 @@ package body Version.Branch.Tests is
         (T,
          Merge_LFS_Pointer_Is_Ordinary_Blob'Access,
          "Branch: merge smudges available LFS pointer media");
+      Register_Routine
+        (T,
+         LFS_Upload_Pushes_Media_To_Local_Store'Access,
+         "LFS: upload pushes cached media to a local LFS store");
       Register_Routine
         (T,
          Merge_LFS_Pointer_Fetches_Local_LFS_Url_Media'Access,

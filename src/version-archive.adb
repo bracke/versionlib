@@ -6,6 +6,7 @@ with Ada.Strings.Unbounded;
 with Version.Objects; use Version.Objects;
 with Version.Object_Cache;
 with Version.Tree_Cache;
+with Version.Compression;
 with Version.Files;
 with Version.Revisions;
 with Version.Tar;
@@ -21,8 +22,8 @@ package body Version.Archive is
    function Unsupported_Output_Format_Text (Output : String) return String is
    begin
       return "unsupported archive output format: " & Output
-        & " (supported archive outputs end in .tar or .zip; "
-        & "use --format tar|zip with a matching output path)";
+        & " (supported outputs end in .tar, .tar.gz, .tgz, or .zip; "
+        & "use --format tar|tar.gz|zip)";
    end Unsupported_Output_Format_Text;
 
    function Is_Regular_Mode (Mode : String) return Boolean is
@@ -195,10 +196,7 @@ package body Version.Archive is
    is
       Lower : constant String := Lower_ASCII (Path);
    begin
-      return Ends_With (Lower, ".tar.gz")
-        or else Ends_With (Lower, ".tgz")
-        or else Ends_With (Lower, ".gz")
-        or else Ends_With (Lower, ".tar.xz")
+      return Ends_With (Lower, ".tar.xz")
         or else Ends_With (Lower, ".txz")
         or else Ends_With (Lower, ".xz")
         or else Ends_With (Lower, ".tar.bz2")
@@ -350,7 +348,7 @@ package body Version.Archive is
       end if;
 
       case Format is
-         when Tar_Format =>
+         when Tar_Format | Tar_Gz_Format =>
             declare
                Writer : Version.Tar.Tar_Writer;
             begin
@@ -405,7 +403,19 @@ package body Version.Archive is
                end if;
 
                Version.Tar.Close (Writer);
-               Version.Files.Atomic_Replace (Work_Output, Output);
+               if Format = Tar_Gz_Format then
+                  --  Compress the finished tar into a gzip member.
+                  declare
+                     Tar_Bytes : constant String :=
+                       Version.Files.Read_Binary_File (Work_Output);
+                  begin
+                     Version.Files.Write_Binary_File
+                       (Output, Version.Compression.Gzip (Tar_Bytes));
+                     Remove_Partial_Output (Work_Output);
+                  end;
+               else
+                  Version.Files.Atomic_Replace (Work_Output, Output);
+               end if;
             exception
                when others =>
                   Version.Tar.Close (Writer);

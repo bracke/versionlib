@@ -1,13 +1,18 @@
 with Ada.Characters.Handling;
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
+with GNAT.Regpat;
 
 with Version.Objects; use Version.Objects;
 with Version.Object_Cache;
 with Version.Pack_Index_Cache;
 with Version.Ref_Cache;
 with Version.Files;
+with Version.Staging;
+with Version.Ref_Format;
 
 package body Version.Revisions is
 
@@ -362,6 +367,71 @@ package body Version.Revisions is
       end if;
    end Apply_Brace_Suffix;
 
+   --  Walk a slash-separated Path from Root_Tree, returning the object id of
+   --  the named entry (blob, subtree, or gitlink). Empty components (leading,
+   --  trailing, or doubled slashes) are skipped; an empty path returns the
+   --  root tree itself. Used for git's `<rev>:<path>` syntax.
+   function Navigate_Tree_Path
+     (Repo      : Version.Repository.Repository_Handle;
+      Root_Tree : Version.Objects.Hex_Object_Id;
+      Path      : String)
+      return Version.Objects.Hex_Object_Id
+   is
+      Current : Version.Objects.Hex_Object_Id := Root_Tree;
+      Start   : Natural := Path'First;
+   begin
+      while Start <= Path'Last loop
+         declare
+            Stop : Natural := Start;
+         begin
+            while Stop <= Path'Last and then Path (Stop) /= '/' loop
+               Stop := Stop + 1;
+            end loop;
+
+            if Stop > Start then   --  skip empty components
+               declare
+                  Comp    : constant String := Path (Start .. Stop - 1);
+                  Is_Last : constant Boolean := Stop > Path'Last;
+                  Found   : Boolean := False;
+                  Ent_Id  : Version.Objects.Hex_Object_Id :=
+                    Version.Objects.Zero_Object_Id;
+                  Ent_Kind : Version.Objects.Tree_Entry_Kind :=
+                    Version.Objects.Tree_Blob;
+               begin
+                  for E of Version.Objects.Tree_Entries (Repo, Current) loop
+                     if Ada.Strings.Unbounded.To_String (E.Path) = Comp then
+                        Found := True;
+                        Ent_Id := E.Id;
+                        Ent_Kind := E.Kind;
+                        exit;
+                     end if;
+                  end loop;
+
+                  if not Found then
+                     raise Ada.IO_Exceptions.Data_Error with
+                       "path not in tree: " & Path;
+                  end if;
+
+                  if Is_Last then
+                     return Ent_Id;
+                  end if;
+
+                  if Ent_Kind /= Version.Objects.Tree_Directory then
+                     raise Ada.IO_Exceptions.Data_Error with
+                       "not a tree on path: " & Comp;
+                  end if;
+
+                  Current := Ent_Id;
+               end;
+            end if;
+
+            Start := Stop + 1;
+         end;
+      end loop;
+
+      return Current;   --  empty / trailing-slash path: the tree itself
+   end Navigate_Tree_Path;
+
    function Decimal_Value (Text : String) return Natural is
       Value : Natural := 0;
    begin
@@ -380,6 +450,193 @@ package body Version.Revisions is
       return Value;
    end Decimal_Value;
 
+   LF : constant Character := Character'Val (10);
+
+   --  The committer unix timestamp of a commit (0 if unparseable).
+   function Committer_Time (Content : String) return Long_Long_Integer is
+      Start : constant Natural :=
+        Ada.Strings.Fixed.Index (Content, LF & "committer ");
+   begin
+      if Start = 0 then
+         return 0;
+      end if;
+      declare
+         Line_Start : constant Natural := Start + 1;
+         LEnd       : Natural := Line_Start;
+      begin
+         while LEnd <= Content'Last and then Content (LEnd) /= LF loop
+            LEnd := LEnd + 1;
+         end loop;
+         declare
+            Line    : constant String := Content (Line_Start .. LEnd - 1);
+            Last_Sp : Natural := 0;
+            Prev_Sp : Natural := 0;
+         begin
+            for I in reverse Line'Range loop
+               if Line (I) = ' ' then
+                  if Last_Sp = 0 then
+                     Last_Sp := I;
+                  else
+                     Prev_Sp := I;
+                     exit;
+                  end if;
+               end if;
+            end loop;
+            if Prev_Sp = 0 or else Last_Sp = 0 then
+               return 0;
+            end if;
+            return Long_Long_Integer'Value (Line (Prev_Sp + 1 .. Last_Sp - 1));
+         end;
+      end;
+   exception
+      when others =>
+         return 0;
+   end Committer_Time;
+
+   --  A commit's log message (everything after the header/body separator).
+   function Commit_Message (Content : String) return String is
+      Sep : constant Natural := Ada.Strings.Fixed.Index (Content, LF & LF);
+   begin
+      if Sep = 0 then
+         return "";
+      end if;
+      return Content (Sep + 2 .. Content'Last);
+   end Commit_Message;
+
+   package Str_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+
+   --  `:/<regex>` — the youngest commit reachable from any ref (and HEAD)
+   --  whose log message matches the regular expression.
+   function Resolve_Message_Search
+     (Repo    : Version.Repository.Repository_Handle;
+      Objects : in out Version.Object_Cache.Object_Cache;
+      Pattern : String)
+      return Version.Objects.Hex_Object_Id
+   is
+      use type GNAT.Regpat.Match_Location;
+      Visited : Str_Sets.Set;
+      Queue   : Version.Objects.Object_Id_Vectors.Vector;
+      Best_Id : Version.Objects.Object_Id_Storage :=
+        Version.Objects.Zero_Object_Id;
+      Best_Ts : Long_Long_Integer := Long_Long_Integer'First;
+      Have    : Boolean := False;
+      Refs    : Version.Ref_Cache.Ref_Cache;
+      No_Pats : Version.Ref_Format.String_Vectors.Vector;
+   begin
+      if Pattern'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error with "empty search pattern";
+      end if;
+
+      declare
+         Matcher : constant GNAT.Regpat.Pattern_Matcher :=
+           GNAT.Regpat.Compile (Pattern);
+
+         procedure Seed (Id_Text : String) is
+         begin
+            if Version.Objects.Is_Valid_Hex_Object_Id (Id_Text) then
+               Queue.Append
+                 (Require_Commit
+                    (Repo, Objects, Version.Objects.To_Object_Id (Id_Text)));
+            end if;
+         exception
+            when Ada.IO_Exceptions.Data_Error =>
+               null;   --  a ref that does not peel to a commit
+         end Seed;
+      begin
+         Seed (Version.Ref_Cache.Current_Commit_Id (Repo => Repo, Cache => Refs));
+         for Line of Version.Ref_Format.For_Each_Ref
+           (Repo, No_Pats, Format => "%(objectname)")
+         loop
+            Seed (Line);
+         end loop;
+
+         while not Queue.Is_Empty loop
+            declare
+               Id : constant Version.Objects.Object_Id_Storage :=
+                 Queue.Last_Element;
+            begin
+               Queue.Delete_Last;
+               if not Visited.Contains (Version.Objects.To_String (Id)) then
+                  Visited.Insert (Version.Objects.To_String (Id));
+                  declare
+                     Obj : constant Version.Objects.Git_Object :=
+                       Version.Object_Cache.Read_Object (Repo, Objects, Id);
+                  begin
+                     if Version.Objects.Kind (Obj)
+                       = Version.Objects.Commit_Object
+                     then
+                        declare
+                           C : constant String := Version.Objects.Content (Obj);
+                           M : GNAT.Regpat.Match_Array (0 .. 0);
+                        begin
+                           GNAT.Regpat.Match (Matcher, Commit_Message (C), M);
+                           if M (0) /= GNAT.Regpat.No_Match then
+                              declare
+                                 Ts : constant Long_Long_Integer :=
+                                   Committer_Time (C);
+                              begin
+                                 if Ts > Best_Ts then
+                                    Best_Ts := Ts;
+                                    Best_Id := Id;
+                                    Have := True;
+                                 end if;
+                              end;
+                           end if;
+                           for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+                              Queue.Append (P);
+                           end loop;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      end;
+
+      if not Have then
+         raise Ada.IO_Exceptions.Data_Error
+           with "no commit message matches: " & Pattern;
+      end if;
+      return Best_Id;
+   exception
+      when GNAT.Regpat.Expression_Error =>
+         raise Ada.IO_Exceptions.Data_Error
+           with "invalid search pattern: " & Pattern;
+   end Resolve_Message_Search;
+
+   --  `:[<stage>:]<path>` — the blob recorded in the index at the given stage
+   --  (default 0).
+   function Resolve_Index_Blob
+     (Repo : Version.Repository.Repository_Handle;
+      Rest : String)
+      return Version.Objects.Hex_Object_Id
+   is
+      Stage : Natural := 0;
+      First : Natural := Rest'First;
+   begin
+      if Rest'Length >= 2
+        and then Rest (Rest'First) in '0' .. '3'
+        and then Rest (Rest'First + 1) = ':'
+      then
+         Stage := Character'Pos (Rest (Rest'First)) - Character'Pos ('0');
+         First := Rest'First + 2;
+      end if;
+
+      declare
+         Path    : constant String := Rest (First .. Rest'Last);
+         Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
+           Version.Staging.Load (Repo);
+         Idx     : constant Natural :=
+           Version.Staging.Find_Stage_Entry (Entries, Path, Stage);
+      begin
+         if Idx = Natural'Last then
+            raise Ada.IO_Exceptions.Data_Error
+              with "path '" & Path & "' is not in the index";
+         end if;
+         return Entries.Element (Idx).Id;
+      end;
+   end Resolve_Index_Blob;
+
    function Resolve
      (Repo : Version.Repository.Repository_Handle;
       Text : String;
@@ -397,6 +654,56 @@ package body Version.Revisions is
       if Rev'Length = 0 then
          raise Ada.IO_Exceptions.Data_Error with "empty revision";
       end if;
+
+      --  Colon syntax: `<rev>:<path>` resolves <rev> to a tree and looks up
+      --  <path> within it; a leading ':' is index / `:/regex` search syntax
+      --  (`:path`, `:<stage>:path`, `:/<regex>`).
+      declare
+         Colon : Natural := 0;
+      begin
+         for I in Rev'Range loop
+            if Rev (I) = ':' then
+               Colon := I;
+               exit;
+            end if;
+         end loop;
+
+         if Colon > Rev'First then
+            declare
+               Tree_Id : constant Version.Objects.Hex_Object_Id :=
+                 Resolve (Repo, Rev (Rev'First .. Colon - 1), Treeish);
+               Path    : constant String := Rev (Colon + 1 .. Rev'Last);
+               Result  : constant Version.Objects.Hex_Object_Id :=
+                 Navigate_Tree_Path (Repo, Tree_Id, Path);
+            begin
+               case Kind is
+                  when Any_Object => return Result;
+                  when Commitish  => return Require_Commit (Repo, Objects, Result);
+                  when Treeish    => return To_Tree (Repo, Objects, Result);
+               end case;
+            end;
+         elsif Colon = Rev'First then
+            declare
+               Rest   : constant String := Rev (Rev'First + 1 .. Rev'Last);
+               Result : Version.Objects.Hex_Object_Id;
+            begin
+               if Rest'Length = 0 then
+                  raise Ada.IO_Exceptions.Data_Error with "empty revision";
+               end if;
+               if Rest (Rest'First) = '/' then
+                  Result := Resolve_Message_Search
+                    (Repo, Objects, Rest (Rest'First + 1 .. Rest'Last));
+               else
+                  Result := Resolve_Index_Blob (Repo, Rest);
+               end if;
+               case Kind is
+                  when Any_Object => return Result;
+                  when Commitish  => return Require_Commit (Repo, Objects, Result);
+                  when Treeish    => return To_Tree (Repo, Objects, Result);
+               end case;
+            end;
+         end if;
+      end;
 
       Pos := Rev'First;
       while Pos <= Rev'Last loop

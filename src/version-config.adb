@@ -404,12 +404,10 @@ package body Version.Config is
       return Result;
    end Read_All;
 
-   procedure Write_All
-     (Repo    : Version.Repository.Repository_Handle;
+   procedure Write_Entries_To
+     (Path    : String;
       Entries : Config_Entry_Vectors.Vector)
    is
-      Path : constant String := Config_Path (Repo);
-
       Temp_Path : constant String := Path & ".tmp";
 
       File : Ada.Text_IO.File_Type;
@@ -463,7 +461,32 @@ package body Version.Config is
          Version.Files.Delete_File_If_Exists (Temp_Path);
 
          raise;
+   end Write_Entries_To;
+
+   procedure Write_All
+     (Repo    : Version.Repository.Repository_Handle;
+      Entries : Config_Entry_Vectors.Vector) is
+   begin
+      Write_Entries_To (Config_Path (Repo), Entries);
    end Write_All;
+
+   function Worktree_Config_Path
+     (Repo : Version.Repository.Repository_Handle) return String is
+     (Version.Files.Join
+        (Version.Repository.Git_Dir (Repo), "config.worktree"));
+
+   function Read_File_Entries (Path : String)
+     return Config_Entry_Vectors.Vector
+   is
+      Result : Config_Entry_Vectors.Vector;
+   begin
+      Append_Config_File (Path, Result);
+      return Result;
+   end Read_File_Entries;
+
+   function Worktree_Config_Active
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Worktree_Config_Enabled (Read_File_Entries (Config_Path (Repo))));
 
    procedure Remove_Section
      (Repo : Version.Repository.Repository_Handle; Section : String)
@@ -594,12 +617,12 @@ package body Version.Config is
       Require_Config_Key (To_String (Key));
    end Split_Config_Name;
 
-   procedure Set_Key
-     (Repo  : Version.Repository.Repository_Handle;
-      Name  : String;
-      Value : String)
+   --  Set/replace Name in the single config file at Path, preserving git's
+   --  "append to the last line of the matching section" insertion behavior.
+   procedure Set_In_File (Path : String; Name : String; Value : String)
    is
-      Items          : constant Config_Entry_Vectors.Vector := Read_All (Repo);
+      Items          : constant Config_Entry_Vectors.Vector :=
+        Read_File_Entries (Path);
       Result         : Config_Entry_Vectors.Vector;
       Wanted         : constant String := Lower (Name);
       Target_Section : Unbounded_String;
@@ -673,8 +696,71 @@ package body Version.Config is
                Value   => To_Unbounded_String (Value)));
       end if;
 
-      Write_All (Repo => Repo, Entries => Result);
+      Write_Entries_To (Path, Result);
+   end Set_In_File;
+
+   procedure Unset_In_File (Path : String; Name : String)
+   is
+      Items  : constant Config_Entry_Vectors.Vector := Read_File_Entries (Path);
+      Result : Config_Entry_Vectors.Vector;
+      Wanted : constant String := Lower (Name);
+      Found  : Boolean := False;
+   begin
+      Require_Config_Name (Name);
+
+      if not Items.Is_Empty then
+         for I in Items.First_Index .. Items.Last_Index loop
+            declare
+               Item      : constant Config_Entry := Items.Element (I);
+               Item_Name : constant String := Lower (Config_Entry_Name (Item));
+            begin
+               if Item_Name = Wanted then
+                  Found := True;
+               else
+                  Result.Append (Item);
+               end if;
+            end;
+         end loop;
+      end if;
+
+      if not Found then
+         raise Ada.IO_Exceptions.Data_Error
+           with "config key does not exist: " & Name;
+      end if;
+
+      Write_Entries_To (Path, Result);
+   end Unset_In_File;
+
+   procedure Set_Key
+     (Repo  : Version.Repository.Repository_Handle;
+      Name  : String;
+      Value : String) is
+   begin
+      Set_In_File (Config_Path (Repo), Name, Value);
    end Set_Key;
+
+   procedure Set_Key_Worktree
+     (Repo  : Version.Repository.Repository_Handle;
+      Name  : String;
+      Value : String) is
+   begin
+      Set_In_File
+        ((if Worktree_Config_Active (Repo)
+          then Worktree_Config_Path (Repo)
+          else Config_Path (Repo)),
+         Name, Value);
+   end Set_Key_Worktree;
+
+   procedure Unset_Key_Worktree
+     (Repo : Version.Repository.Repository_Handle;
+      Name : String) is
+   begin
+      Unset_In_File
+        ((if Worktree_Config_Active (Repo)
+          then Worktree_Config_Path (Repo)
+          else Config_Path (Repo)),
+         Name);
+   end Unset_Key_Worktree;
 
    function Has_Key
      (Repo : Version.Repository.Repository_Handle; Name : String)
@@ -702,36 +788,9 @@ package body Version.Config is
    end Has_Key;
 
    procedure Unset_Key
-     (Repo : Version.Repository.Repository_Handle; Name : String)
-   is
-      Items  : constant Config_Entry_Vectors.Vector := Read_All (Repo);
-      Result : Config_Entry_Vectors.Vector;
-      Wanted : constant String := Lower (Name);
-      Found  : Boolean := False;
+     (Repo : Version.Repository.Repository_Handle; Name : String) is
    begin
-      Require_Config_Name (Name);
-
-      if not Items.Is_Empty then
-         for I in Items.First_Index .. Items.Last_Index loop
-            declare
-               Item      : constant Config_Entry := Items.Element (I);
-               Item_Name : constant String := Lower (Config_Entry_Name (Item));
-            begin
-               if Item_Name = Wanted then
-                  Found := True;
-               else
-                  Result.Append (Item);
-               end if;
-            end;
-         end loop;
-      end if;
-
-      if not Found then
-         raise Ada.IO_Exceptions.Data_Error
-           with "config key does not exist: " & Name;
-      end if;
-
-      Write_All (Repo => Repo, Entries => Result);
+      Unset_In_File (Config_Path (Repo), Name);
    end Unset_Key;
 
    function Get_Value

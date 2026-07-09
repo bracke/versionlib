@@ -19,6 +19,7 @@ use type Version.Objects.Object_Kind;
 with Version.Object_Cache;
 with Version.Tree_Cache;
 with Version.Refs;
+with Version.Reftable;
 with Version.Repository;
 with Version.History;
 with Version.Write;
@@ -408,6 +409,11 @@ package body Version.Branch is
       Path      : constant String := Head_Path (Repo);
       Lock_Path : constant String := Path & ".lock";
    begin
+      if Version.Reftable.Is_Reftable (Repo) then
+         Version.Refs.Write_Symbolic_HEAD (Repo, "refs/heads/" & Name);
+         return;
+      end if;
+
       if Ada.Directories.Exists (Version.Files.To_Native_Path (Lock_Path)) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Lock_Path;

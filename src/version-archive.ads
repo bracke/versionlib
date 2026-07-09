@@ -7,6 +7,7 @@ package Version.Archive is
 
    type Archive_Format is
      (Tar_Format,
+      Tar_Gz_Format,
       Zip_Format);
 
    procedure Create

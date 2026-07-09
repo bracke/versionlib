@@ -680,6 +680,63 @@ package body Version.Config.Tests is
          raise;
    end Config_Worktree_Config_Overrides_Common;
 
+   procedure Config_Worktree_Write_Targets_Worktree_File
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF   : constant Character := Character'Val (10);
+      HT   : constant Character := Character'Val (9);
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Git_Dir : constant String := Version.Test_Support.Join (Root, ".git");
+   begin
+      Version.Init.Init (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+      begin
+         --  Without the extension, --worktree writes fall back to the common
+         --  config and no config.worktree file is created.
+         Version.Config.Set_Key_Worktree (Repo, "foo.bar", "baz");
+         Assert
+           (not Ada.Directories.Exists
+              (Version.Test_Support.Join (Git_Dir, "config.worktree")),
+            "no config.worktree without extensions.worktreeConfig");
+         Assert
+           (Version.Config.Get_Value (Repo, "foo.bar") = "baz",
+            "worktree write without extension lands in common config");
+
+         --  Enabling the extension routes --worktree writes to config.worktree
+         --  and keeps them out of the common config.
+         Version.Test_Support.Write_Text_File
+           (Version.Test_Support.Join (Git_Dir, "config"),
+            "[core]" & LF & HT & "repositoryformatversion = 1" & LF
+            & "[extensions]" & LF & HT & "worktreeConfig = true" & LF);
+         Version.Config.Set_Key_Worktree (Repo, "wt.key", "wtval");
+         Assert
+           (Ada.Directories.Exists
+              (Version.Test_Support.Join (Git_Dir, "config.worktree")),
+            "config.worktree created when extension enabled");
+         Assert
+           (Version.Config.Get_Value (Repo, "wt.key") = "wtval",
+            "merged read sees the per-worktree value");
+
+         --  unset --worktree removes it again.
+         Version.Config.Unset_Key_Worktree (Repo, "wt.key");
+         Assert
+           (not Version.Config.Has_Key (Repo, "wt.key"),
+            "unset --worktree removes the per-worktree value");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Config_Worktree_Write_Targets_Worktree_File;
+
    overriding
    procedure Register_Tests (T : in out Test_Case) is
    begin
@@ -687,6 +744,10 @@ package body Version.Config.Tests is
         (T,
          Config_Worktree_Config_Overrides_Common'Access,
          "Config: worktreeConfig layers config.worktree over common config");
+      Register_Routine
+        (T,
+         Config_Worktree_Write_Targets_Worktree_File'Access,
+         "Config: --worktree writes target config.worktree when enabled");
 
       Register_Routine
         (T,

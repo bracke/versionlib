@@ -5,6 +5,8 @@ with Ada.IO_Exceptions;
 with Version.Files;
 with Version.Ref_Names;
 with Version.Refs;
+with Version.Reftable;
+with Version.Reftable.Writer;
 
 package body Version.Ref_Transaction is
    use Version.Objects;
@@ -562,12 +564,46 @@ package body Version.Ref_Transaction is
           Applied      => False));
    end Add_Delete;
 
+   --  Apply the transaction by appending one reftable table with just these
+   --  changes (updates as records, deletes as tombstones). Expected values are
+   --  already validated; publishing the new table via tables.list is the atomic
+   --  commit, so the loose-file lock/backup machinery is not used.
+   procedure Reftable_Apply (Item : in out Transaction) is
+      Updates : Version.Reftable.Ref_Record_Vectors.Vector;
+      Deletes : Version.Reftable.Ref_Record_Vectors.Vector;
+   begin
+      for Op of Item.Ops loop
+         case Op.Kind is
+            when Update_Ref =>
+               Updates.Append
+                 (Version.Reftable.Ref_Record'
+                    (Name   => Op.Ref_Name,
+                     Kind   => Version.Reftable.Ref_Direct,
+                     Id     => Op.New_Id,
+                     others => <>));
+            when Delete_Ref =>
+               Deletes.Append
+                 (Version.Reftable.Ref_Record'
+                    (Name => Op.Ref_Name, others => <>));
+         end case;
+      end loop;
+      Version.Reftable.Writer.Append_Table (Item.Repo, Updates, Deletes);
+   end Reftable_Apply;
+
    procedure Commit
      (Item : in out Transaction)
    is
    begin
       Ensure_Active (Item);
       Validate_Expected_Values (Item);
+
+      if Version.Reftable.Is_Reftable (Item.Repo) then
+         Reftable_Apply (Item);
+         Item.Ops.Clear;
+         Item.Active := False;
+         return;
+      end if;
+
       Sort_Operations (Item.Ops);
       Acquire_Locks (Item);
       Prepare_Backups (Item);

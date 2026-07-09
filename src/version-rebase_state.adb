@@ -125,7 +125,12 @@ package body Version.Rebase_State is
       Commits             : Commit_Vectors.Vector;
       Paused              : Boolean := False;
       Current_Commit      : String := "";
-      Actions             : Action_Vectors.Vector := Action_Vectors.Empty_Vector)
+      Actions             : Action_Vectors.Vector := Action_Vectors.Empty_Vector;
+      Execs               : Exec_Vectors.Vector := Exec_Vectors.Empty_Vector;
+      Next_Exec           : Natural := 0;
+      Pause_Reason        : Pause_Kind := Pause_Conflict;
+      Mode                : Rebase_Mode := Mode_Linear;
+      Rebased_Map         : Map_Vectors.Vector := Map_Vectors.Empty_Vector)
    is
       Content : Unbounded_String;
       Path    : constant String := Rebase_State_Path (Repo);
@@ -136,17 +141,23 @@ package body Version.Rebase_State is
 
       function Action_At (I : Natural) return Rebase_Action is
         (if Actions.Is_Empty then Pick else Actions.Element (I));
+
+      function Kind_Word (K : Pause_Kind) return String is
+        (case K is when Pause_Conflict => "conflict",
+                   when Pause_Edit => "edit", when Pause_Exec => "exec");
    begin
       Require_Branch_Ref (Branch_Ref);
       Require_Id (To_String (Original_Head), "original head");
       Require_Id (To_String (Target_Head), "target head");
       Require_Id (To_String (Current_Replay_Head), "current replay head");
 
-      if Paused then
+      if Paused and then Pause_Reason /= Pause_Exec then
          Require_Id (Current_Commit, "current commit");
-      elsif Current_Commit'Length /= 0 then
+      elsif (not Paused or else Pause_Reason = Pause_Exec)
+        and then Current_Commit'Length /= 0
+      then
          raise Ada.IO_Exceptions.Data_Error with
-           "malformed rebase state: current commit without pause";
+           "malformed rebase state: current commit without commit-anchored pause";
       end if;
 
       if not Commits.Is_Empty then
@@ -167,7 +178,22 @@ package body Version.Rebase_State is
            "malformed rebase state: next index";
       end if;
 
-      if Paused then
+      if not Execs.Is_Empty then
+         for I in Execs.First_Index .. Execs.Last_Index loop
+            if Execs.Element (I).After > Natural (Commits.Length) then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "malformed rebase state: exec position";
+            end if;
+            Require_Text (To_String (Execs.Element (I).Command), "exec command");
+         end loop;
+      end if;
+
+      if Next_Exec > Natural (Execs.Length) then
+         raise Ada.IO_Exceptions.Data_Error with
+           "malformed rebase state: next exec";
+      end if;
+
+      if Paused and then Pause_Reason /= Pause_Exec then
          if Next_Index >= Natural (Commits.Length)
            or else Commits.Element (Commits.First_Index + Next_Index)
              /= Version.Objects.To_Object_Id (Current_Commit)
@@ -175,6 +201,13 @@ package body Version.Rebase_State is
             raise Ada.IO_Exceptions.Data_Error with
               "malformed rebase state: current commit";
          end if;
+      end if;
+
+      if Paused and then Pause_Reason = Pause_Exec
+        and then Next_Exec >= Natural (Execs.Length)
+      then
+         raise Ada.IO_Exceptions.Data_Error with
+           "malformed rebase state: exec pause without exec";
       end if;
 
       Content := To_Unbounded_String
@@ -195,9 +228,39 @@ package body Version.Rebase_State is
          end loop;
       end if;
 
+      Append (Content, "total_execs " & Natural_Image (Natural (Execs.Length))
+              & Character'Val (10));
+      if not Execs.Is_Empty then
+         for I in Execs.First_Index .. Execs.Last_Index loop
+            Append
+              (Content,
+               "exec " & Natural_Image (Execs.Element (I).After) & " "
+               & To_String (Execs.Element (I).Command) & Character'Val (10));
+         end loop;
+      end if;
+      Append (Content, "next_exec " & Natural_Image (Next_Exec) & Character'Val (10));
+
+      Append (Content,
+              "mode " & (case Mode is
+                            when Mode_Linear => "linear",
+                            when Mode_Merges => "merges")
+              & Character'Val (10));
+      Append (Content, "total_map " & Natural_Image (Natural (Rebased_Map.Length))
+              & Character'Val (10));
+      for I in Rebased_Map.First_Index .. Rebased_Map.Last_Index loop
+         Append
+           (Content,
+            "map " & To_String (Rebased_Map.Element (I).Original)
+            & " " & To_String (Rebased_Map.Element (I).Rebased)
+            & Character'Val (10));
+      end loop;
+
       Append (Content, "paused " & (if Paused then "yes" else "no") & Character'Val (10));
       if Paused then
-         Append (Content, "current_commit " & Current_Commit & Character'Val (10));
+         Append (Content, "pause_kind " & Kind_Word (Pause_Reason) & Character'Val (10));
+         if Pause_Reason /= Pause_Exec then
+            Append (Content, "current_commit " & Current_Commit & Character'Val (10));
+         end if;
       end if;
 
       Version.Files.Write_Binary_File_Atomic (Path => Path, Content => To_String (Content));
@@ -280,6 +343,77 @@ package body Version.Rebase_State is
       end loop;
 
       declare
+         Exec_Total : constant Natural :=
+           Natural_Value
+             (After_Prefix
+                (Ada.Text_IO.Get_Line (File), "total_execs ", "total execs"),
+              "total execs");
+      begin
+         for I in 1 .. Exec_Total loop
+            declare
+               Rest : constant String :=
+                 After_Prefix (Ada.Text_IO.Get_Line (File), "exec ", "exec");
+               Sp   : constant Natural := Ada.Strings.Fixed.Index (Rest, " ");
+            begin
+               if Sp = 0 then
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "malformed rebase state: exec";
+               end if;
+               State.Execs_Value.Append
+                 (Exec_Step'
+                    (After   =>
+                       Natural_Value (Rest (Rest'First .. Sp - 1), "exec position"),
+                     Command =>
+                       To_Unbounded_String (Rest (Sp + 1 .. Rest'Last))));
+            end;
+         end loop;
+      end;
+
+      State.Next_Exec_Value :=
+        Natural_Value
+          (After_Prefix (Ada.Text_IO.Get_Line (File), "next_exec ", "next exec"),
+           "next exec");
+
+      declare
+         Mode_Text : constant String :=
+           After_Prefix (Ada.Text_IO.Get_Line (File), "mode ", "mode");
+      begin
+         if Mode_Text = "linear" then
+            State.Mode_Value := Mode_Linear;
+         elsif Mode_Text = "merges" then
+            State.Mode_Value := Mode_Merges;
+         else
+            raise Ada.IO_Exceptions.Data_Error with "malformed rebase state: mode";
+         end if;
+      end;
+
+      declare
+         Total_Map : constant Natural :=
+           Natural_Value
+             (After_Prefix (Ada.Text_IO.Get_Line (File), "total_map ", "total map"),
+              "total map");
+      begin
+         for I in 1 .. Total_Map loop
+            declare
+               Line  : constant String :=
+                 After_Prefix (Ada.Text_IO.Get_Line (File), "map ", "map");
+               Space : constant Natural := Ada.Strings.Fixed.Index (Line, " ");
+            begin
+               if Space = 0 then
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "malformed rebase state: map pair";
+               end if;
+               State.Rebased_Map_Value.Append
+                 (Map_Pair'
+                    (Original => Version.Objects.To_Object_Id
+                                   (Line (Line'First .. Space - 1)),
+                     Rebased  => Version.Objects.To_Object_Id
+                                   (Line (Space + 1 .. Line'Last))));
+            end;
+         end loop;
+      end;
+
+      declare
          Paused_Text : constant String := After_Prefix (Ada.Text_IO.Get_Line (File), "paused ", "paused");
       begin
          if Paused_Text = "yes" then
@@ -292,8 +426,27 @@ package body Version.Rebase_State is
       end;
 
       if State.Paused_Value then
-         State.Current_Commit_Value :=
-           Id_After_Prefix (Ada.Text_IO.Get_Line (File), "current_commit ", "current commit");
+         declare
+            Kind_Text : constant String :=
+              After_Prefix (Ada.Text_IO.Get_Line (File), "pause_kind ", "pause kind");
+         begin
+            if Kind_Text = "conflict" then
+               State.Pause_Reason_Value := Pause_Conflict;
+            elsif Kind_Text = "edit" then
+               State.Pause_Reason_Value := Pause_Edit;
+            elsif Kind_Text = "exec" then
+               State.Pause_Reason_Value := Pause_Exec;
+            else
+               raise Ada.IO_Exceptions.Data_Error with
+                 "malformed rebase state: pause kind";
+            end if;
+         end;
+         if State.Pause_Reason_Value /= Pause_Exec then
+            State.Current_Commit_Value :=
+              Id_After_Prefix (Ada.Text_IO.Get_Line (File), "current_commit ", "current commit");
+         else
+            State.Current_Commit_Value := Zero_Id;
+         end if;
       else
          State.Current_Commit_Value := Zero_Id;
       end if;
@@ -302,7 +455,7 @@ package body Version.Rebase_State is
          raise Ada.IO_Exceptions.Data_Error with "malformed rebase state: next index";
       end if;
 
-      if State.Paused_Value then
+      if State.Paused_Value and then State.Pause_Reason_Value /= Pause_Exec then
          if State.Next_Index_Value >= Total
            or else State.Commits_Value.Element
              (State.Commits_Value.First_Index + State.Next_Index_Value)
@@ -311,6 +464,13 @@ package body Version.Rebase_State is
             raise Ada.IO_Exceptions.Data_Error with
               "malformed rebase state: current commit";
          end if;
+      end if;
+
+      if State.Paused_Value and then State.Pause_Reason_Value = Pause_Exec
+        and then State.Next_Exec_Value >= Natural (State.Execs_Value.Length)
+      then
+         raise Ada.IO_Exceptions.Data_Error with
+           "malformed rebase state: exec pause without exec";
       end if;
 
       if not Ada.Text_IO.End_Of_File (File) then
@@ -390,5 +550,30 @@ package body Version.Rebase_State is
    begin
       return State.Current_Commit_Value;
    end Current_Commit;
+
+   function Execs (State : Rebase_State) return Exec_Vectors.Vector is
+   begin
+      return State.Execs_Value;
+   end Execs;
+
+   function Next_Exec (State : Rebase_State) return Natural is
+   begin
+      return State.Next_Exec_Value;
+   end Next_Exec;
+
+   function Pause_Reason (State : Rebase_State) return Pause_Kind is
+   begin
+      return State.Pause_Reason_Value;
+   end Pause_Reason;
+
+   function Mode (State : Rebase_State) return Rebase_Mode is
+   begin
+      return State.Mode_Value;
+   end Mode;
+
+   function Rebased_Map (State : Rebase_State) return Map_Vectors.Vector is
+   begin
+      return State.Rebased_Map_Value;
+   end Rebased_Map;
 
 end Version.Rebase_State;

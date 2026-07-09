@@ -2608,9 +2608,12 @@ package body Version.Ignore.Tests is
       Check ("env-onbranch-only.tmp", False,
              "relative GIT_CONFIG_COUNT includeIf path should not be loaded");
 
+      --  git 2.54 evaluates a relative gitdir:./ condition from GIT_CONFIG env
+      --  against the repository and applies the (absolute-path) include, so the
+      --  excludesFile it names takes effect. version matches this.
       Set_Env_Config ("includeIf.gitdir:./.path", Env_Onbranch_Config);
-      Check ("env-onbranch-only.tmp", False,
-             "relative GIT_CONFIG_COUNT gitdir includeIf condition should not be loaded");
+      Check ("env-onbranch-only.tmp", True,
+             "relative GIT_CONFIG_COUNT gitdir includeIf condition is applied");
 
       Set_Env_Config
         ("includeIf.onbranch:feature/*.path", Env_Onbranch_Nonmatching_Config);

@@ -35,13 +35,16 @@ package Version.Tags is
       Revision : String);
 
    procedure Create_Annotated_Tag
-     (Name    : String;
-      Message : String);
+     (Name        : String;
+      Message     : String;
+      Signing_Key : String := "");
 
    procedure Create_Annotated_Tag
-     (Name     : String;
-      Revision : String;
-      Message  : String);
+     (Name        : String;
+      Revision    : String;
+      Message     : String;
+      Signing_Key : String := "");
+   --  Signing_Key non-empty produces a GPG-signed tag (git `tag -s`/`-u`).
 
    procedure Delete_Tag
      (Name : String);

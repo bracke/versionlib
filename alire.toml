@@ -6,7 +6,7 @@ authors = ["Bent Bracke"]
 maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
-website = ""
+website = "https://github.com/bracke/versionlib"
 tags = ["version", "vcs", "git"]
 
 [[depends-on]]
@@ -28,7 +28,7 @@ ssh_lib = "^1.0.0"
 # checkouts; they are dev-only and must NOT appear in the published manifest
 # (each dependency is resolved from the registry on publish).
 [[pins]]
-httpclient = { path = "../HttpClient" }
+httpclient = { path = "../httpclient" }
 
 [[pins]]
 zlib = { path = "../zlib" }

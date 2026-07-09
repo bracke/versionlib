@@ -39,4 +39,14 @@ package Version.Bundle is
    --  the packfile payload is not read. Raises Data_Error if the file is not a
    --  git bundle.
 
+   procedure Unbundle
+     (Repo        : Version.Repository.Repository_Handle;
+      Bundle_Path : String;
+      Info        : out Bundle_Info);
+   --  Unpack the bundle's packfile into Repo's object store (writing a pack
+   --  plus its index) and return the parsed header. Refs are not created --
+   --  the caller (e.g. `bundle unbundle`, or a clone) decides what to do with
+   --  Info.Refs. Raises Data_Error if the bundle is malformed or a recorded
+   --  prerequisite object is absent from the receiving repository.
+
 end Version.Bundle;

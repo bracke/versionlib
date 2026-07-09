@@ -1290,6 +1290,52 @@ package body Version.Rebase.Tests is
          raise;
    end Rebase_Root_Onto_Newbase;
 
+   procedure Rebase_Bare_Root_Recreates_From_Root
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Init.Init (Root);
+      Configure_User (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Write_File (Root, "f.txt", "a" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Git_Fixtures.Run (Root, "git commit -q -m first");
+      Write_File (Root, "f.txt", "a" & Character'Val (10) & "b" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Git_Fixtures.Run (Root, "git commit -q -m second");
+
+      --  Capture the ordered trees/messages before the bare-root rebase.
+      Version.Git_Fixtures.Run
+        (Root,
+         "git log --format='%T %s' --reverse > /tmp/version-bareroot-before");
+
+      Version.Rebase.Start_Root_Bare;
+
+      --  Same commit count, root is parentless, trees and messages preserved,
+      --  and the object graph is intact.
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git rev-list --count HEAD)"" = ""2""");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git rev-list --max-parents=0 HEAD | wc -l)"" = ""1""");
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git log --format='%T %s' --reverse)"""
+         & " = ""$(cat /tmp/version-bareroot-before)""");
+      Version.Git_Fixtures.Run (Root, "git fsck --strict");
+      Version.Git_Fixtures.Run
+        (Root, "test -z ""$(git status --porcelain)""");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Rebase_Bare_Root_Recreates_From_Root;
+
    procedure Rebase_Merges_Preserves_Topology
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1342,6 +1388,148 @@ package body Version.Rebase.Tests is
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
    end Rebase_Merges_Preserves_Topology;
+
+   procedure Rebase_Merges_Recreates_Octopus
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF : constant Character := Character'Val (10);
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Init.Init (Root);
+      Configure_User (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Write_File (Root, "base.txt", "base" & LF);
+      Version.Git_Fixtures.Run (Root, "git add base.txt");
+      Version.Write.Save ("base");
+
+      --  Three branches forked from base, each adding one file.
+      Version.Git_Fixtures.Run (Root, "git branch b1");
+      Version.Git_Fixtures.Run (Root, "git branch b2");
+      Version.Git_Fixtures.Run (Root, "git branch b3");
+      Version.Git_Fixtures.Run (Root, "git checkout -q b1");
+      Write_File (Root, "f1.txt", "1" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f1.txt");
+      Version.Write.Save ("c1");
+      Version.Git_Fixtures.Run (Root, "git checkout -q b2");
+      Write_File (Root, "f2.txt", "2" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f2.txt");
+      Version.Write.Save ("c2");
+      Version.Git_Fixtures.Run (Root, "git checkout -q b3");
+      Write_File (Root, "f3.txt", "3" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f3.txt");
+      Version.Write.Save ("c3");
+
+      --  Octopus-merge b2 and b3 into b1 (a three-parent merge), branch topic.
+      Version.Git_Fixtures.Run (Root, "git checkout -q b1");
+      Version.Git_Fixtures.Run
+        (Root, "git merge --no-edit b2 b3 -m octopus");
+      Version.Git_Fixtures.Run (Root, "git branch -f topic");
+
+      --  Advance main (the upstream) past base, then rebase-merge topic onto it.
+      Version.Git_Fixtures.Run (Root, "git checkout -q main");
+      Write_File (Root, "up.txt", "up" & LF);
+      Version.Git_Fixtures.Run (Root, "git add up.txt");
+      Version.Write.Save ("upstream");
+      Version.Git_Fixtures.Run (Root, "git checkout -q topic");
+
+      Version.Rebase.Start_Rebase_Merges ("main");
+
+      --  HEAD is a recreated three-parent octopus merge sitting on top of main,
+      --  with every file present and the object graph intact.
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git rev-list --parents -1 HEAD | wc -w)"" = ""4""");
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git merge-base HEAD main)"" = ""$(git rev-parse main)""");
+      Version.Git_Fixtures.Run (Root, "test -e f1.txt");
+      Version.Git_Fixtures.Run (Root, "test -e f2.txt");
+      Version.Git_Fixtures.Run (Root, "test -e f3.txt");
+      Version.Git_Fixtures.Run (Root, "test -e up.txt");
+      Version.Git_Fixtures.Run (Root, "git fsck --strict");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Rebase_Merges_Recreates_Octopus;
+
+   --  A linear commit inside a --rebase-merges run conflicts with the moved
+   --  upstream: the rebase pauses (state persists), and after resolving,
+   --  --continue commits the resolution and recreates the merge on top.
+   procedure Rebase_Merges_Conflict_Pause_And_Continue
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF : constant Character := Character'Val (10);
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Init.Init (Root);
+      Configure_User (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Write_File (Root, "f.txt", "line" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("B0");
+      Version.Git_Fixtures.Run (Root, "git checkout -q -b topic");
+      Write_File (Root, "g.txt", "g1" & LF);
+      Version.Git_Fixtures.Run (Root, "git add g.txt");
+      Version.Write.Save ("T1");
+      Version.Git_Fixtures.Run (Root, "git checkout -q -b feat");
+      Write_File (Root, "h.txt", "h1" & LF);
+      Version.Git_Fixtures.Run (Root, "git add h.txt");
+      Version.Write.Save ("F1");
+      Version.Git_Fixtures.Run (Root, "git checkout -q topic");
+      Write_File (Root, "f.txt", "topic-line" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("T2");
+      Version.Git_Fixtures.Run
+        (Root, "git merge --no-ff feat -m ""merge feat""");
+      Version.Git_Fixtures.Run (Root, "git checkout -q main");
+      Write_File (Root, "f.txt", "upstream-line" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("U1");
+      Version.Git_Fixtures.Run (Root, "git checkout -q topic");
+
+      --  The rebase pauses on the conflicting linear commit.
+      begin
+         Version.Rebase.Start_Rebase_Merges ("main");
+         Assert (False, "rebase-merges must pause on the conflict");
+      exception
+         when Ada.IO_Exceptions.Data_Error =>
+            null;
+      end;
+      Assert (Version.Rebase.In_Progress
+              or else Version.Rebase_State.State_Exists (Version.Repository.Open),
+              "a paused rebase-merges must leave state");
+
+      --  Resolve and continue.
+      Write_File (Root, "f.txt", "resolved-line" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Rebase.Continue_Rebase;
+
+      --  HEAD is a recreated two-parent merge onto main with the resolution.
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git rev-list --parents -1 HEAD | wc -w)"" = ""3""");
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git merge-base HEAD main)"" = ""$(git rev-parse main)""");
+      Version.Git_Fixtures.Run (Root, "test ""$(git show HEAD:f.txt)"" = ""resolved-line""");
+      Version.Git_Fixtures.Run (Root, "test -e g.txt && test -e h.txt");
+      Version.Git_Fixtures.Run (Root, "git fsck --strict");
+      Version.Git_Fixtures.Run
+        (Root, "test -z ""$(git status --porcelain)""");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Rebase_Merges_Conflict_Pause_And_Continue;
 
    procedure Rebase_Interactive_Rewords_Commit
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1521,6 +1709,113 @@ package body Version.Rebase.Tests is
          raise;
    end Rebase_Interactive_Edit_Stops_And_Continues;
 
+   procedure Rebase_Interactive_Exec_Runs
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      LF : constant Character := Character'Val (10);
+   begin
+      Version.Init.Init (Root);
+      Configure_User (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Write_File (Root, "f.txt", "a" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("A base");
+      Write_File (Root, "f.txt", "b" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("B middle");
+      Write_File (Root, "f.txt", "c" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("C tip");
+
+      --  Insert a passing exec after the first todo entry.
+      Ada.Environment_Variables.Set
+        ("GIT_SEQUENCE_EDITOR", "sed -i '/B middle/a exec /bin/true'");
+      Version.Rebase.Start_Interactive ("HEAD~2");
+      Ada.Environment_Variables.Clear ("GIT_SEQUENCE_EDITOR");
+
+      Assert (not Version.Rebase_State.State_Exists (Version.Repository.Open),
+              "exec rebase must clear state");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git log -1 --format=%s HEAD~2)"" = ""A base""");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git log -1 --format=%s HEAD~1)"" = ""B middle""");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git log -1 --format=%s HEAD)"" = ""C tip""");
+      Version.Git_Fixtures.Run (Root, "git fsck --strict");
+      Version.Git_Fixtures.Run
+        (Root, "test -z ""$(git status --porcelain)""");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Environment_Variables.Clear ("GIT_SEQUENCE_EDITOR");
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Rebase_Interactive_Exec_Runs;
+
+   procedure Rebase_Interactive_Exec_Failure_Stops_And_Continues
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      LF : constant Character := Character'Val (10);
+      Raised : Boolean := False;
+   begin
+      Version.Init.Init (Root);
+      Configure_User (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Write_File (Root, "f.txt", "a" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("A base");
+      Write_File (Root, "f.txt", "b" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("B middle");
+      Write_File (Root, "f.txt", "c" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("C tip");
+
+      --  A failing exec after the first todo entry must stop the rebase.
+      Ada.Environment_Variables.Set
+        ("GIT_SEQUENCE_EDITOR", "sed -i '/B middle/a exec /bin/false'");
+      begin
+         Version.Rebase.Start_Interactive ("HEAD~2");
+      exception
+         when others =>
+            Raised := True;
+      end;
+      Ada.Environment_Variables.Clear ("GIT_SEQUENCE_EDITOR");
+
+      Assert (Raised, "a failing exec must stop the rebase (non-zero)");
+      Assert (Version.Rebase.In_Progress,
+              "a failing exec leaves the rebase in progress");
+
+      --  --continue skips the failed exec (git does not re-run it) and finishes.
+      Version.Rebase.Continue_Rebase;
+
+      Assert (not Version.Rebase_State.State_Exists (Version.Repository.Open),
+              "continue must finish after a failed exec");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git log -1 --format=%s HEAD~2)"" = ""A base""");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git log -1 --format=%s HEAD~1)"" = ""B middle""");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git log -1 --format=%s HEAD)"" = ""C tip""");
+      Version.Git_Fixtures.Run (Root, "git fsck --strict");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Environment_Variables.Clear ("GIT_SEQUENCE_EDITOR");
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Rebase_Interactive_Exec_Failure_Stops_And_Continues;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -1539,12 +1834,32 @@ package body Version.Rebase.Tests is
          "Rebase: interactive edit stops, preserves a commit, continues");
       Register_Routine
         (T,
+         Rebase_Interactive_Exec_Runs'Access,
+         "Rebase: interactive exec runs a command (Git-compatible)");
+      Register_Routine
+        (T,
+         Rebase_Interactive_Exec_Failure_Stops_And_Continues'Access,
+         "Rebase: interactive exec failure stops, continues past it");
+      Register_Routine
+        (T,
          Rebase_Merges_Preserves_Topology'Access,
          "Rebase: --rebase-merges recreates an internal merge commit");
       Register_Routine
         (T,
          Rebase_Root_Onto_Newbase'Access,
          "Rebase: --root --onto replays the whole branch incl. root");
+      Register_Routine
+        (T,
+         Rebase_Bare_Root_Recreates_From_Root'Access,
+         "Rebase: bare --root recreates history from a parentless root");
+      Register_Routine
+        (T,
+         Rebase_Merges_Recreates_Octopus'Access,
+         "Rebase: --rebase-merges recreates an octopus (3-parent) merge");
+      Register_Routine
+        (T,
+         Rebase_Merges_Conflict_Pause_And_Continue'Access,
+         "Rebase: --rebase-merges pauses on conflict and --continue finishes");
       Register_Routine
         (T,
          Rebase_Interactive_Drops_Commit'Access,

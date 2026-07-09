@@ -6,9 +6,64 @@ with Version.Transport.Local;
 with Version.Packed_Refs;
 with Version.Files;
 with Version.Ref_Names;
+with Version.Reftable;
+with Version.Reftable.Writer;
 
 package body Version.Refs is
    use Version.Objects;
+
+   Heads_Prefix : constant String := "refs/heads/";
+
+   --  Replace or add one ref record in a reftable-backed repo, rewriting the
+   --  table stack (incremental append + geometric compaction; see
+   --  Version.Reftable.Writer).
+   procedure Reftable_Put
+     (Repo : Version.Repository.Repository_Handle;
+      Rec  : Version.Reftable.Ref_Record)
+   is
+      Refs : Version.Reftable.Ref_Record_Vectors.Vector;
+   begin
+      Refs.Append (Rec);
+      Version.Reftable.Writer.Append_Table (Repo, Refs);
+   end Reftable_Put;
+
+   --  Reads for a reftable-backed repository come from the binary table stack
+   --  (Version.Reftable), not from loose files / packed-refs. The `.git/HEAD`
+   --  file is a `refs/heads/.invalid` stub in this layout; the true HEAD is a
+   --  symref record in the table.
+   function Reftable_Read_Head
+     (Repo : Version.Repository.Repository_Handle) return Head_Info
+   is
+      Found : Boolean;
+      Rec   : constant Version.Reftable.Ref_Record :=
+        Version.Reftable.Find (Repo, "HEAD", Found);
+      use type Version.Reftable.Ref_Value_Kind;
+   begin
+      if Found and then Rec.Kind = Version.Reftable.Ref_Symref then
+         declare
+            Target : constant String := To_String (Rec.Target);
+         begin
+            if Target'Length < Heads_Prefix'Length
+              or else Target (Target'First .. Target'First
+                                + Heads_Prefix'Length - 1) /= Heads_Prefix
+              or else not Version.Ref_Names.Is_Valid_Ref_Name (Target)
+            then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "unsupported repository: HEAD does not point to a branch";
+            end if;
+            return
+              (Kind         => Attached_Branch,
+               Branch_Value => To_Unbounded_String
+                 (Target (Target'First + Heads_Prefix'Length .. Target'Last)));
+         end;
+      elsif Found then
+         return
+           (Kind         => Detached_Commit,
+            Commit_Value => To_Unbounded_String (To_String (Rec.Id)));
+      end if;
+
+      raise Ada.IO_Exceptions.Data_Error with "invalid HEAD value";
+   end Reftable_Read_Head;
 
    procedure Ensure_Parent_Directory (Path : String) is
    begin
@@ -63,6 +118,10 @@ package body Version.Refs is
 
       Ref_Prefix : constant String := "ref:";
    begin
+      if Version.Reftable.Is_Reftable (Repo) then
+         return Reftable_Read_Head (Repo);
+      end if;
+
       if Line'Length >= Ref_Prefix'Length
         and then
           Line (Line'First .. Line'First + Ref_Prefix'Length - 1) = Ref_Prefix
@@ -116,6 +175,24 @@ package body Version.Refs is
          raise Ada.IO_Exceptions.Data_Error with "invalid ref name: " & Name;
       end if;
 
+      if Version.Reftable.Is_Reftable (Repo) then
+         declare
+            Found : Boolean;
+            Rec   : constant Version.Reftable.Ref_Record :=
+              Version.Reftable.Find (Repo, Name, Found);
+            use type Version.Reftable.Ref_Value_Kind;
+         begin
+            if not Found then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "ref does not exist: " & Name;
+            end if;
+            if Rec.Kind = Version.Reftable.Ref_Symref then
+               return Resolve_Ref (Repo, To_String (Rec.Target));
+            end if;
+            return Rec.Id;
+         end;
+      end if;
+
       declare
          Ref_Path : constant String :=
            Join (Version.Repository.Common_Git_Dir (Repo), Name);
@@ -157,6 +234,17 @@ package body Version.Refs is
    begin
       if not Version.Ref_Names.Is_Valid_Ref_Name (Name) then
          return False;
+      end if;
+
+      if Version.Reftable.Is_Reftable (Repo) then
+         declare
+            Found   : Boolean;
+            Ignored : constant Version.Reftable.Ref_Record :=
+              Version.Reftable.Find (Repo, Name, Found);
+            pragma Unreferenced (Ignored);
+         begin
+            return Found;
+         end;
       end if;
 
       declare
@@ -348,6 +436,29 @@ package body Version.Refs is
    is
       Result : Branch_Name_Vectors.Vector;
    begin
+      if Version.Reftable.Is_Reftable (Repo) then
+         for R of Version.Reftable.Live_Refs (Repo) loop
+            declare
+               Name : constant String := To_String (R.Name);
+            begin
+               if Name'Length > Heads_Prefix'Length
+                 and then Name (Name'First .. Name'First
+                                  + Heads_Prefix'Length - 1) = Heads_Prefix
+               then
+                  declare
+                     Branch : constant String :=
+                       Name (Name'First + Heads_Prefix'Length .. Name'Last);
+                  begin
+                     if Version.Ref_Names.Is_Valid_Branch_Name (Branch) then
+                        Result.Append (To_Unbounded_String (Branch));
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         return Result;
+      end if;
+
       Append_Branches_In_Directory
         (Base_Dir =>
            Join (Version.Repository.Common_Git_Dir (Repo), "refs/heads"),
@@ -414,6 +525,15 @@ package body Version.Refs is
       Head_Path : constant String :=
         Join (Version.Repository.Git_Dir (Repo), "HEAD");
    begin
+      if Version.Reftable.Is_Reftable (Repo) then
+         Reftable_Put
+           (Repo,
+            (Name => To_Unbounded_String ("HEAD"),
+             Kind => Version.Reftable.Ref_Direct,
+             Id   => Commit_Id,
+             others => <>));
+         return;
+      end if;
       Atomic_Write_Ref (Path => Head_Path, Object_Id => Commit_Id);
    end Write_Detached_HEAD;
 
@@ -441,6 +561,17 @@ package body Version.Refs is
         Version.Files.Join (Version.Repository.Git_Dir (Repo), "HEAD");
       Lock_Path : constant String := Path & ".lock";
    begin
+      if Version.Reftable.Is_Reftable (Repo) then
+         Version.Ref_Names.Require_Ref_Name (Target);
+         Reftable_Put
+           (Repo,
+            (Name   => To_Unbounded_String ("HEAD"),
+             Kind   => Version.Reftable.Ref_Symref,
+             Target => To_Unbounded_String (Target),
+             others => <>));
+         return;
+      end if;
+
       Version.Ref_Names.Require_Ref_Name (Target);
 
       if Ada.Directories.Exists (Lock_Path) then

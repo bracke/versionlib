@@ -1736,6 +1736,23 @@ package body Version.Ignore is
       return Resolve_Config_Path_Value ("", Text);
    end Env_Config_Include_Path;
 
+   --  A synthetic config-file path inside the repository's git directory. git
+   --  2.54 evaluates a relative `gitdir:./` includeIf condition supplied via
+   --  GIT_CONFIG env vars and applies it against the repository (it warns that
+   --  relative includes "must come from files" but still honours the
+   --  condition). Anchoring at the git dir makes
+   --  Normalize_Gitdir_Condition_Pattern resolve `./` to $GIT_DIR, so the
+   --  condition matches this repository just as git's does.
+   function Env_Config_Dir_Anchor
+     (Repo : Version.Repository.Repository_Handle) return String is
+   begin
+      return Version.Files.Normalize_Separators
+        (Version.Files.Join (Version.Repository.Git_Dir (Repo), "config"));
+   exception
+      when others =>
+         return "";
+   end Env_Config_Dir_Anchor;
+
    function Env_Config_Count return Natural is
       Name  : constant String := "GIT_CONFIG_COUNT";
       Count : Natural := 0;
@@ -1834,7 +1851,7 @@ package body Version.Ignore is
                           & Character'Val (34);
                      begin
                         if Include_Section_Applies
-                             (Repo, Env_Config_Include_Path ("."), Section)
+                             (Repo, Env_Config_Dir_Anchor (Repo), Section)
                         then
                            Read_Core_Excludes_File_Config
                              (Repo,
@@ -2090,7 +2107,7 @@ package body Version.Ignore is
                           & Character'Val (34);
                      begin
                         if Include_Section_Applies
-                             (Repo, Env_Config_Include_Path ("."), Section)
+                             (Repo, Env_Config_Dir_Anchor (Repo), Section)
                         then
                            Read_Core_Ignore_Case_Config
                              (Repo,

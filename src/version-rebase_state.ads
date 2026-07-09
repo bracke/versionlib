@@ -20,6 +20,37 @@ package Version.Rebase_State is
      (Index_Type   => Natural,
       Element_Type => Rebase_Action);
 
+   --  A pending interactive-rebase `exec` step: run Command once After commits
+   --  have been applied (After = number of commit lines above it in the todo).
+   type Exec_Step is record
+      After   : Natural := 0;
+      Command : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.Null_Unbounded_String;
+   end record;
+
+   package Exec_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Natural,
+      Element_Type => Exec_Step);
+
+   --  Why a rebase is paused. Conflict/Edit stops are anchored to a commit
+   --  (Current_Commit = Commits (Next_Index)); an Exec stop is anchored to the
+   --  failed exec at Next_Exec and carries no current commit.
+   type Pause_Kind is (Pause_Conflict, Pause_Edit, Pause_Exec);
+
+   --  A linear rebase replays Commits (Next_Index) onto Current_Replay_Head; a
+   --  Merges rebase replays Commits topologically, recreating merges, and
+   --  carries Rebased_Map (original -> rebased commit id) instead.
+   type Rebase_Mode is (Mode_Linear, Mode_Merges);
+
+   type Map_Pair is record
+      Original : Version.Objects.Object_Id_Storage;
+      Rebased  : Version.Objects.Object_Id_Storage;
+   end record;
+
+   package Map_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Natural,
+      Element_Type => Map_Pair);
+
    type Rebase_State is private;
 
    procedure Write_State
@@ -32,9 +63,16 @@ package Version.Rebase_State is
       Commits             : Commit_Vectors.Vector;
       Paused              : Boolean := False;
       Current_Commit      : String := "";
-      Actions             : Action_Vectors.Vector := Action_Vectors.Empty_Vector);
+      Actions             : Action_Vectors.Vector := Action_Vectors.Empty_Vector;
+      Execs               : Exec_Vectors.Vector := Exec_Vectors.Empty_Vector;
+      Next_Exec           : Natural := 0;
+      Pause_Reason        : Pause_Kind := Pause_Conflict;
+      Mode                : Rebase_Mode := Mode_Linear;
+      Rebased_Map         : Map_Vectors.Vector := Map_Vectors.Empty_Vector);
    --  Actions, when non-empty, must have exactly one entry per commit; an empty
-   --  vector means every commit is a Pick.
+   --  vector means every commit is a Pick. Execs are pending exec steps in todo
+   --  order; Next_Exec is how many have run. Pause_Reason is meaningful only
+   --  when Paused (Current_Commit is required for Conflict/Edit, empty for Exec).
 
    function Read_State
      (Repo : Version.Repository.Repository_Handle)
@@ -58,6 +96,11 @@ package Version.Rebase_State is
    --  One action per commit (all Pick for state written without actions).
    function Paused (State : Rebase_State) return Boolean;
    function Current_Commit (State : Rebase_State) return Version.Objects.Hex_Object_Id;
+   function Execs (State : Rebase_State) return Exec_Vectors.Vector;
+   function Next_Exec (State : Rebase_State) return Natural;
+   function Pause_Reason (State : Rebase_State) return Pause_Kind;
+   function Mode (State : Rebase_State) return Rebase_Mode;
+   function Rebased_Map (State : Rebase_State) return Map_Vectors.Vector;
 
 private
    type Rebase_State is record
@@ -70,5 +113,10 @@ private
       Actions_Value             : Action_Vectors.Vector;
       Paused_Value              : Boolean := False;
       Current_Commit_Value      : Version.Objects.Object_Id_Storage := Version.Objects.Zero_Object_Id;
+      Execs_Value               : Exec_Vectors.Vector;
+      Next_Exec_Value           : Natural := 0;
+      Pause_Reason_Value        : Pause_Kind := Pause_Conflict;
+      Mode_Value                : Rebase_Mode := Mode_Linear;
+      Rebased_Map_Value         : Map_Vectors.Vector;
    end record;
 end Version.Rebase_State;

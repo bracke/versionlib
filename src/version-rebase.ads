@@ -51,10 +51,20 @@ package Version.Rebase is
    --  rebase --root --onto Onto: replay the whole current branch, including
    --  its root commit, onto Onto. The root commit's base is the empty tree.
 
+   procedure Start_Root_Bare;
+   --  rebase --root (no --onto): recreate the whole current branch from its
+   --  root onto an empty base. The root commit is recreated parentless (empty
+   --  tree base) and the rest of the first-parent chain is replayed on top,
+   --  preserving trees, messages, and authors. Never conflicts for a linear
+   --  history; reuses the same state machine so --continue/--abort work.
+
    procedure Start_Rebase_Merges (Upstream : String);
    --  rebase --rebase-merges Upstream: replay Upstream..HEAD onto Upstream
-   --  topologically, recreating two-parent merge commits to preserve branch
-   --  topology. One-shot (aborts on conflict); octopus merges are rejected.
+   --  topologically, recreating merge commits to preserve branch topology,
+   --  including octopus (>= 3 parent) merges via git's iterated merge-octopus
+   --  strategy. One-shot: a conflict during a linear replay or a merge
+   --  recreation aborts cleanly (resumable conflict-pause is not yet wired for
+   --  this path).
 
    procedure Continue_Rebase;
    procedure Abort_Rebase;

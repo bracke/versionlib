@@ -15,7 +15,7 @@ Status: `0.1.0-dev`, pre-1.0.
 
 ## Dependencies
 
-`versionlib` pins sibling crates: `httpclient` (`../HttpClient`), `zlib` (`../zlib`),
+`versionlib` pins sibling crates: `httpclient` (`../httpclient`), `zlib` (`../zlib`),
 `i18n` (`../i18n`), and `ssh_lib` (`../sshlib`). They must be present locally to build.
 TLS transport links `-lssl -lcrypto`, so OpenSSL development libraries are required.
 

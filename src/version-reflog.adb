@@ -6,8 +6,20 @@ with Version.Files;
 with Version.Hash;
 with Version.Objects;
 with Version.Ref_Names;
+with Version.Reftable;
+with Version.Reftable.Writer;
 
 package body Version.Reflog is
+
+   use Ada.Strings.Unbounded;
+
+   function Now_Seconds return Long_Long_Integer is
+      Epoch : constant Ada.Calendar.Time :=
+        Ada.Calendar.Time_Of (Year => 1970, Month => 1, Day => 1);
+   begin
+      return Long_Long_Integer
+        (Ada.Calendar."-" (Ada.Calendar.Clock, Epoch));
+   end Now_Seconds;
 
    function Path
      (Repo : Version.Repository.Repository_Handle;
@@ -37,8 +49,6 @@ package body Version.Reflog is
       Ref  : String := "HEAD")
       return Log_Entry_Vectors.Vector
    is
-      use Ada.Strings.Unbounded;
-
       HT : constant Character := Character'Val (9);
       LF : constant Character := Character'Val (10);
 
@@ -76,6 +86,31 @@ package body Version.Reflog is
                Message => To_Unbounded_String (Line (Tab + 1 .. Line'Last))));
       end Parse_Line;
    begin
+      if Version.Reftable.Is_Reftable (Repo) then
+         --  Reftable stores the reflog newest-first; Read_Entries yields
+         --  oldest-first (so the last element is @{0}).
+         declare
+            Logs : constant Version.Reftable.Log_Record_Vectors.Vector :=
+              Version.Reftable.Log_For (Repo, Ref);
+         begin
+            for I in reverse Logs.First_Index .. Logs.Last_Index loop
+               declare
+                  L : constant Version.Reftable.Log_Record :=
+                    Logs.Element (I);
+               begin
+                  Result.Append
+                    (Log_Entry'
+                       (Old_Id  => To_Unbounded_String
+                          (Version.Objects.To_String (L.Old_Id)),
+                        New_Id  => To_Unbounded_String
+                          (Version.Objects.To_String (L.New_Id)),
+                        Message => L.Message));
+               end;
+            end loop;
+            return Result;
+         end;
+      end if;
+
       if not Version.Files.Is_Ordinary_File (Reflog_File) then
          return Result;
       end if;
@@ -183,6 +218,32 @@ package body Version.Reflog is
 
       if not Version.Objects.Is_Valid_Hex_Object_Id (Norm_New) then
          raise Ada.IO_Exceptions.Data_Error with "invalid reflog new id";
+      end if;
+
+      if Version.Reftable.Is_Reftable (Repo) then
+         --  Append the entry as a log record in a new table; Append_Table
+         --  assigns the next update index (so it sorts newest-first) and runs
+         --  compaction. Existing refs and reflog stay in the older tables.
+         declare
+            Logs : Version.Reftable.Log_Record_Vectors.Vector;
+            Rec  : Version.Reftable.Log_Record;
+         begin
+            Rec.Ref_Name        := To_Unbounded_String (Ref);
+            Rec.Old_Id          := Version.Objects.To_Object_Id (Norm_Old);
+            Rec.New_Id          := Version.Objects.To_Object_Id (Norm_New);
+            Rec.Committer_Name  := Identity.Name;
+            Rec.Committer_Email := Identity.Email;
+            Rec.Time_Seconds    := Now_Seconds;
+            Rec.TZ_Offset       := 0;
+            Rec.Message         := To_Unbounded_String (Message);
+            Logs.Append (Rec);
+            Version.Reftable.Writer.Append_Table
+              (Repo,
+               Version.Reftable.Ref_Record_Vectors.Empty_Vector,
+               Version.Reftable.Ref_Record_Vectors.Empty_Vector,
+               Logs);
+            return;
+         end;
       end if;
 
       if Ada.Directories.Exists (Version.Files.To_Native_Path (Lock_Path)) then

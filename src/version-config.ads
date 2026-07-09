@@ -78,6 +78,22 @@ package Version.Config is
      (Repo : Version.Repository.Repository_Handle;
       Name : String);
 
+   procedure Set_Key_Worktree
+     (Repo  : Version.Repository.Repository_Handle;
+      Name  : String;
+      Value : String);
+   --  Like Set_Key, but targets $GIT_DIR/config.worktree when
+   --  extensions.worktreeConfig is enabled; otherwise the common config
+   --  (git's --worktree fallback semantics).
+
+   procedure Unset_Key_Worktree
+     (Repo : Version.Repository.Repository_Handle;
+      Name : String);
+
+   function Worktree_Config_Active
+     (Repo : Version.Repository.Repository_Handle) return Boolean;
+   --  True when extensions.worktreeConfig is enabled in the common config.
+
    function List_Text
      (Repo : Version.Repository.Repository_Handle)
       return String;

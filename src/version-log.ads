@@ -10,9 +10,12 @@ package Version.Log is
       return String;
 
    function Log_From_Commit
-     (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id)
+     (Repo           : Version.Repository.Repository_Handle;
+      Commit_Id      : Version.Objects.Hex_Object_Id;
+      Show_Signature : Boolean := False)
       return String;
+   --  Show_Signature interleaves gpg's verification lines (as
+   --  `log --show-signature`) after each commit header for signed commits.
 
    function Log_Oneline_From_Commit
      (Repo      : Version.Repository.Repository_Handle;
@@ -20,7 +23,8 @@ package Version.Log is
       return String;
 
    function Log_Head
-     (Repo : Version.Repository.Repository_Handle)
+     (Repo           : Version.Repository.Repository_Handle;
+      Show_Signature : Boolean := False)
       return String;
 
    function Log_Oneline_Head

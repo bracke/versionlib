@@ -734,10 +734,11 @@ package body Version.Write is
    end Write_Signed_Commit_With_Parents;
 
    function Write_Tag
-     (Repo      : Version.Repository.Repository_Handle;
-      Target_Id : Version.Objects.Hex_Object_Id;
-      Tag_Name  : String;
-      Message   : String) return Version.Objects.Hex_Object_Id
+     (Repo        : Version.Repository.Repository_Handle;
+      Target_Id   : Version.Objects.Hex_Object_Id;
+      Tag_Name    : String;
+      Message     : String;
+      Signing_Key : String := "") return Version.Objects.Hex_Object_Id
    is
       Content : Unbounded_String;
       Target  : constant Version.Objects.Git_Object :=
@@ -774,6 +775,17 @@ package body Version.Write is
       Append (Content, Character'Val (10));
       Append (Content, Message);
       Append (Content, Character'Val (10));
+
+      --  Signed tags append the ASCII-armored PGP signature (over everything
+      --  above) after the message, matching git `tag -s`.
+      if Signing_Key'Length > 0 then
+         Append
+           (Content,
+            Sign_Commit_Payload
+              (Repo        => Repo,
+               Payload     => To_String (Content),
+               Signing_Key => Signing_Key));
+      end if;
 
       declare
          Tag_Content : constant String := To_String (Content);

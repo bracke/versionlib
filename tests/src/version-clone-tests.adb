@@ -182,6 +182,86 @@ package body Version.Clone.Tests is
          raise;
    end Clone_Filtered_Blob_None_Is_Partial;
 
+   --  --filter=tree:1 keeps commits and root trees but omits deeper trees and
+   --  blobs. A blob that lives only in a deep historical subtree (not in the
+   --  checked-out tree) is therefore omitted and lazily fetched on demand.
+   procedure Clone_Filtered_Tree_Depth_Omits_Deep_History
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Source : constant String := Version.Test_Support.Join (Root, "src-tf");
+      Target : constant String := Version.Test_Support.Join (Root, "tgt-tf");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Blob_File : constant String := Version.Test_Support.Join (Root, "deepid");
+
+      function Loose_Object_Path (Id : String) return String is
+        (Version.Test_Support.Join
+           (Version.Test_Support.Join
+              (Version.Test_Support.Join
+                 (Version.Test_Support.Join (Target, ".git"), "objects"),
+               Id (Id'First .. Id'First + 1)),
+            Id (Id'First + 2 .. Id'First + 39)));
+   begin
+      Ada.Directories.Create_Directory (Source);
+      Version.Git_Fixtures.Run (Source, "git init");
+      Version.Git_Fixtures.Run (Source, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Source, "git config user.name Test");
+
+      --  c1 has a deep nested blob; c2 removes the whole subtree.
+      Version.Git_Fixtures.Run
+        (Source, "mkdir -p a/b/c && printf 'DEEP\n' > a/b/c/deep.txt");
+      Version.Git_Fixtures.Run (Source, "git add a/b/c/deep.txt");
+      Version.Git_Fixtures.Run (Source, "git -c user.name=T -c user.email=t@e commit -q -m c1");
+      Version.Git_Fixtures.Run (Source, "git rm -q -r a");
+      Version.Git_Fixtures.Run (Source, "printf 'FLAT\n' > flat.txt && git add flat.txt");
+      Version.Git_Fixtures.Run (Source, "git -c user.name=T -c user.email=t@e commit -q -m c2");
+      Version.Git_Fixtures.Run
+        (Source, "git rev-parse HEAD~1:a/b/c/deep.txt > " & Blob_File);
+
+      Version.Clone.Clone_Filtered
+        (Source => Source, Target => Target, Filter => "tree:1");
+
+      declare
+         Deep_Blob : constant String :=
+           Version.Test_Support.Read_Text_File (Blob_File) (1 .. 40);
+      begin
+         --  Partial clone marker is set, working tree is materialized.
+         Version.Git_Fixtures.Run
+           (Target,
+            "test ""$(git config extensions.partialClone)"" = ""origin""");
+         Assert
+           (Version.Test_Support.Read_Text_File
+              (Version.Test_Support.Join (Target, "flat.txt")) = "FLAT",
+            "tree:1 clone must check out the current tree");
+
+         --  The deep historical blob (depth > 1, absent from HEAD) is omitted.
+         Assert
+           (not Ada.Directories.Exists (Loose_Object_Path (Deep_Blob)),
+            "tree:1 clone must omit a deep historical blob");
+
+         --  Reading it lazily fetches it from the promisor remote.
+         Ada.Directories.Set_Directory (Target);
+         declare
+            Repo : constant Version.Repository.Repository_Handle :=
+              Version.Repository.Open;
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Objects.Read_Object
+                (Repo, Version.Objects.To_Object_Id (Deep_Blob));
+         begin
+            Assert
+              (Version.Objects.Content (Obj) = "DEEP" & Character'Val (10),
+               "promisor lazy fetch must materialize the omitted deep blob");
+         end;
+         Ada.Directories.Set_Directory (Old_Dir);
+      end;
+
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Clone_Filtered_Tree_Depth_Omits_Deep_History;
+
    procedure Clone_Accepts_Relative_Local_Bare_Source
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -818,15 +898,75 @@ package body Version.Clone.Tests is
               "failed shallow local clone must not create target directory");
    end Clone_Depth_Rejects_Local_Source;
 
+   --  `clone <bundle>` unpacks a git-made bundle: objects, refs (as
+   --  remote-tracking refs + tags), default branch, and working tree.
+   procedure Clone_From_Bundle_File
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Source  : constant String := Version.Test_Support.Join (Root, "src");
+      Bundle  : constant String := Version.Test_Support.Join (Root, "r.bundle");
+      Target  : constant String := Version.Test_Support.Join (Root, "cloned");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Ada.Directories.Create_Directory (Source);
+      Version.Git_Fixtures.Run (Source, "git init");
+      Version.Git_Fixtures.Run (Source, "git config user.email t@e.c");
+      Version.Git_Fixtures.Run (Source, "git config user.name T");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Source, "f"), "a" & Character'Val (10));
+      Version.Git_Fixtures.Run (Source, "git add f && git commit -q -m c1");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Source, "f"), "b" & Character'Val (10));
+      Version.Git_Fixtures.Run (Source, "git add f && git commit -q -m c2");
+      Version.Git_Fixtures.Run (Source, "git tag v1");
+      Version.Git_Fixtures.Run
+        (Source, "git bundle create " & Bundle & " --all");
+
+      Version.Clone.Clone (Source => Bundle, Target => Target);
+
+      Assert
+        (Ada.Directories.Exists (Version.Test_Support.Join (Target, "f")),
+         "bundle clone must restore the working tree");
+      Version.Git_Fixtures.Run (Target, "git fsck --strict");
+      --  Working tree and index match the checked-out HEAD.
+      Version.Git_Fixtures.Run (Target, "git diff --quiet HEAD");
+      --  HEAD matches the source; the tag and remote-tracking ref came across.
+      Version.Git_Fixtures.Run
+        (Target,
+         "test ""$(git rev-parse HEAD)"" = ""$(git -C " & Source
+         & " rev-parse HEAD)""");
+      Version.Git_Fixtures.Run (Target, "git rev-parse --verify refs/tags/v1");
+      Version.Git_Fixtures.Run
+        (Target, "git rev-parse --verify refs/remotes/origin/main");
+      Version.Git_Fixtures.Run
+        (Target, "test ""$(git -C " & Target
+         & " branch --show-current)"" = ""main""");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Clone_From_Bundle_File;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
    begin
       Register_Routine
+        (T, Clone_From_Bundle_File'Access,
+         "Clone: from a git bundle file");
+      Register_Routine
         (T,
          Clone_Local_Repository'Access,
          "Clone: local repository");
 
+      Register_Routine
+        (T,
+         Clone_Filtered_Tree_Depth_Omits_Deep_History'Access,
+         "Clone: --filter=tree:1 omits deep history, lazily fetched");
       Register_Routine
         (T,
          Clone_Filtered_Blob_None_Is_Partial'Access,

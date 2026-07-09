@@ -13,6 +13,7 @@ with Version.Refs;
 with Version.Staging;
 with Version.Files;
 with Version.LFS;
+with Version.Text_Filter;
 with Version.Filesystem_Guard; use Version.Filesystem_Guard;
 with Version.Revisions;
 with Version.Path_Safety; use Version.Path_Safety;
@@ -449,7 +450,10 @@ package body Version.Restore is
                Content => Version.LFS.Worktree_Content
                  (Repo          => Repo,
                   Relative_Path => Path,
-                  Content       => Version.Objects.Content (Blob_Object)));
+                  Content       => Version.Text_Filter.Smudge_Content
+                    (Repo          => Repo,
+                     Relative_Path => Path,
+                     Content       => Version.Objects.Content (Blob_Object))));
             if To_String (Item.Mode) = "100755"
               and then Version.Platform.Supports_Executable_Bit
             then

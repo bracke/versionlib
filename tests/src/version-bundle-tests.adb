@@ -84,11 +84,68 @@ package body Version.Bundle.Tests is
       end;
    end Create_Roundtrip_And_Git_Verify;
 
+   --  A git-created bundle unpacks into a fresh repo via Version.Bundle.Unbundle
+   --  and makes its objects readable.
+   procedure Unbundle_Git_Bundle_Populates_Objects
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Src  : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Dest : constant String := Version.Test_Support.Join (Src, "dest");
+      Bundle_File : constant String :=
+        Version.Test_Support.Join (Src, "all.bundle");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Configure_Repo (Src);
+      Ada.Directories.Set_Directory (Src);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Src, "f.txt"), "one" & LF);
+      Version.Git_Fixtures.Run (Src, "git add f.txt");
+      Version.Git_Fixtures.Run (Src, "git commit -m first");
+      Version.Git_Fixtures.Run (Src, "git branch topic");
+      Version.Git_Fixtures.Run (Src, "git bundle create all.bundle --all");
+
+      declare
+         Tip : constant String :=
+           Version.Refs.Current_Commit_Id (Version.Repository.Open);
+      begin
+         Version.Git_Fixtures.Run (Src, "git init -q dest");
+         Ada.Directories.Set_Directory (Dest);
+
+         declare
+            Repo : constant Version.Repository.Repository_Handle :=
+              Version.Repository.Open;
+            Info : Version.Bundle.Bundle_Info;
+         begin
+            Version.Bundle.Unbundle (Repo, Bundle_File, Info);
+
+            Assert (not Info.Refs.Is_Empty,
+                    "unbundle must report the bundle's refs");
+            --  The unpacked tip commit is now readable in the destination.
+            Assert
+              (Version.Objects.Kind
+                 (Version.Objects.Read_Object
+                    (Repo, Version.Objects.To_Object_Id (Tip)))
+               = Version.Objects.Commit_Object,
+               "unbundle must make the tip commit readable");
+         end;
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Unbundle_Git_Bundle_Populates_Objects;
+
    overriding procedure Register_Tests (T : in out Test_Case) is
    begin
       Register_Routine
         (T, Create_Roundtrip_And_Git_Verify'Access,
          "Bundle: create round-trips and is accepted by git bundle verify");
+      Register_Routine
+        (T, Unbundle_Git_Bundle_Populates_Objects'Access,
+         "Bundle: unbundle unpacks a git bundle's objects into the repo");
    end Register_Tests;
 
    overriding function Name

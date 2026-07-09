@@ -295,6 +295,49 @@ package body Version.Archive.Tests is
          raise;
    end Tar_Exports_Head_Tree;
 
+   procedure Tar_Gz_Decompresses_To_Tar
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Tar_Out : constant String := Join (Root, "archive.tar");
+      Gz_Out  : constant String := Join (Root, "archive.tar.gz");
+   begin
+      Init_Repo_With_Archive_Fixture (Root);
+      Ada.Directories.Set_Directory (Root);
+      Version.Archive.Create
+        (Version.Repository.Open, "HEAD", Tar_Out, Version.Archive.Tar_Format);
+      Version.Archive.Create
+        (Version.Repository.Open, "HEAD", Gz_Out,
+         Version.Archive.Tar_Gz_Format);
+      Ada.Directories.Set_Directory (Old_Dir);
+
+      declare
+         Gz : constant String := Read_Binary_File (Gz_Out);
+      begin
+         --  Valid gzip member: magic 1f 8b, deflate method 08.
+         Assert
+           (Gz'Length >= 3
+            and then Character'Pos (Gz (Gz'First)) = 16#1F#
+            and then Character'Pos (Gz (Gz'First + 1)) = 16#8B#
+            and then Character'Pos (Gz (Gz'First + 2)) = 16#08#,
+            "tar.gz must start with a gzip member header");
+      end;
+
+      --  gunzip of our .tar.gz must reproduce our plain .tar byte-for-byte,
+      --  and standard tar must list the expected paths (interop via the shell).
+      Version.Git_Fixtures.Run
+        (Root,
+         "gunzip -c archive.tar.gz > from-gz.tar && cmp archive.tar from-gz.tar");
+      Version.Git_Fixtures.Run
+        (Root, "tar -tzf archive.tar.gz | grep -q 'src/main.adb'");
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Tar_Gz_Decompresses_To_Tar;
+
    procedure Zip_Exports_Head_Tree
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -751,10 +794,11 @@ package body Version.Archive.Tests is
       Init_Repo_With_Archive_Fixture (Root);
       Ada.Directories.Set_Directory (Root);
       begin
+         --  .tar.gz/.tgz are now supported; .tar.xz remains unsupported.
          Version.Archive.Create
            (Version.Repository.Open,
             "HEAD",
-            Join (Root, "release.tar.gz"),
+            Join (Root, "release.tar.xz"),
             Version.Archive.Tar_Format);
       exception
          when Ada.IO_Exceptions.Data_Error =>
@@ -811,10 +855,11 @@ package body Version.Archive.Tests is
       Init_Repo_With_Archive_Fixture (Root);
       Ada.Directories.Set_Directory (Root);
       begin
+         --  .TGZ is now a supported (case-insensitive) format; .TAR.XZ is not.
          Version.Archive.Create
            (Version.Repository.Open,
             "HEAD",
-            Join (Root, "release.TGZ"),
+            Join (Root, "release.TAR.XZ"),
             Version.Archive.Tar_Format);
       exception
          when Ada.IO_Exceptions.Data_Error =>
@@ -1651,7 +1696,7 @@ package body Version.Archive.Tests is
       Root    : constant String :=
         Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
       Old_Dir : constant String := Ada.Directories.Current_Directory;
-      Output  : constant String := Join (Root, "release.tar.gz");
+      Output  : constant String := Join (Root, "release.tar.xz");
       Raised  : Boolean := False;
    begin
       Init_Repo_With_Archive_Fixture (Root);
@@ -1671,7 +1716,8 @@ package body Version.Archive.Tests is
                "unsupported archive output format diagnostic must remain stable");
             Assert
               (Ada.Strings.Fixed.Index
-                 (Ada.Exceptions.Exception_Message (E), "use --format tar|zip")
+                 (Ada.Exceptions.Exception_Message (E),
+                  "use --format tar|tar.gz|zip")
                > 0,
                "unsupported archive output diagnostic should suggest --format");
       end;
@@ -2168,6 +2214,9 @@ package body Version.Archive.Tests is
    begin
       Register_Routine
         (T, Tar_Exports_Head_Tree'Access, "archive: TAR exports HEAD tree");
+      Register_Routine
+        (T, Tar_Gz_Decompresses_To_Tar'Access,
+         "archive: tar.gz is a valid gzip that decompresses to the tar");
       Register_Routine
         (T, Zip_Exports_Head_Tree'Access, "archive: ZIP exports HEAD tree");
       Register_Routine

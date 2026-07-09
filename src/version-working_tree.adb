@@ -13,6 +13,7 @@ with Version.Platform;
 with Version.Hash;
 
 with Version.Submodules;
+with Version.Text_Filter;
 
 package body Version.Working_Tree is
 
@@ -141,12 +142,6 @@ package body Version.Working_Tree is
       return Version.Objects.Hex_Object_Id is
      (Version.Objects.Compute_Object_Id (Algorithm, "blob", Content));
 
-   function Git_Blob_Id
-     (Full_Path : String;
-      Algorithm : Version.Hash.Hash_Algorithm)
-      return Version.Objects.Hex_Object_Id is
-     (Blob_Id_For_Content (Read_File_As_String (Full_Path), Algorithm));
-
    function Readlink
      (Path   : System.Address;
       Buf    : System.Address;
@@ -238,7 +233,9 @@ package body Version.Working_Tree is
    end Has_Tracked_Path_Under;
 
    procedure Scan_Directory
-     (Root          : String;
+     (Repo          : Version.Repository.Repository_Handle;
+      Filter_Active : Boolean;
+      Root          : String;
       Dir           : String;
       Ignore_Rules  : Version.Ignore.Ignore_Rules;
       Tracked_Index : Tracked_Path_Index;
@@ -345,7 +342,9 @@ package body Version.Working_Tree is
                             Has_Tracked_Path_Under (Tracked_Index, Rel_Dir)
                         then
                            Scan_Directory
-                             (Root          => Root,
+                             (Repo          => Repo,
+                              Filter_Active => Filter_Active,
+                              Root          => Root,
                               Dir           => Full,
                               Ignore_Rules  => Ignore_Rules,
                               Tracked_Index => Tracked_Index,
@@ -381,7 +380,17 @@ package body Version.Working_Tree is
                         Result.Append
                           (Version.Working_Tree.Working_File'
                              (Path => To_Unbounded_String (Rel_File),
-                              Id   => Git_Blob_Id (Full, Algorithm)));
+                              Id   =>
+                                (if Filter_Active
+                                 then Blob_Id_For_Content
+                                   (Version.Text_Filter.Clean_Content
+                                      (Repo          => Repo,
+                                       Relative_Path => Rel_File,
+                                       Content       =>
+                                         Read_File_As_String (Full)),
+                                    Algorithm)
+                                 else Blob_Id_For_Content
+                                   (Read_File_As_String (Full), Algorithm))));
                      end if;
                   end;
                end if;
@@ -415,7 +424,9 @@ package body Version.Working_Tree is
          Empty_Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
       begin
          Scan_Directory
-           (Root          => Version.Repository.Root_Path (Repo),
+           (Repo          => Repo,
+            Filter_Active => Version.Text_Filter.Is_Active (Repo),
+            Root          => Version.Repository.Root_Path (Repo),
             Dir           => Version.Repository.Root_Path (Repo),
             Ignore_Rules  => Empty_Rules,
             Tracked_Index => Empty_Tracked,
@@ -441,7 +452,9 @@ package body Version.Working_Tree is
       Empty_Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
    begin
       Scan_Directory
-        (Root          => Version.Repository.Root_Path (Repo),
+        (Repo          => Repo,
+         Filter_Active => Version.Text_Filter.Is_Active (Repo),
+         Root          => Version.Repository.Root_Path (Repo),
          Dir           => Version.Repository.Root_Path (Repo),
          Ignore_Rules  => Ignore_Rules,
          Tracked_Index => Tracked_Index,
@@ -474,7 +487,9 @@ package body Version.Working_Tree is
       end if;
 
       Scan_Directory
-        (Root          => Version.Repository.Root_Path (Repo),
+        (Repo          => Repo,
+         Filter_Active => Version.Text_Filter.Is_Active (Repo),
+         Root          => Version.Repository.Root_Path (Repo),
          Dir           => Version.Repository.Root_Path (Repo),
          Ignore_Rules  => Ignore_Rules,
          Tracked_Index => Tracked_Index,

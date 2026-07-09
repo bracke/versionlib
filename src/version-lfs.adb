@@ -16,6 +16,7 @@ with Http_Client.URI;
 
 with Version.Config;
 with Version.Files;
+with Version.History;
 with Version.Transport;
 with Version.Transport.Local;
 with Version.Transport.Ssh;
@@ -24,6 +25,7 @@ package body Version.LFS is
 
    use type Http_Client.Errors.Result_Status;
    use type Version.Transport.Transport_Kind;
+   use type Version.Objects.Object_Kind;
 
    function Join (Left, Right : String) return String
    renames Version.Files.Join;
@@ -930,5 +932,106 @@ package body Version.LFS is
          end;
       end;
    end Smudge_Content;
+
+   function Upload_To_Local_Source
+     (Repo   : Version.Repository.Repository_Handle;
+      Source : String;
+      Oid    : String)
+      return Boolean
+   is
+      Local_Path : constant String := LFS_Object_Path (Repo, Oid);
+      Dest_Path  : constant String := LFS_Object_Path_Under (Source, Oid);
+   begin
+      if Ada.Directories.Exists (Dest_Path)
+        and then Ada.Directories.Kind (Dest_Path) = Ada.Directories.Ordinary_File
+      then
+         return True;   --  already present on the remote store
+      end if;
+
+      if not Ada.Directories.Exists (Local_Path)
+        or else Ada.Directories.Kind (Local_Path)
+                /= Ada.Directories.Ordinary_File
+      then
+         return False;  --  nothing cached locally to upload
+      end if;
+
+      Version.Files.Write_Binary_File_Atomic
+        (Dest_Path, Version.Files.Read_Binary_File (Local_Path));
+      return True;
+   end Upload_To_Local_Source;
+
+   function Upload_Object
+     (Repo        : Version.Repository.Repository_Handle;
+      Oid         : String;
+      Remote_Name : String)
+      return Boolean
+   is
+      LFS_Url : constant String := Config_Value_Or_Empty (Repo, "lfs.url");
+      Origin  : constant String :=
+        Config_Value_Or_Empty (Repo, "remote." & Remote_Name & ".url");
+   begin
+      if Oid'Length /= 64 or else not Is_Hex (Oid) then
+         return False;
+      end if;
+
+      if LFS_Url'Length > 0 then
+         declare
+            Source : constant String := Local_Source_From_Url (LFS_Url);
+         begin
+            if Source'Length > 0
+              and then Upload_To_Local_Source (Repo, Source, Oid)
+            then
+               return True;
+            end if;
+         end;
+      end if;
+
+      if Origin'Length > 0 then
+         declare
+            Source : constant String := Local_Source_From_Url (Origin);
+         begin
+            if Source'Length > 0
+              and then Upload_To_Local_Source (Repo, Source, Oid)
+            then
+               return True;
+            end if;
+         end;
+      end if;
+
+      return False;
+   end Upload_Object;
+
+   procedure Upload_Referenced_Objects
+     (Repo        : Version.Repository.Repository_Handle;
+      Commit_Id   : Version.Objects.Hex_Object_Id;
+      Remote_Name : String)
+   is
+      Ignored : Boolean;
+      pragma Unreferenced (Ignored);
+   begin
+      for Obj_Id of Version.History.Reachable_Objects (Repo, Commit_Id) loop
+         declare
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Objects.Read_Object (Repo, Obj_Id);
+         begin
+            if Version.Objects.Kind (Obj) = Version.Objects.Blob_Object then
+               declare
+                  Content : constant String := Version.Objects.Content (Obj);
+               begin
+                  if Is_LFS_Pointer (Content) then
+                     declare
+                        Oid : constant String :=
+                          Pointer_Line (Content, "oid sha256:");
+                     begin
+                        if Oid'Length = 64 and then Is_Hex (Oid) then
+                           Ignored := Upload_Object (Repo, Oid, Remote_Name);
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+   end Upload_Referenced_Objects;
 
 end Version.LFS;

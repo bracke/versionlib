@@ -5,6 +5,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
 with Version.Branch;
+with Version.Bundle;
 with Version.Fetch;
 with Version.Config;
 with Version.Files;
@@ -290,6 +291,164 @@ package body Version.Clone is
       Write_Index_For_Head (Repo);
    end Checkout_Fetched_Branch;
 
+   --  Clone from a git bundle file: unpack its packfile, register the bundle
+   --  as `origin`, materialize the bundle's refs as remote-tracking refs (and
+   --  tags), then check out the default branch. Matches `git clone <bundle>`.
+   procedure Clone_From_Bundle (Bundle_Path : String; Target : String) is
+      Full_Bundle : constant String :=
+        Ada.Directories.Full_Name
+          (Version.Files.To_Native_Path (Bundle_Path));
+      Header      : constant Version.Bundle.Bundle_Info :=
+        Version.Bundle.Read_Header (Full_Bundle);
+      Object_Format : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
+
+      Heads_Prefix : constant String := "refs/heads/";
+      Tags_Prefix  : constant String := "refs/tags/";
+
+      function Has_Prefix (S, P : String) return Boolean is
+        (S'Length >= P'Length
+         and then S (S'First .. S'First + P'Length - 1) = P);
+
+      procedure Populate is
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Info : Version.Bundle.Bundle_Info;
+         Head_Id        : Unbounded_String;
+         Default_Branch : Unbounded_String;
+
+         --  The bundle id recorded for refs/heads/Name, or "" if absent.
+         function Branch_Id (Name : String) return String is
+         begin
+            for R of Info.Refs loop
+               if To_String (R.Name) = Heads_Prefix & Name then
+                  return Version.Objects.To_String (R.Id);
+               end if;
+            end loop;
+            return "";
+         end Branch_Id;
+
+         function Matches_Head (Name : String) return Boolean is
+           (Branch_Id (Name)'Length > 0
+            and then (Length (Head_Id) = 0
+                      or else Branch_Id (Name) = To_String (Head_Id)));
+      begin
+         Version.Remotes.Add_Remote (Name => "origin", Url => Full_Bundle);
+         Version.Bundle.Unbundle (Repo, Full_Bundle, Info);
+
+         --  Bundle refs become remote-tracking refs; tags are copied as-is.
+         for R of Info.Refs loop
+            declare
+               Name : constant String := To_String (R.Name);
+            begin
+               if Name = "HEAD" then
+                  Head_Id := To_Unbounded_String (Version.Objects.To_String (R.Id));
+               elsif Has_Prefix (Name, Heads_Prefix) then
+                  Version.Refs.Atomic_Write_Ref
+                    (Path      =>
+                       Remote_Tracking_Ref_Path
+                         (Repo, "origin",
+                          Name (Name'First + Heads_Prefix'Length .. Name'Last)),
+                     Object_Id => R.Id);
+               elsif Has_Prefix (Name, Tags_Prefix) then
+                  Version.Refs.Atomic_Write_Ref
+                    (Path      =>
+                       Version.Files.Join
+                         (Version.Repository.Common_Git_Dir (Repo), Name),
+                     Object_Id => R.Id);
+               end if;
+            end;
+         end loop;
+
+         --  Default branch, following git's guess_remote_head: prefer main
+         --  then master when they carry HEAD's id (or HEAD is absent); else the
+         --  first branch whose id equals HEAD's; else main/master/first.
+         if Matches_Head ("main") then
+            Default_Branch := To_Unbounded_String ("main");
+         elsif Matches_Head ("master") then
+            Default_Branch := To_Unbounded_String ("master");
+         end if;
+
+         if Length (Default_Branch) = 0 and then Length (Head_Id) > 0 then
+            for R of Info.Refs loop
+               declare
+                  Name : constant String := To_String (R.Name);
+               begin
+                  if Has_Prefix (Name, Heads_Prefix)
+                    and then Version.Objects.To_String (R.Id)
+                             = To_String (Head_Id)
+                  then
+                     Default_Branch := To_Unbounded_String
+                       (Name (Name'First + Heads_Prefix'Length .. Name'Last));
+                     exit;
+                  end if;
+               end;
+            end loop;
+         end if;
+
+         if Length (Default_Branch) = 0 then
+            if Branch_Id ("main")'Length > 0 then
+               Default_Branch := To_Unbounded_String ("main");
+            elsif Branch_Id ("master")'Length > 0 then
+               Default_Branch := To_Unbounded_String ("master");
+            else
+               for R of Info.Refs loop
+                  declare
+                     Name : constant String := To_String (R.Name);
+                  begin
+                     if Has_Prefix (Name, Heads_Prefix) then
+                        Default_Branch := To_Unbounded_String
+                          (Name (Name'First + Heads_Prefix'Length .. Name'Last));
+                        exit;
+                     end if;
+                  end;
+               end loop;
+            end if;
+         end if;
+
+         if Length (Default_Branch) = 0 then
+            raise Ada.IO_Exceptions.Data_Error
+              with "bundle has no branch to check out";
+         end if;
+
+         Checkout_Fetched_Branch (Repo, To_String (Default_Branch));
+      end Populate;
+   begin
+      if Target'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error with "clone target must not be empty";
+      end if;
+      if Ada.Directories.Exists (Version.Files.To_Native_Path (Target)) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "clone target already exists: " & Target;
+      end if;
+      if not Header.Complete then
+         raise Ada.IO_Exceptions.Data_Error
+           with "cannot clone from an incomplete bundle (has prerequisites)";
+      end if;
+
+      --  Object format follows the width of the bundle's ref ids.
+      if not Header.Refs.Is_Empty
+        and then Version.Objects.Id_Length
+                   (Header.Refs.First_Element.Id) = 64
+      then
+         Object_Format := Version.Hash.Sha256;
+      end if;
+
+      Version.Init.Init (Target, Object_Format);
+      begin
+         Version.Files.With_Directory
+           (Path => Target, Action => Populate'Access);
+      exception
+         when others =>
+            begin
+               Version.Files.Delete_Directory_Tree_If_Exists (Target);
+            exception
+               when others =>
+                  null;
+            end;
+            raise;
+      end;
+   end Clone_From_Bundle;
+
    procedure Clone_Internal
      (Source : String; Target : String; Has_Depth : Boolean; Depth : Positive;
       Filter : String := "")
@@ -414,6 +573,23 @@ package body Version.Clone is
          raise Ada.IO_Exceptions.Data_Error
            with "clone target already exists: " & Target;
       end if;
+
+      --  A local source that is a plain file is a git bundle (git treats it the
+      --  same way): unpack it instead of talking a transport.
+      declare
+         Local : constant String := Version.Transport.Strip_File_Scheme (Source);
+      begin
+         if Version.Files.Is_Ordinary_File
+              (Version.Files.To_Native_Path (Local))
+         then
+            if Has_Depth or else Filter'Length > 0 then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "clone --depth/--filter is not supported for a bundle";
+            end if;
+            Clone_From_Bundle (Local, Target);
+            return;
+         end if;
+      end;
 
       --  Validate and freeze the source before creating or entering the target.
       case Version.Transport.Detect_Transport (Source) is

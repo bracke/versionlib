@@ -428,7 +428,11 @@ package body Version.Rebase is
       Content : Unbounded_String;
    begin
       Append (Content, "tree " & To_String (Tree_Id) & Character'Val (10));
-      Append (Content, "parent " & To_String (Parent_Id) & Character'Val (10));
+      --  A bare `rebase --root` recreates the root commit parentless, so the
+      --  "parent" header is omitted when Parent_Id is the null object id.
+      if Parent_Id /= Zero_Id then
+         Append (Content, "parent " & To_String (Parent_Id) & Character'Val (10));
+      end if;
       Append (Content, Author_Line (Original_Obj) & Character'Val (10));
       Append
         (Content,
@@ -717,11 +721,15 @@ package body Version.Rebase is
       Commits             : Version.Rebase_State.Commit_Vectors.Vector;
       Allow_Root          : Boolean := False;
       Actions             : Version.Rebase_State.Action_Vectors.Vector :=
-        Version.Rebase_State.Action_Vectors.Empty_Vector)
+        Version.Rebase_State.Action_Vectors.Empty_Vector;
+      Execs               : Version.Rebase_State.Exec_Vectors.Vector :=
+        Version.Rebase_State.Exec_Vectors.Empty_Vector;
+      Next_Exec           : Natural := 0)
    is
       use type Version.Rebase_State.Rebase_Action;
       Replay_Head : Version.Objects.Hex_Object_Id := Current_Replay_Head;
       Index       : Natural := Next_Index;
+      Exec_Cursor : Natural := Next_Exec;
 
       function Is_Reword (I : Natural) return Boolean is
         (not Actions.Is_Empty
@@ -732,8 +740,66 @@ package body Version.Rebase is
         (not Actions.Is_Empty
          and then Actions.Element (Actions.First_Index + I)
                     = Version.Rebase_State.Edit);
+
+      procedure Persist
+        (Paused     : Boolean := False;
+         Cur_Commit : String := "";
+         Reason     : Version.Rebase_State.Pause_Kind :=
+           Version.Rebase_State.Pause_Conflict) is
+      begin
+         Version.Rebase_State.Write_State
+           (Repo                => Repo,
+            Branch_Ref          => Branch_Ref,
+            Original_Head       => Original_Head,
+            Target_Head         => Target_Head,
+            Current_Replay_Head => Replay_Head,
+            Next_Index          => Index,
+            Commits             => Commits,
+            Paused              => Paused,
+            Current_Commit      => Cur_Commit,
+            Actions             => Actions,
+            Execs               => Execs,
+            Next_Exec           => Exec_Cursor,
+            Pause_Reason        => Reason);
+      end Persist;
+
+      --  Run every exec now due (After <= the number of commits applied so far)
+      --  in todo order. On a non-zero exit, persist an exec pause and raise --
+      --  like a conflict stop it yields a non-zero exit and a resumable state;
+      --  --continue then advances past the failed exec to the next todo entry.
+      procedure Run_Due_Execs is
+      begin
+         while Exec_Cursor < Natural (Execs.Length)
+           and then Execs.Element (Execs.First_Index + Exec_Cursor).After <= Index
+         loop
+            declare
+               Command : constant String :=
+                 To_String
+                   (Execs.Element (Execs.First_Index + Exec_Cursor).Command);
+               Args    : GNAT.OS_Lib.Argument_List :=
+                 [1 => new String'("-c"), 2 => new String'(Command)];
+               Status  : Integer;
+            begin
+               Ada.Text_IO.Put_Line ("Executing: " & Command);
+               Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+               GNAT.OS_Lib.Free (Args (1));
+               GNAT.OS_Lib.Free (Args (2));
+               if Status /= 0 then
+                  Persist
+                    (Paused => True,
+                     Reason => Version.Rebase_State.Pause_Exec);
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "rebase stopped: exec failed: " & Command;
+               end if;
+            end;
+            Exec_Cursor := Exec_Cursor + 1;
+            Persist;
+         end loop;
+      end Run_Due_Execs;
    begin
-      while Index < Natural (Commits.Length) loop
+      loop
+         Run_Due_Execs;
+         exit when Index >= Natural (Commits.Length);
          declare
             Commit_Id : constant Version.Objects.Hex_Object_Id := Commits.Element (Commits.First_Index + Index);
             Result : constant Replay_Result :=
@@ -742,17 +808,8 @@ package body Version.Rebase is
                              Reword => Is_Reword (Index));
          begin
             if Result.Kind = Replay_Conflict then
-               Version.Rebase_State.Write_State
-                 (Repo                => Repo,
-                  Branch_Ref          => Branch_Ref,
-                  Original_Head       => Original_Head,
-                  Target_Head         => Target_Head,
-                  Current_Replay_Head => Replay_Head,
-                  Next_Index          => Index,
-                  Commits             => Commits,
-                  Paused              => True,
-                  Current_Commit      => To_String (Commit_Id),
-                  Actions             => Actions);
+               Persist (Paused => True, Cur_Commit => To_String (Commit_Id),
+                        Reason => Version.Rebase_State.Pause_Conflict);
                raise Ada.IO_Exceptions.Data_Error with "rebase paused: conflicts recorded";
             end if;
 
@@ -770,30 +827,12 @@ package body Version.Rebase is
                  (Repo => Repo, Commit_Id => Replay_Head);
                Version.Restore.Write_Index_For_Commit
                  (Repo => Repo, Commit_Id => Replay_Head);
-               Version.Rebase_State.Write_State
-                 (Repo                => Repo,
-                  Branch_Ref          => Branch_Ref,
-                  Original_Head       => Original_Head,
-                  Target_Head         => Target_Head,
-                  Current_Replay_Head => Replay_Head,
-                  Next_Index          => Index,
-                  Commits             => Commits,
-                  Paused              => True,
-                  Current_Commit      => To_String (Commit_Id),
-                  Actions             => Actions);
+               Persist (Paused => True, Cur_Commit => To_String (Commit_Id));
                return;
             end if;
 
             Index := Index + 1;
-            Version.Rebase_State.Write_State
-              (Repo                => Repo,
-               Branch_Ref          => Branch_Ref,
-               Original_Head       => Original_Head,
-               Target_Head         => Target_Head,
-               Current_Replay_Head => Replay_Head,
-               Next_Index          => Index,
-               Commits             => Commits,
-               Actions             => Actions);
+            Persist;
          end;
       end loop;
 
@@ -1016,8 +1055,10 @@ package body Version.Rebase is
          Has_Squash  : Boolean := False;
          Has_Reword  : Boolean := False;
          Has_Edit    : Boolean := False;
+         Has_Exec    : Boolean := False;
          Picked      : Version.Rebase_State.Commit_Vectors.Vector;
          Pick_Actions : Version.Rebase_State.Action_Vectors.Vector;
+         Parsed_Execs : Version.Rebase_State.Exec_Vectors.Vector;
       begin
          Version.Ref_Names.Require_Ref_Name (Branch_Ref);
 
@@ -1085,6 +1126,23 @@ package body Version.Rebase is
                      while S1 <= Line'Last and then Line (S1) = ' ' loop
                         S1 := S1 + 1;
                      end loop;
+
+                     if Cmd = "exec" or else Cmd = "x" then
+                        --  `exec <command>`: the rest of the line is the shell
+                        --  command; anchor it after the commits seen so far.
+                        if S1 > Line'Last then
+                           raise Ada.IO_Exceptions.Data_Error with
+                             "interactive rebase: exec requires a command";
+                        end if;
+                        Has_Exec := True;
+                        Parsed_Execs.Append
+                          (Version.Rebase_State.Exec_Step'
+                             (After   => Natural (Entries.Length),
+                              Command =>
+                                To_Unbounded_String (Line (S1 .. Line'Last))));
+                        return;
+                     end if;
+
                      declare
                         SE : Natural := S1;
                      begin
@@ -1161,10 +1219,12 @@ package body Version.Rebase is
 
          Version.Files.Delete_File_If_Exists (Todo_Path);
 
-         if (Has_Reword or else Has_Edit) and then Has_Squash then
+         if (Has_Reword or else Has_Edit or else Has_Exec)
+           and then Has_Squash
+         then
             raise Ada.IO_Exceptions.Data_Error with
-              "interactive rebase: reword/edit combined with squash/fixup is "
-              & "not supported";
+              "interactive rebase: reword/edit/exec combined with squash/fixup "
+              & "is not supported";
          end if;
 
          if not Has_Squash then
@@ -1188,7 +1248,8 @@ package body Version.Rebase is
                Current_Replay_Head => Target_Head,
                Next_Index          => 0,
                Commits             => Picked,
-               Actions             => Pick_Actions);
+               Actions             => Pick_Actions,
+               Execs               => Parsed_Execs);
 
             begin
                Replay_Remaining
@@ -1199,7 +1260,8 @@ package body Version.Rebase is
                   Current_Replay_Head => Target_Head,
                   Next_Index          => 0,
                   Commits             => Picked,
-                  Actions             => Pick_Actions);
+                  Actions             => Pick_Actions,
+                  Execs               => Parsed_Execs);
             exception
                when others =>
                   declare
@@ -1423,15 +1485,179 @@ package body Version.Rebase is
       end;
    end Start_Root;
 
-   procedure Start_Rebase_Merges (Upstream : String) is
+   procedure Start_Root_Bare is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
+   begin
+      if Version.Refs.Is_Detached (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with "cannot rebase detached HEAD";
+      end if;
+      if Version.Rebase_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with "rebase already in progress";
+      end if;
+      if Version.Cherry_Pick_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with
+           "cannot rebase: cherry-pick in progress";
+      end if;
+      if Version.Revert_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with
+           "cannot rebase: revert in progress";
+      end if;
+      if Version.Merge_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with
+           "cannot rebase: merge state already exists";
+      end if;
 
-      package Id_Sets is new Ada.Containers.Ordered_Sets
-        (Element_Type => Version.Objects.Object_Id_Storage);
-      package Id_Maps is new Ada.Containers.Ordered_Maps
-        (Key_Type     => Version.Objects.Object_Id_Storage,
-         Element_Type => Version.Objects.Object_Id_Storage);
+      Require_Clean_Working_Tree;
+
+      declare
+         Branch_Name : constant String :=
+           Version.Refs.Current_Branch_Name (Repo);
+         Branch_Ref  : constant String := "refs/heads/" & Branch_Name;
+         Original_Head : constant Version.Objects.Hex_Object_Id :=
+           Version.Objects.To_Object_Id (Version.Refs.Current_Commit_Id (Repo));
+         Chain : Version.Rebase_State.Commit_Vectors.Vector;
+      begin
+         Version.Ref_Names.Require_Ref_Name (Branch_Ref);
+
+         --  Collect the whole first-parent chain, root first.
+         declare
+            Newest_First : Version.Rebase_State.Commit_Vectors.Vector;
+            Walk : Version.Objects.Hex_Object_Id := Original_Head;
+         begin
+            loop
+               Newest_First.Append (Walk);
+               declare
+                  Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+                    Version.Objects.Commit_Parent_Ids
+                      (Version.Objects.Read_Object (Repo, Walk));
+               begin
+                  exit when Parents.Is_Empty;
+                  Walk := Parents.First_Element;
+               end;
+            end loop;
+            for I in reverse
+              Newest_First.First_Index .. Newest_First.Last_Index
+            loop
+               Chain.Append (Newest_First.Element (I));
+            end loop;
+         end;
+
+         --  Recreate the root commit parentless (empty base tree), then replay
+         --  the remaining commits on top of it. New_Root becomes the base the
+         --  state machine chains onto.
+         declare
+            Root_Id   : constant Version.Objects.Hex_Object_Id :=
+              Chain.First_Element;
+            Root_Tree : constant Version.Objects.Hex_Object_Id :=
+              Version.Objects.Commit_Tree_Id
+                (Version.Objects.Read_Object (Repo, Root_Id));
+            New_Root  : constant Version.Objects.Hex_Object_Id :=
+              Write_Replayed_Commit
+                (Repo      => Repo,
+                 Tree_Id   => Root_Tree,
+                 Parent_Id => Zero_Id,
+                 Original  => Root_Id);
+         begin
+            Version.Rebase_State.Write_State
+              (Repo                => Repo,
+               Branch_Ref          => Branch_Ref,
+               Original_Head       => Original_Head,
+               Target_Head         => New_Root,
+               Current_Replay_Head => New_Root,
+               Next_Index          => 1,
+               Commits             => Chain);
+
+            begin
+               Replay_Remaining
+                 (Repo                => Repo,
+                  Branch_Ref          => Branch_Ref,
+                  Original_Head       => Original_Head,
+                  Target_Head         => New_Root,
+                  Current_Replay_Head => New_Root,
+                  Next_Index          => 1,
+                  Commits             => Chain,
+                  Allow_Root          => True);
+            exception
+               when others =>
+                  declare
+                     Preserve_State : Boolean := False;
+                  begin
+                     if Version.Rebase_State.State_Exists (Repo) then
+                        begin
+                           Preserve_State :=
+                             Version.Rebase_State.Paused
+                               (Version.Rebase_State.Read_State (Repo));
+                        exception
+                           when others =>
+                              Preserve_State := False;
+                        end;
+                     end if;
+                     if not Preserve_State then
+                        Version.Rebase_State.Clear_State (Repo);
+                        Version.Merge_State.Clear_State (Repo);
+                     end if;
+                  end;
+                  raise;
+            end;
+         end;
+      end;
+   end Start_Root_Bare;
+
+   package Merges_Id_Sets is new Ada.Containers.Ordered_Sets
+     (Element_Type => Version.Objects.Object_Id_Storage);
+   package Merges_Id_Maps is new Ada.Containers.Ordered_Maps
+     (Key_Type     => Version.Objects.Object_Id_Storage,
+      Element_Type => Version.Objects.Object_Id_Storage);
+
+   --  Rebased parents of C (deduplicated): a parent inside the rebase set S maps
+   --  through Map to its rebased id, one outside S maps to Upstream_Head.
+   function Merges_Rebased_Parents
+     (Repo          : Version.Repository.Repository_Handle;
+      C             : Version.Objects.Hex_Object_Id;
+      In_Set        : Merges_Id_Sets.Set;
+      Map           : Merges_Id_Maps.Map;
+      Upstream_Head : Version.Objects.Hex_Object_Id)
+      return Version.Rebase_State.Commit_Vectors.Vector
+   is
+      Rebased : Version.Rebase_State.Commit_Vectors.Vector;
+   begin
+      for P of Version.History.Parent_Commits (Repo, C) loop
+         declare
+            RP : constant Version.Objects.Hex_Object_Id :=
+              (if In_Set.Contains (P) and then Map.Contains (P)
+               then Map.Element (P) else Upstream_Head);
+            Dup : Boolean := False;
+         begin
+            for E of Rebased loop
+               if E = RP then
+                  Dup := True;
+               end if;
+            end loop;
+            if not Dup then
+               Rebased.Append (RP);
+            end if;
+         end;
+      end loop;
+      return Rebased;
+   end Merges_Rebased_Parents;
+
+   --  Replay the topologically-ordered Topo list from Start_Index, recreating
+   --  merges, resuming from Initial_Map. On a linear or two-parent-merge
+   --  conflict it records a Merge_State plus the rebase-merges state and raises
+   --  (resumable via Continue_Rebase); an octopus conflict aborts (git parity).
+   procedure Replay_Merges_Remaining
+     (Repo          : Version.Repository.Repository_Handle;
+      Branch_Ref    : String;
+      Original_Head : Version.Objects.Hex_Object_Id;
+      Upstream_Head : Version.Objects.Hex_Object_Id;
+      Topo          : Version.Rebase_State.Commit_Vectors.Vector;
+      Start_Index   : Natural;
+      Initial_Map   : Version.Rebase_State.Map_Vectors.Vector)
+   is
+      In_Set : Merges_Id_Sets.Set;
+      Map    : Merges_Id_Maps.Map;
+      Index  : Natural := Start_Index;
 
       function Tree_Of (C : Version.Objects.Hex_Object_Id)
          return Version.Objects.Hex_Object_Id is
@@ -1445,6 +1671,208 @@ package body Version.Rebase is
       begin
          return Version.Tree_Cache.Flatten_Tree (Repo, Cache, Tree_Of (C));
       end Items_Of;
+
+      function Map_As_Vector return Version.Rebase_State.Map_Vectors.Vector is
+         V : Version.Rebase_State.Map_Vectors.Vector;
+      begin
+         for C in Map.Iterate loop
+            V.Append
+              (Version.Rebase_State.Map_Pair'
+                 (Original => Merges_Id_Maps.Key (C),
+                  Rebased  => Merges_Id_Maps.Element (C)));
+         end loop;
+         return V;
+      end Map_As_Vector;
+
+      procedure Persist (Paused : Boolean; Cur : String) is
+      begin
+         Version.Rebase_State.Write_State
+           (Repo                => Repo,
+            Branch_Ref          => Branch_Ref,
+            Original_Head       => Original_Head,
+            Target_Head         => Upstream_Head,
+            Current_Replay_Head => Upstream_Head,
+            Next_Index          => Index,
+            Commits             => Topo,
+            Paused              => Paused,
+            Current_Commit      => Cur,
+            Mode                => Version.Rebase_State.Mode_Merges,
+            Rebased_Map         => Map_As_Vector);
+      end Persist;
+
+      procedure Abort_Octopus is
+      begin
+         Version.Restore.Restore_Working_Tree_For_Commit (Repo, Original_Head);
+         Version.Restore.Write_Index_For_Commit (Repo, Original_Head);
+         Version.Merge_State.Clear_State (Repo);
+         Version.Rebase_State.Clear_State (Repo);
+         raise Ada.IO_Exceptions.Data_Error with
+           "rebase --rebase-merges aborted: octopus merge conflict "
+           & "(cannot continue an octopus)";
+      end Abort_Octopus;
+   begin
+      for E of Topo loop
+         In_Set.Include (E);
+      end loop;
+      for P of Initial_Map loop
+         Map.Include (P.Original, P.Rebased);
+      end loop;
+
+      while Index < Natural (Topo.Length) loop
+         declare
+            C : constant Version.Objects.Hex_Object_Id :=
+              Topo.Element (Topo.First_Index + Index);
+            Rebased : constant Version.Rebase_State.Commit_Vectors.Vector :=
+              Merges_Rebased_Parents (Repo, C, In_Set, Map, Upstream_Head);
+         begin
+            if Natural (Rebased.Length) <= 1 then
+               declare
+                  Onto : constant Version.Objects.Hex_Object_Id :=
+                    (if Rebased.Is_Empty then Upstream_Head
+                     else Rebased.First_Element);
+                  R : constant Replay_Result :=
+                    Replay_Commit (Repo, Onto, C, Allow_Root => True);
+               begin
+                  if R.Kind = Replay_Conflict then
+                     Persist (Paused => True, Cur => To_String (C));
+                     raise Ada.IO_Exceptions.Data_Error with
+                       "rebase paused: conflicts recorded";
+                  end if;
+                  Map.Include (C, R.Commit_Id);
+               end;
+
+            elsif Natural (Rebased.Length) = 2 then
+               --  Set the working tree to the first rebased parent so the merge
+               --  (and any conflict markers) materialize on a complete tree.
+               Version.Restore.Restore_Working_Tree_For_Commit
+                 (Repo, Rebased.Element (0));
+               Version.Restore.Write_Index_For_Commit
+                 (Repo, Rebased.Element (0));
+               declare
+                  Base : constant Version.Objects.Hex_Object_Id :=
+                    Version.History.Merge_Base
+                      (Repo, Rebased.Element (0), Rebased.Element (1));
+                  Merged_Index : Version.Staging.Index_Entry_Vectors.Vector;
+                  Conflicts : Version.Merge.Conflict_Vectors.Vector;
+               begin
+                  Version.Merge.Merge_Trees
+                    (Repo          => Repo,
+                     Current_Name  => "rebase-merges-current",
+                     Target_Name   => "rebase-merges-target",
+                     Base_Items    => Items_Of (Base),
+                     Current_Items => Items_Of (Rebased.Element (0)),
+                     Target_Items  => Items_Of (Rebased.Element (1)),
+                     Merged_Index  => Merged_Index,
+                     Conflicts     => Conflicts);
+                  if not Conflicts.Is_Empty then
+                     Version.Merge_State.Clear_State (Repo);
+                     Version.Merge_State.Write_State
+                       (Repo          => Repo,
+                        Current_Id    => Rebased.Element (0),
+                        Target_Id     => Rebased.Element (1),
+                        Base_Id       => Base,
+                        Target_Branch => "rebase",
+                        Conflicts     => Conflicts);
+                     Persist (Paused => True, Cur => To_String (C));
+                     raise Ada.IO_Exceptions.Data_Error with
+                       "rebase paused: conflicts recorded";
+                  end if;
+
+                  declare
+                     Tree : constant Version.Objects.Hex_Object_Id :=
+                       Version.Write.Write_Tree_From_Index (Repo, Merged_Index);
+                     Parent_Ids : Version.Objects.Object_Id_Vectors.Vector;
+                  begin
+                     Parent_Ids.Append (Rebased.Element (0));
+                     Parent_Ids.Append (Rebased.Element (1));
+                     Map.Include
+                       (C,
+                        Version.Write.Write_Commit_With_Author
+                          (Repo, Tree, Parent_Ids,
+                           IR_Author_Line (Repo, C),
+                           IR_Full_Message (Repo, C)));
+                  end;
+               end;
+
+            else
+               --  Octopus (>= 3 parents): iterated merge; abort on conflict.
+               declare
+                  Acc_Items : Version.Objects.Tree_Entry_Vectors.Vector :=
+                    Items_Of (Rebased.Element (0));
+                  Final_Tree : Version.Objects.Hex_Object_Id :=
+                    Tree_Of (Rebased.Element (0));
+                  First_Rebased : constant Version.Objects.Hex_Object_Id :=
+                    Rebased.Element (0);
+               begin
+                  for I in 1 .. Natural (Rebased.Length) - 1 loop
+                     declare
+                        Nxt  : constant Version.Objects.Hex_Object_Id :=
+                          Rebased.Element (I);
+                        Base : constant Version.Objects.Hex_Object_Id :=
+                          Version.History.Merge_Base (Repo, First_Rebased, Nxt);
+                        Merged_Index :
+                          Version.Staging.Index_Entry_Vectors.Vector;
+                        Conflicts : Version.Merge.Conflict_Vectors.Vector;
+                     begin
+                        Version.Merge.Merge_Trees
+                          (Repo          => Repo,
+                           Current_Name  => "rebase-merges-current",
+                           Target_Name   => "rebase-merges-target",
+                           Base_Items    => Items_Of (Base),
+                           Current_Items => Acc_Items,
+                           Target_Items  => Items_Of (Nxt),
+                           Merged_Index  => Merged_Index,
+                           Conflicts     => Conflicts);
+                        if not Conflicts.Is_Empty then
+                           Abort_Octopus;
+                        end if;
+                        Final_Tree :=
+                          Version.Write.Write_Tree_From_Index
+                            (Repo, Merged_Index);
+                        declare
+                           Cache : Version.Tree_Cache.Tree_Cache;
+                        begin
+                           Acc_Items := Version.Tree_Cache.Flatten_Tree
+                             (Repo, Cache, Final_Tree);
+                        end;
+                     end;
+                  end loop;
+
+                  declare
+                     Parent_Ids : Version.Objects.Object_Id_Vectors.Vector;
+                  begin
+                     for RP of Rebased loop
+                        Parent_Ids.Append (RP);
+                     end loop;
+                     Map.Include
+                       (C,
+                        Version.Write.Write_Commit_With_Author
+                          (Repo, Final_Tree, Parent_Ids,
+                           IR_Author_Line (Repo, C),
+                           IR_Full_Message (Repo, C)));
+                  end;
+               end;
+            end if;
+         end;
+
+         Index := Index + 1;
+         Persist (Paused => False, Cur => "");
+      end loop;
+
+      Finish_Rebase
+        (Repo          => Repo,
+         Branch_Ref    => Branch_Ref,
+         Original_Head => Original_Head,
+         Target_Head   => Upstream_Head,
+         Final_Head    => Map.Element (Original_Head));
+   end Replay_Merges_Remaining;
+
+   procedure Start_Rebase_Merges (Upstream : String) is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+
+      package Id_Sets is new Ada.Containers.Ordered_Sets
+        (Element_Type => Version.Objects.Object_Id_Storage);
    begin
       if Version.Refs.Is_Detached (Repo) then
          raise Ada.IO_Exceptions.Data_Error with "cannot rebase detached HEAD";
@@ -1479,7 +1907,6 @@ package body Version.Rebase is
          In_Set  : Id_Sets.Set;
          Up_Anc  : Id_Sets.Set;
          Visited : Id_Sets.Set;
-         Map     : Id_Maps.Map;
          Topo    : Version.Rebase_State.Commit_Vectors.Vector;
 
          --  Collect the ancestor set of Tip (inclusive).
@@ -1507,17 +1934,6 @@ package body Version.Rebase is
             end loop;
             Topo.Append (C);
          end Topo_Sort;
-
-         procedure Abort_Rebase_Merges is
-         begin
-            Version.Restore.Restore_Working_Tree_For_Commit
-              (Repo, Original_Head);
-            Version.Restore.Write_Index_For_Commit (Repo, Original_Head);
-            Version.Merge_State.Clear_State (Repo);
-            raise Ada.IO_Exceptions.Data_Error with
-              "rebase --rebase-merges aborted: conflict "
-              & "(resolution not supported)";
-         end Abort_Rebase_Merges;
       begin
          Version.Ref_Names.Require_Ref_Name (Branch_Ref);
 
@@ -1536,105 +1952,57 @@ package body Version.Rebase is
 
          Topo_Sort (Original_Head);
 
-         for C of Topo loop
-            declare
-               Parents : constant Version.History.Commit_Id_Vectors.Vector :=
-                 Version.History.Parent_Commits (Repo, C);
-               Rebased : Version.Rebase_State.Commit_Vectors.Vector;
-            begin
-               for P of Parents loop
-                  declare
-                     RP : constant Version.Objects.Hex_Object_Id :=
-                       (if In_Set.Contains (P) then Map.Element (P)
-                        else Upstream_Head);
-                     Dup : Boolean := False;
-                  begin
-                     for E of Rebased loop
-                        if E = RP then
-                           Dup := True;
-                        end if;
-                     end loop;
-                     if not Dup then
-                        Rebased.Append (RP);
-                     end if;
-                  end;
-               end loop;
+         --  Persist the initial (unpaused) merges state, then replay. On any
+         --  paused-conflict raise the state is preserved for --continue; a
+         --  hard error clears it (mirrors Start_Root's wrapper).
+         Version.Rebase_State.Write_State
+           (Repo                => Repo,
+            Branch_Ref          => Branch_Ref,
+            Original_Head       => Original_Head,
+            Target_Head         => Upstream_Head,
+            Current_Replay_Head => Upstream_Head,
+            Next_Index          => 0,
+            Commits             => Topo,
+            Mode                => Version.Rebase_State.Mode_Merges);
 
-               if Natural (Rebased.Length) <= 1 then
-                  --  Linear (or root): replay onto the single rebased parent
-                  --  (Upstream_Head when the original parent is outside S).
-                  declare
-                     Onto : constant Version.Objects.Hex_Object_Id :=
-                       (if Rebased.Is_Empty then Upstream_Head
-                        else Rebased.First_Element);
-                     R : constant Replay_Result :=
-                       Replay_Commit (Repo, Onto, C, Allow_Root => True);
-                  begin
-                     if R.Kind = Replay_Conflict then
-                        Abort_Rebase_Merges;
-                     end if;
-                     Map.Insert (C, R.Commit_Id);
-                  end;
-
-               elsif Natural (Rebased.Length) = 2 then
-                  --  Recreate the merge of the two rebased parents.
-                  declare
-                     Base : constant Version.Objects.Hex_Object_Id :=
-                       Version.History.Merge_Base
-                         (Repo, Rebased.Element (0), Rebased.Element (1));
-                     Merged_Index :
-                       Version.Staging.Index_Entry_Vectors.Vector;
-                     Conflicts : Version.Merge.Conflict_Vectors.Vector;
-                  begin
-                     Version.Merge.Merge_Trees
-                       (Repo          => Repo,
-                        Current_Name  => "rebase-merges-current",
-                        Target_Name   => "rebase-merges-target",
-                        Base_Items    => Items_Of (Base),
-                        Current_Items => Items_Of (Rebased.Element (0)),
-                        Target_Items  => Items_Of (Rebased.Element (1)),
-                        Merged_Index  => Merged_Index,
-                        Conflicts     => Conflicts);
-                     if not Conflicts.Is_Empty then
-                        Abort_Rebase_Merges;
-                     end if;
-
-                     declare
-                        Tree : constant Version.Objects.Hex_Object_Id :=
-                          Version.Write.Write_Tree_From_Index
-                            (Repo, Merged_Index);
-                        Parent_Ids :
-                          Version.Objects.Object_Id_Vectors.Vector;
+         begin
+            Replay_Merges_Remaining
+              (Repo          => Repo,
+               Branch_Ref    => Branch_Ref,
+               Original_Head => Original_Head,
+               Upstream_Head => Upstream_Head,
+               Topo          => Topo,
+               Start_Index   => 0,
+               Initial_Map   => Version.Rebase_State.Map_Vectors.Empty_Vector);
+         exception
+            when others =>
+               declare
+                  Preserve_State : Boolean := False;
+               begin
+                  if Version.Rebase_State.State_Exists (Repo) then
                      begin
-                        Parent_Ids.Append (Rebased.Element (0));
-                        Parent_Ids.Append (Rebased.Element (1));
-                        Map.Insert
-                          (C,
-                           Version.Write.Write_Commit_With_Author
-                             (Repo, Tree, Parent_Ids,
-                              IR_Author_Line (Repo, C),
-                              IR_Full_Message (Repo, C)));
+                        Preserve_State :=
+                          Version.Rebase_State.Paused
+                            (Version.Rebase_State.Read_State (Repo));
+                     exception
+                        when others =>
+                           Preserve_State := False;
                      end;
-                  end;
-
-               else
-                  raise Ada.IO_Exceptions.Data_Error with
-                    "rebase --rebase-merges: octopus merges not supported";
-               end if;
-            end;
-         end loop;
-
-         Finish_Rebase
-           (Repo          => Repo,
-            Branch_Ref    => Branch_Ref,
-            Original_Head => Original_Head,
-            Target_Head   => Upstream_Head,
-            Final_Head    => Map.Element (Original_Head));
+                  end if;
+                  if not Preserve_State then
+                     Version.Rebase_State.Clear_State (Repo);
+                     Version.Merge_State.Clear_State (Repo);
+                  end if;
+               end;
+               raise;
+         end;
       end;
    end Start_Rebase_Merges;
 
    procedure Continue_Rebase is
       use type Version.Rebase_State.Rebase_Action;
+      use type Version.Rebase_State.Pause_Kind;
+      use type Version.Rebase_State.Rebase_Mode;
       Repo  : constant Version.Repository.Repository_Handle := Version.Repository.Open;
       State : constant Version.Rebase_State.Rebase_State := Version.Rebase_State.Read_State (Repo);
       Index_Items : Version.Staging.Index_Entry_Vectors.Vector;
@@ -1653,6 +2021,141 @@ package body Version.Rebase is
 
       if not Version.Rebase_State.Paused (State) then
          raise Ada.IO_Exceptions.Data_Error with "continue without paused conflict";
+      end if;
+
+      if Version.Rebase_State.Pause_Reason (State)
+           = Version.Rebase_State.Pause_Exec
+      then
+         --  Exec-failure continue: skip the failed exec (git does not re-run it)
+         --  and resume the todo from where it stopped, on the same replay head.
+         Replay_Remaining
+           (Repo                => Repo,
+            Branch_Ref          => Version.Rebase_State.Branch_Ref (State),
+            Original_Head       => Version.Rebase_State.Original_Head (State),
+            Target_Head         => Version.Rebase_State.Target_Head (State),
+            Current_Replay_Head => Version.Rebase_State.Current_Replay_Head (State),
+            Next_Index          => Version.Rebase_State.Next_Index (State),
+            Commits             => Version.Rebase_State.Commits (State),
+            Allow_Root          => True,
+            Actions             => Version.Rebase_State.Actions (State),
+            Execs               => Version.Rebase_State.Execs (State),
+            Next_Exec           => Version.Rebase_State.Next_Exec (State) + 1);
+         return;
+      end if;
+
+      if Version.Rebase_State.Mode (State) = Version.Rebase_State.Mode_Merges then
+         --  Resume a --rebase-merges paused on a linear or two-parent-merge
+         --  conflict: the user resolved the index, so commit it (1 parent for a
+         --  linear commit, both rebased parents for a merge) and replay on.
+         declare
+            Topo : constant Version.Rebase_State.Commit_Vectors.Vector :=
+              Version.Rebase_State.Commits (State);
+            Position : constant Natural := Version.Rebase_State.Next_Index (State);
+            C : constant Version.Objects.Hex_Object_Id :=
+              Version.Rebase_State.Current_Commit (State);
+            Upstream_Head : constant Version.Objects.Hex_Object_Id :=
+              Version.Rebase_State.Target_Head (State);
+            In_Set : Merges_Id_Sets.Set;
+            Map    : Merges_Id_Maps.Map;
+         begin
+            for E of Topo loop
+               In_Set.Include (E);
+            end loop;
+            for P of Version.Rebase_State.Rebased_Map (State) loop
+               Map.Include (P.Original, P.Rebased);
+            end loop;
+
+            --  A merges pause records a Merge_State whose sides are the rebased
+            --  parents (not the original commit), so it does not satisfy the
+            --  linear Require_Paused_Merge_State check; read it directly for the
+            --  conflict list. The commit to recreate is Current_Commit (C) and
+            --  its rebased parents are recomputed from the Map.
+            if not Version.Merge_State.State_Exists (Repo) then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "cannot continue rebase: merge state missing";
+            end if;
+            declare
+               MC, MT, MB : Version.Objects.Object_Id_Storage;
+               MBranch    : Unbounded_String;
+            begin
+               Conflicts.Clear;
+               Version.Merge_State.Read_State
+                 (Repo          => Repo,
+                  Current_Id    => MC,
+                  Target_Id     => MT,
+                  Base_Id       => MB,
+                  Target_Branch => MBranch,
+                  Conflicts     => Conflicts);
+            end;
+            if Conflict_Paths_Have_Markers (Repo => Repo, Conflicts => Conflicts)
+            then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "cannot continue rebase: conflict markers remain";
+            end if;
+            Version.Merge.Record_Rerere_Resolutions
+              (Repo => Repo, Conflicts => Conflicts);
+            Require_No_Untracked_During_Continue;
+            Build_Index_From_Working_Tree (Repo => Repo, Result => Index_Items);
+            Version.Staging.Write (Repo => Repo, Entries => Index_Items);
+
+            declare
+               Rebased : constant Version.Rebase_State.Commit_Vectors.Vector :=
+                 Merges_Rebased_Parents
+                   (Repo, C, In_Set, Map, Upstream_Head);
+               Tree : constant Version.Objects.Hex_Object_Id :=
+                 Version.Write.Write_Tree_From_Index
+                   (Repo => Repo, Entries => Index_Items);
+               New_Commit : Version.Objects.Hex_Object_Id;
+            begin
+               if Natural (Rebased.Length) <= 1 then
+                  New_Commit := Write_Replayed_Commit
+                    (Repo      => Repo,
+                     Tree_Id   => Tree,
+                     Parent_Id =>
+                       (if Rebased.Is_Empty then Upstream_Head
+                        else Rebased.First_Element),
+                     Original  => C);
+               else
+                  declare
+                     Parent_Ids : Version.Objects.Object_Id_Vectors.Vector;
+                  begin
+                     for RP of Rebased loop
+                        Parent_Ids.Append (RP);
+                     end loop;
+                     New_Commit := Version.Write.Write_Commit_With_Author
+                       (Repo, Tree, Parent_Ids,
+                        IR_Author_Line (Repo, C), IR_Full_Message (Repo, C));
+                  end;
+               end if;
+
+               Map.Include (C, New_Commit);
+               Version.Merge_State.Clear_State (Repo);
+               Version.Restore.Restore_Working_Tree_For_Commit
+                 (Repo => Repo, Commit_Id => New_Commit);
+               Version.Restore.Write_Index_For_Commit
+                 (Repo => Repo, Commit_Id => New_Commit);
+
+               declare
+                  Resumed_Map : Version.Rebase_State.Map_Vectors.Vector;
+               begin
+                  for M in Map.Iterate loop
+                     Resumed_Map.Append
+                       (Version.Rebase_State.Map_Pair'
+                          (Original => Merges_Id_Maps.Key (M),
+                           Rebased  => Merges_Id_Maps.Element (M)));
+                  end loop;
+                  Replay_Merges_Remaining
+                    (Repo          => Repo,
+                     Branch_Ref    => Version.Rebase_State.Branch_Ref (State),
+                     Original_Head => Version.Rebase_State.Original_Head (State),
+                     Upstream_Head => Upstream_Head,
+                     Topo          => Topo,
+                     Start_Index   => Position + 1,
+                     Initial_Map   => Resumed_Map);
+               end;
+            end;
+         end;
+         return;
       end if;
 
       if Paused_Action = Version.Rebase_State.Edit
@@ -1679,7 +2182,9 @@ package body Version.Rebase is
                Current_Replay_Head => Head,
                Next_Index          => Next,
                Commits             => Commits,
-               Actions             => Actions);
+               Actions             => Actions,
+               Execs               => Version.Rebase_State.Execs (State),
+               Next_Exec           => Version.Rebase_State.Next_Exec (State));
             Replay_Remaining
               (Repo                => Repo,
                Branch_Ref          => Version.Rebase_State.Branch_Ref (State),
@@ -1689,7 +2194,9 @@ package body Version.Rebase is
                Next_Index          => Next,
                Commits             => Commits,
                Allow_Root          => True,
-               Actions             => Actions);
+               Actions             => Actions,
+               Execs               => Version.Rebase_State.Execs (State),
+               Next_Exec           => Version.Rebase_State.Next_Exec (State));
             return;
          end;
       end if;
@@ -1753,7 +2260,9 @@ package body Version.Rebase is
             Current_Replay_Head => New_Commit,
             Next_Index          => Next_Index,
             Commits             => Commits,
-            Actions             => Actions);
+            Actions             => Actions,
+            Execs               => Version.Rebase_State.Execs (State),
+            Next_Exec           => Version.Rebase_State.Next_Exec (State));
          Replay_Remaining
            (Repo                => Repo,
             Branch_Ref          => Version.Rebase_State.Branch_Ref (State),
@@ -1763,7 +2272,9 @@ package body Version.Rebase is
             Next_Index          => Next_Index,
             Commits             => Commits,
             Allow_Root          => True,
-            Actions             => Actions);
+            Actions             => Actions,
+            Execs               => Version.Rebase_State.Execs (State),
+            Next_Exec           => Version.Rebase_State.Next_Exec (State));
       end;
    end Continue_Rebase;
 

@@ -69,4 +69,22 @@ package body Version.Compression is
       return To_String (Output);
    end Deflate_Zlib;
 
+   function Gzip
+     (Input : String)
+      return String
+   is
+      Status : Zlib.Status_Code;
+      Output : constant Zlib.Byte_Array :=
+        Zlib.GZip
+          (Input  => To_Byte_Array (Input),
+           Status => Status);
+   begin
+      if Status /= Zlib.Ok then
+         raise Ada.IO_Exceptions.Data_Error with
+           "gzip compression failed: " & Zlib.Status_Image (Status);
+      end if;
+
+      return To_String (Output);
+   end Gzip;
+
 end Version.Compression;

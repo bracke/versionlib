@@ -146,4 +146,40 @@ package Version.Receive_Pack is
       Force       : Boolean := False);
    --  Push New_Id to Ref_Name on Url using SSH receive-pack.
 
+   --  One ref update in an atomic batch. New_Id is the target commit/tag id, or
+   --  the all-zero id to delete Ref_Name.
+   type Push_Command is record
+      Ref_Name : Unbounded_String;
+      New_Id   : Unbounded_String;
+   end record;
+
+   package Push_Command_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Push_Command);
+
+   procedure Push_Atomic
+     (Repo        : Version.Repository.Repository_Handle;
+      Remote_Name : String;
+      Url         : String;
+      Commands    : Push_Command_Vectors.Vector;
+      Force       : Boolean := False);
+   --  Apply all Commands in a single smart-HTTP receive-pack request using the
+   --  `atomic` capability (all-or-nothing). Raises if the remote does not
+   --  advertise `atomic`, if any update is a rejected non-fast-forward (unless
+   --  Force), or if the server reports any `ng`.
+
+   procedure Push_Atomic_Ssh
+     (Repo        : Version.Repository.Repository_Handle;
+      Remote_Name : String;
+      Url         : String;
+      Commands    : Push_Command_Vectors.Vector;
+      Force       : Boolean := False);
+   --  As Push_Atomic, over SSH receive-pack.
+
+   function Discover_Http (Url : String) return Discovery_Result;
+   --  The receive-pack ref advertisement (refs + capabilities) from a smart
+   --  HTTP remote, for listing remote refs (e.g. a matching push).
+
+   function Discover_Ssh (Url : String) return Discovery_Result;
+   --  As Discover_Http, over SSH receive-pack.
+
 end Version.Receive_Pack;

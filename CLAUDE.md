@@ -17,7 +17,7 @@ etc.); the sibling `version` crate is the **CLI only** and delegates into
 `versionlib`. It reads and writes a real `.git` directory and is validated
 against the system `git` command.
 
-Dependencies are pinned to sibling directories: `httpclient` (`../HttpClient`),
+Dependencies are pinned to sibling directories: `httpclient` (`../httpclient`),
 `zlib` (`../zlib`), `i18n` (`../i18n`), and `ssh_lib` (`../sshlib`); `ssh_lib`
 brings `cryptolib` transitively. The CLI/test executables link `-lssl -lcrypto`,
 so OpenSSL dev libraries are required.

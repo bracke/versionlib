@@ -332,6 +332,162 @@ package body Version.Revisions.Tests is
          raise;
    end Reject_Invalid_Suffix;
 
+   --  `<rev>:<path>` peels the rev to a tree and looks up the path: a blob id,
+   --  a nested blob, a subtree id, and empty path -> the tree itself; a
+   --  ^/~ prefix and a missing path are also exercised.
+   procedure Resolve_Rev_Path
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Git_Fixtures.Run (Root, "git init");
+      Version.Git_Fixtures.Run (Root, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Root, "git config user.name Test");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "rootf"), "ROOT" & Character'Val (10));
+      Ada.Directories.Create_Path (Version.Test_Support.Join (Root, "sub"));
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "sub/a.txt"), "AA" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add -A && git commit -m c1");
+      Ada.Directories.Set_Directory (Root);
+
+      declare
+         Repo   : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Raised : Boolean := False;
+      begin
+         --  `<rev>:<path>` matches `git rev-parse` for a root blob, a nested
+         --  blob, a subtree, and the empty-path tree.
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse HEAD:rootf)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, "HEAD:rootf")) & """");
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse HEAD:sub/a.txt)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, "HEAD:sub/a.txt"))
+            & """");
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse HEAD:sub)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, "HEAD:sub")) & """");
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse HEAD:)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, "HEAD:")) & """");
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse HEAD^{tree})"" = """
+            & To_String (Version.Revisions.Resolve (Repo, "HEAD:")) & """");
+
+         --  A path missing from the tree raises.
+         declare
+            Id : Version.Objects.Object_Id_Storage;
+         begin
+            Id := Version.Revisions.Resolve (Repo, "HEAD:nope");
+            Assert (False, "missing path should not resolve: " & To_String (Id));
+         exception
+            when Ada.IO_Exceptions.Data_Error =>
+               Raised := True;
+         end;
+         Assert (Raised, "`<rev>:<missing>` must raise Data_Error");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Resolve_Rev_Path;
+
+   --  Leading-colon syntax: `:path` / `:0:path` (index blob) and `:/regex`
+   --  (youngest commit reachable from any ref whose message matches).
+   procedure Resolve_Leading_Colon
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Git_Fixtures.Run (Root, "git init");
+      Version.Git_Fixtures.Run (Root, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Root, "git config user.name Test");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "f"), "hello" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add f && git commit -m 'first apple'");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "f"), "world" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add f && git commit -m 'second banana'");
+      --  A staged-but-uncommitted blob lives only in the index.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "g"), "staged" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add g");
+      Ada.Directories.Set_Directory (Root);
+
+      declare
+         Repo   : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Raised : Boolean := False;
+      begin
+         --  `:g` and `:0:g` are the index blob.
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse :g)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, ":g")) & """");
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse :0:g)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, ":0:g")) & """");
+
+         --  `:/regex` finds the youngest commit whose message matches.
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse :/apple)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, ":/apple")) & """");
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git rev-parse :/banana)"" = """
+            & To_String (Version.Revisions.Resolve (Repo, ":/banana")) & """");
+
+         --  A path absent from the index raises.
+         begin
+            declare
+               Id : constant Version.Objects.Object_Id_Storage :=
+                 Version.Revisions.Resolve (Repo, ":nosuch");
+            begin
+               Assert (False, "index miss should not resolve: " & To_String (Id));
+            end;
+         exception
+            when Ada.IO_Exceptions.Data_Error =>
+               Raised := True;
+         end;
+         Assert (Raised, "`:<missing>` must raise Data_Error");
+
+         Raised := False;
+         begin
+            declare
+               Id : constant Version.Objects.Object_Id_Storage :=
+                 Version.Revisions.Resolve (Repo, ":/zzznomatch");
+            begin
+               Assert (False, "no message match should not resolve: "
+                       & To_String (Id));
+            end;
+         exception
+            when Ada.IO_Exceptions.Data_Error =>
+               Raised := True;
+         end;
+         Assert (Raised, "`:/<no-match>` must raise Data_Error");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Resolve_Leading_Colon;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -357,6 +513,12 @@ package body Version.Revisions.Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Reject_Invalid_Suffix'Access,
          "Revisions: invalid suffix rejected");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Resolve_Rev_Path'Access,
+         "Revisions: <rev>:<path> resolves tree-path entries");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Resolve_Leading_Colon'Access,
+         "Revisions: :path / :N:path / :/regex resolve like git");
    end Register_Tests;
 
    overriding function Name

@@ -1,4 +1,28 @@
+with Ada.Containers.Vectors;
+with Ada.Strings.Unbounded;
+
 package Version.Push is
+
+   --  One entry of an atomic push: update Dest_Ref to the commit named by
+   --  Source, or (when Delete) remove Dest_Ref on the remote.
+   type Atomic_Command is record
+      Source   : Ada.Strings.Unbounded.Unbounded_String;
+      Dest_Ref : Ada.Strings.Unbounded.Unbounded_String;
+      Delete   : Boolean := False;
+   end record;
+
+   package Atomic_Command_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Atomic_Command);
+
+   procedure Push_Atomic
+     (Remote_Name : String;
+      Commands    : Atomic_Command_Vectors.Vector;
+      Force       : Boolean := False;
+      Run_Hooks   : Boolean := True);
+   --  Apply every command to the remote atomically (all-or-nothing): locally
+   --  via one ref transaction; over HTTP/SSH via a single receive-pack request
+   --  using the `atomic` capability. Non-fast-forward updates are rejected
+   --  before anything is applied unless Force.
 
    function Invalid_Remote_Branch_Commit_Id_Diagnostic return String;
 
@@ -45,5 +69,13 @@ package Version.Push is
    --  Push using the configured "remote.<Remote_Name>.push" refspec(s), each
    --  parsed like a command-line refspec (a leading "+" forces, an empty
    --  source deletes the destination). Errors if none are configured.
+
+   procedure Push_Matching
+     (Remote_Name : String;
+      Force       : Boolean := False;
+      Run_Hooks   : Boolean := True);
+   --  git's "matching" push (the bare `:` refspec and push.default=matching):
+   --  update every remote branch that shares a name with a local branch. New
+   --  remote branches are not created; a no-op when nothing matches.
 
 end Version.Push;

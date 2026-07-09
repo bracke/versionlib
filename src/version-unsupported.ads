@@ -1,12 +1,9 @@
 package Version.Unsupported is
-   function Sha256_Object_Format return String is
-     ("unsupported repository format: SHA-256 object-format repositories are not supported");
-
+   --  SHA-256 (extensions.objectFormat = sha256) is a supported object format;
+   --  Object_Format only names genuinely unsupported formats (anything that is
+   --  neither sha1 nor sha256).
    function Object_Format (Format : String) return String is
-     (if Format = "sha256" then
-         Sha256_Object_Format
-      else
-         "unsupported repository object format: " & Format);
+     ("unsupported repository object format: " & Format);
 
    function Promisor_Objects return String is
      ("unsupported promisor object: no configured partial-clone promisor remote");

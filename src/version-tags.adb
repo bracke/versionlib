@@ -6,6 +6,7 @@ with Version.Files;
 with Version.Object_Cache;
 with Version.History;
 with Version.Refs;
+with Version.Reftable;
 with Version.Repository;
 with Version.Packed_Refs;
 with Version.Ref_Names;
@@ -16,7 +17,6 @@ with Version.Write;
 
 package body Version.Tags is
    use Version.Objects;
-
 
    use Tag_Name_Vectors;
 
@@ -146,9 +146,10 @@ package body Version.Tags is
    end Create_Tag;
 
    procedure Create_Annotated_Tag
-     (Name     : String;
-      Revision : String;
-      Message  : String)
+     (Name        : String;
+      Revision    : String;
+      Message     : String;
+      Signing_Key : String := "")
    is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -164,10 +165,11 @@ package body Version.Tags is
            Version.Revisions.Resolve (Repo => Repo, Text => Revision);
          Tag_Id    : constant Version.Objects.Hex_Object_Id :=
            Version.Write.Write_Tag
-             (Repo      => Repo,
-              Target_Id => Target_Id,
-              Tag_Name  => Name,
-              Message   => Message);
+             (Repo        => Repo,
+              Target_Id   => Target_Id,
+              Tag_Name    => Name,
+              Message     => Message,
+              Signing_Key => Signing_Key);
       begin
          Write_New_Tag_Ref
            (Repo      => Repo,
@@ -177,8 +179,9 @@ package body Version.Tags is
    end Create_Annotated_Tag;
 
    procedure Create_Annotated_Tag
-     (Name    : String;
-      Message : String)
+     (Name        : String;
+      Message     : String;
+      Signing_Key : String := "")
    is
       Repo      : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -197,10 +200,11 @@ package body Version.Tags is
       declare
          Tag_Id : constant Version.Objects.Hex_Object_Id :=
            Version.Write.Write_Tag
-             (Repo      => Repo,
-              Target_Id => Version.Objects.To_Object_Id (Commit_Id),
-              Tag_Name  => Name,
-              Message   => Message);
+             (Repo        => Repo,
+              Target_Id   => Version.Objects.To_Object_Id (Commit_Id),
+              Tag_Name    => Name,
+              Message     => Message,
+              Signing_Key => Signing_Key);
       begin
          Write_New_Tag_Ref
            (Repo      => Repo,
@@ -635,7 +639,29 @@ package body Version.Tags is
           (Version.Repository.Common_Git_Dir (Repo), "refs/tags");
 
       Result : Tag_Name_Vectors.Vector;
+
+      Tags_Prefix : constant String := "refs/tags/";
    begin
+      if Version.Reftable.Is_Reftable (Repo) then
+         for R of Version.Reftable.Live_Refs (Repo) loop
+            declare
+               Name : constant String :=
+                 Ada.Strings.Unbounded.To_String (R.Name);
+            begin
+               if Name'Length > Tags_Prefix'Length
+                 and then Name (Name'First .. Name'First
+                                  + Tags_Prefix'Length - 1) = Tags_Prefix
+               then
+                  Result.Append
+                    (Ada.Strings.Unbounded.To_Unbounded_String
+                       (Name (Name'First + Tags_Prefix'Length .. Name'Last)));
+               end if;
+            end;
+         end loop;
+         Sort_Tags (Result);
+         return Result;
+      end if;
+
       Append_Tags_In_Directory
         (Directory_Path => Root, Prefix => "", Result => Result);
 

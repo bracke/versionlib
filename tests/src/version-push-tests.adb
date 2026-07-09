@@ -2829,10 +2829,164 @@ package body Version.Push.Tests is
       Assert (Raised, "changed remote tag must be rejected");
    end Push_Internal_Detects_Changed_Remote_Tag;
 
+   --  Local atomic push: two branches updated together in one transaction, and
+   --  a non-fast-forward in the batch aborts everything (all-or-nothing).
+   procedure Push_Local_Atomic_All_Or_Nothing
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      use Ada.Strings.Unbounded;
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Remote  : constant String := Version.Test_Support.Join (Root, "remote.git");
+      Work    : constant String := Version.Test_Support.Join (Root, "work");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+
+      function Two_Branch_Commands
+        return Version.Push.Atomic_Command_Vectors.Vector
+      is
+         C : Version.Push.Atomic_Command_Vectors.Vector;
+      begin
+         C.Append
+           (Version.Push.Atomic_Command'
+              (Source => To_Unbounded_String ("main"),
+               Dest_Ref => To_Unbounded_String ("refs/heads/main"),
+               Delete => False));
+         C.Append
+           (Version.Push.Atomic_Command'
+              (Source => To_Unbounded_String ("dev"),
+               Dest_Ref => To_Unbounded_String ("refs/heads/dev"),
+               Delete => False));
+         return C;
+      end Two_Branch_Commands;
+
+      Raised : Boolean := False;
+   begin
+      Version.Git_Fixtures.Run (Root, "git init -q --bare remote.git");
+      Ada.Directories.Create_Directory (Work);
+      Version.Git_Fixtures.Run (Work, "git init -q");
+      Version.Git_Fixtures.Run (Work, "git config user.email t@e.c");
+      Version.Git_Fixtures.Run (Work, "git config user.name T");
+      Version.Git_Fixtures.Run (Work, "git remote add origin ../remote.git");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Work, "a"), "a" & LF);
+      Version.Git_Fixtures.Run (Work, "git add a && git commit -q -m c1");
+      Version.Git_Fixtures.Run (Work, "git branch dev");
+      Version.Git_Fixtures.Run (Work, "git push -q origin main dev");
+
+      --  Advance main (fast-forward) and rewind dev to an unrelated root.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Work, "a"), "b" & LF);
+      Version.Git_Fixtures.Run (Work, "git add a && git commit -q -m c2");
+      Version.Git_Fixtures.Run
+        (Work, "git checkout -q --orphan new && git rm -q -rf . && echo z>z"
+               & " && git add z && git commit -q -m unrelated"
+               & " && git branch -f dev new && git checkout -q main");
+
+      Ada.Directories.Set_Directory (Work);
+
+      --  Phase 1: non-fast-forward dev aborts the whole push; remote unchanged.
+      begin
+         Version.Push.Push_Atomic ("origin", Two_Branch_Commands);
+      exception
+         when Ada.IO_Exceptions.Data_Error =>
+            Raised := True;
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+      Assert (Raised, "non-fast-forward in an atomic batch must be rejected");
+      --  Remote main is still the seeded c1 (= work's HEAD~1): the valid main
+      --  update was rolled back with the rejected dev update.
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git -C remote.git rev-parse main)"" ="
+         & " ""$(git -C work rev-parse HEAD~1)""");
+
+      --  Phase 2: make dev a fast-forward too, then atomic push updates both.
+      Version.Git_Fixtures.Run
+        (Work, "git branch -f dev main && git checkout -q dev && echo y>y"
+               & " && git add y && git commit -q -m d2 && git checkout -q main");
+      Ada.Directories.Set_Directory (Work);
+      Version.Push.Push_Atomic ("origin", Two_Branch_Commands);
+      Ada.Directories.Set_Directory (Old_Dir);
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git -C remote.git rev-parse main)"" ="
+         & " ""$(git -C work rev-parse main)""");
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git -C remote.git rev-parse dev)"" ="
+         & " ""$(git -C work rev-parse dev)""");
+      Version.Git_Fixtures.Run (Root, "git -C remote.git fsck");
+
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Push_Local_Atomic_All_Or_Nothing;
+
+   --  Local matching push (bare `:`): every remote branch sharing a local name
+   --  is updated; a local-only branch is not created on the remote.
+   procedure Push_Local_Matching
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Work    : constant String := Version.Test_Support.Join (Root, "work");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Git_Fixtures.Run (Root, "git init -q --bare remote.git");
+      Ada.Directories.Create_Directory (Work);
+      Version.Git_Fixtures.Run (Work, "git init -q");
+      Version.Git_Fixtures.Run (Work, "git config user.email t@e.c");
+      Version.Git_Fixtures.Run (Work, "git config user.name T");
+      Version.Git_Fixtures.Run (Work, "git remote add origin ../remote.git");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Work, "a"), "a" & LF);
+      Version.Git_Fixtures.Run (Work, "git add a && git commit -q -m c1");
+      Version.Git_Fixtures.Run (Work, "git branch dev && git branch feature");
+      --  Remote gets main + dev only (not feature).
+      Version.Git_Fixtures.Run (Work, "git push -q origin main dev");
+      --  Advance all three local branches.
+      Version.Git_Fixtures.Run
+        (Work, "echo b>>a && git add a && git commit -q -m c2");
+      Version.Git_Fixtures.Run
+        (Work, "git checkout -q dev && echo x>x && git add x"
+               & " && git commit -q -m d2 && git checkout -q main");
+      Version.Git_Fixtures.Run
+        (Work, "git checkout -q feature && echo y>y && git add y"
+               & " && git commit -q -m f2 && git checkout -q main");
+
+      Ada.Directories.Set_Directory (Work);
+      Version.Push.Push_Matching ("origin");
+      Ada.Directories.Set_Directory (Old_Dir);
+
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git -C remote.git rev-parse main)"" ="
+               & " ""$(git -C work rev-parse main)""");
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git -C remote.git rev-parse dev)"" ="
+               & " ""$(git -C work rev-parse dev)""");
+      Version.Git_Fixtures.Run
+        (Root,
+         "git -C remote.git rev-parse --verify -q feature >/dev/null"
+         & " && exit 1 || exit 0");
+      Version.Git_Fixtures.Run (Root, "git -C remote.git fsck");
+
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Push_Local_Matching;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
    begin
+      Register_Routine
+        (T, Push_Local_Atomic_All_Or_Nothing'Access,
+         "Push: local --atomic all-or-nothing");
+      Register_Routine
+        (T, Push_Local_Matching'Access,
+         "Push: local matching (bare colon)");
       Register_Routine
         (T,
          Push_Local_Branch_Fast_Forward'Access,

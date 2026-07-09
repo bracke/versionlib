@@ -1637,18 +1637,17 @@ package body Version.Fetch is
       end case;
    end Fetch_Object;
 
+   function Has_Prefix (S, Prefix : String) return Boolean is
+     (S'Length >= Prefix'Length
+      and then S (S'First .. S'First + Prefix'Length - 1) = Prefix);
+
    --  True when Filter_Spec is a partial-clone filter version can evaluate
-   --  locally (blob:none or blob:limit=<n>).
+   --  locally (blob:none, blob:limit=<n>, or tree:<depth>).
    function Local_Filter_Supported (Filter_Spec : String) return Boolean is
-      Limit_Prefix : constant String := "blob:limit=";
    begin
       return Filter_Spec = "blob:none"
-        or else
-          (Filter_Spec'Length > Limit_Prefix'Length
-           and then Filter_Spec
-                      (Filter_Spec'First
-                       .. Filter_Spec'First + Limit_Prefix'Length - 1)
-                    = Limit_Prefix);
+        or else Has_Prefix (Filter_Spec, "blob:limit=")
+        or else Has_Prefix (Filter_Spec, "tree:");
    end Local_Filter_Supported;
 
    --  Selectively copy objects reachable from the fetched refs, omitting
@@ -1683,11 +1682,79 @@ package body Version.Fetch is
                  with "invalid blob:limit filter: " & Filter_Spec;
          end;
       end Keep_Blob;
+      --  tree:<depth> — keep every commit/tag plus all trees and blobs whose
+      --  depth from a commit's root tree (depth 1) is <= <depth>. git parity:
+      --  tree:0 = commits only, tree:1 adds root trees, tree:2 adds their
+      --  direct entries, and so on.
+      procedure Copy_By_Tree_Depth (Max_Depth : Natural) is
+         procedure Process_Tree
+           (Tree_Id : Version.Objects.Hex_Object_Id; Depth : Positive) is
+         begin
+            if Depth > Max_Depth or else Seen.Contains (Tree_Id) then
+               return;
+            end if;
+            Seen.Insert (Tree_Id);
+            Version.Write.Copy_Object (Source_Repo, Target_Repo, Tree_Id);
+            for E of Version.Objects.Tree_Entries (Source_Repo, Tree_Id) loop
+               if E.Kind = Version.Objects.Tree_Directory then
+                  Process_Tree (E.Id, Depth + 1);
+               elsif E.Kind = Version.Objects.Tree_Blob then
+                  if Depth + 1 <= Max_Depth
+                    and then not Seen.Contains (E.Id)
+                  then
+                     Seen.Insert (E.Id);
+                     Version.Write.Copy_Object (Source_Repo, Target_Repo, E.Id);
+                  end if;
+               end if;
+            end loop;
+         end Process_Tree;
+      begin
+         for U of Ref_Updates loop
+            for Obj_Id of Version.History.Reachable_Objects
+                            (Source_Repo, U.Object_Id)
+            loop
+               declare
+                  Obj : constant Version.Objects.Git_Object :=
+                    Version.Objects.Read_Object (Source_Repo, Obj_Id);
+                  Kind : constant Version.Objects.Object_Kind :=
+                    Version.Objects.Kind (Obj);
+               begin
+                  if Kind = Version.Objects.Commit_Object
+                    or else Kind = Version.Objects.Tag_Object
+                  then
+                     if not Seen.Contains (Obj_Id) then
+                        Seen.Insert (Obj_Id);
+                        Version.Write.Copy_Object
+                          (Source_Repo, Target_Repo, Obj_Id);
+                     end if;
+                     if Kind = Version.Objects.Commit_Object then
+                        Process_Tree
+                          (Version.Objects.Commit_Tree_Id (Obj), 1);
+                     end if;
+                  end if;
+               end;
+            end loop;
+         end loop;
+      end Copy_By_Tree_Depth;
    begin
       if not Local_Filter_Supported (Filter_Spec) then
          raise Ada.IO_Exceptions.Data_Error with
            "filter is not supported for local clones (use an HTTP/SSH remote): "
            & Filter_Spec;
+      end if;
+
+      if Has_Prefix (Filter_Spec, "tree:") then
+         declare
+            Digits_Text : constant String :=
+              Filter_Spec (Filter_Spec'First + 5 .. Filter_Spec'Last);
+         begin
+            Copy_By_Tree_Depth (Natural'Value (Digits_Text));
+         exception
+            when Constraint_Error =>
+               raise Ada.IO_Exceptions.Data_Error
+                 with "invalid tree filter: " & Filter_Spec;
+         end;
+         return;
       end if;
 
       for U of Ref_Updates loop

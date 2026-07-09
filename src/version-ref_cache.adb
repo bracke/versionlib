@@ -7,6 +7,7 @@ with Version.Files;
 with Version.Packed_Refs;
 with Version.Refs;
 with Version.Ref_Names;
+with Version.Reftable;
 with Version.Transport.Local;
 
 package body Version.Ref_Cache is
@@ -129,6 +130,26 @@ package body Version.Ref_Cache is
       if Ref_Maps.Has_Element (Pos) then
          Id := Ref_Maps.Element (Pos);
          return True;
+      end if;
+
+      if Version.Reftable.Is_Reftable (Repo) then
+         declare
+            Found : Boolean;
+            Rec   : constant Version.Reftable.Ref_Record :=
+              Version.Reftable.Find (Repo, Name, Found);
+            use type Version.Reftable.Ref_Value_Kind;
+         begin
+            if not Found then
+               return False;
+            end if;
+            if Rec.Kind = Version.Reftable.Ref_Symref then
+               return Try_Resolve_Ref
+                 (Repo, Cache, To_String (Rec.Target), Id);
+            end if;
+            Id := Rec.Id;
+            Cache.Resolved_Refs.Include (Name, Id);
+            return True;
+         end;
       end if;
 
       if Read_Loose_Ref (Repo, Name, Id) then

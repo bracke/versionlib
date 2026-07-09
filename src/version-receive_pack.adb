@@ -1,6 +1,8 @@
 with Ada.Containers;
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Directories;
 with Ada.IO_Exceptions;
+with Ada.Strings.Fixed;
 with Ada.Streams.Stream_IO;
 
 with Version.Files;
@@ -1585,5 +1587,407 @@ package body Version.Receive_Pack is
          Version.Transport.Ssh.Close (Stream);
          raise;
    end Push_Ref_Ssh;
+
+   --  ---- atomic (batched) push ----------------------------------------
+
+   type Eff_Command is record
+      Old_Id   : Unbounded_String;
+      New_Id   : Unbounded_String;
+      Ref_Name : Unbounded_String;
+   end record;
+
+   package Eff_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Eff_Command);
+
+   package Hex_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+
+   --  Resolve each command's remote old-id from the advertisement, drop
+   --  no-ops, and reject non-fast-forward updates (unless Force). An empty
+   --  result means every command was already up to date.
+   function Prepare_Atomic
+     (Repo      : Version.Repository.Repository_Handle;
+      Discovery : Discovery_Result;
+      Commands  : Push_Command_Vectors.Vector;
+      Force     : Boolean) return Eff_Vectors.Vector
+   is
+      Result : Eff_Vectors.Vector;
+   begin
+      if not Has_Capability (To_String (Discovery.Capabilities), "atomic") then
+         raise Ada.IO_Exceptions.Data_Error
+           with "the receiving end does not support --atomic push";
+      end if;
+
+      for C of Commands loop
+         declare
+            Ref     : constant String := To_String (C.Ref_Name);
+            New_Id  : constant String := To_String (C.New_Id);
+            Remote  : constant String := Find_Remote_Ref (Discovery, Ref);
+            Old_Id  : constant String :=
+              (if Remote'Length = 0 then Null_Id (Repo) else Remote);
+            Is_Delete : constant Boolean := New_Id = Null_Id (Repo);
+         begin
+            if Remote = New_Id then
+               null;  --  already up to date; skip
+            elsif Is_Delete and then Remote'Length = 0 then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "remote ref does not exist: " & Ref;
+            else
+               if not Is_Delete
+                 and then Remote'Length > 0
+                 and then not Force
+                 and then not Version.History.Is_Ancestor
+                               (Repo       => Repo,
+                                Base_Id    => Version.Objects.To_Object_Id (Remote),
+                                Derived_Id => Version.Objects.To_Object_Id (New_Id))
+               then
+                  raise Ada.IO_Exceptions.Data_Error
+                    with "cannot push: non-fast-forward update to " & Ref;
+               end if;
+               Result.Append
+                 (Eff_Command'(Old_Id   => To_Unbounded_String (Old_Id),
+                               New_Id   => To_Unbounded_String (New_Id),
+                               Ref_Name => C.Ref_Name));
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Prepare_Atomic;
+
+   --  The deduplicated union of objects reachable from every non-delete target.
+   function Atomic_Pack_Objects
+     (Repo     : Version.Repository.Repository_Handle;
+      Commands : Eff_Vectors.Vector)
+      return Version.Objects.Object_Id_Vectors.Vector
+   is
+      Seen   : Hex_Sets.Set;
+      Result : Version.Objects.Object_Id_Vectors.Vector;
+   begin
+      for C of Commands loop
+         if To_String (C.New_Id) /= Null_Id (Repo) then
+            for O of Version.History.Reachable_Objects
+              (Repo    => Repo,
+               Root_Id => Version.Objects.To_Object_Id (To_String (C.New_Id)))
+            loop
+               if not Seen.Contains (Version.Objects.To_String (O)) then
+                  Seen.Insert (Version.Objects.To_String (O));
+                  Result.Append (O);
+               end if;
+            end loop;
+         end if;
+      end loop;
+      return Result;
+   end Atomic_Pack_Objects;
+
+   --  All command pkt-lines (first carries capabilities + atomic) plus the
+   --  flush packet, ready to be followed by the pack bytes.
+   function Atomic_Command_Section
+     (Commands     : Eff_Vectors.Vector;
+      Capabilities : String) return Stream_Element_Array
+   is
+      Blob : Unbounded_String;
+
+      function Line (Old, New_V, Ref, Caps : String) return String is
+        (Old & " " & New_V & " " & Ref
+         & (if Caps'Length > 0 then NUL & Caps else "") & LF);
+   begin
+      for I in Commands.First_Index .. Commands.Last_Index loop
+         declare
+            C    : constant Eff_Command := Commands.Element (I);
+            Caps : constant String :=
+              (if I = Commands.First_Index then Capabilities & " atomic" else "");
+            Pkt  : constant Stream_Element_Array :=
+              Version.Pkt_Line.Encode_Data
+                (To_Stream (Line (To_String (C.Old_Id), To_String (C.New_Id),
+                                  To_String (C.Ref_Name), Caps)));
+         begin
+            Append (Blob, To_String (Pkt));
+         end;
+      end loop;
+
+      declare
+         Cmds  : constant Stream_Element_Array := To_Stream (To_String (Blob));
+         Flush : constant Stream_Element_Array := Version.Pkt_Line.Encode_Flush;
+         Res   : Stream_Element_Array
+           (1 .. Stream_Element_Offset (Cmds'Length + Flush'Length));
+         Pos   : Stream_Element_Offset := Res'First;
+      begin
+         Append_Bytes (Res, Pos, Cmds);
+         Append_Bytes (Res, Pos, Flush);
+         return Res;
+      end;
+   end Atomic_Command_Section;
+
+   function Atomic_Request_From_Pack_File
+     (Commands     : Eff_Vectors.Vector;
+      Capabilities : String;
+      Pack_Path    : String) return Stream_Element_Array
+   is
+      Section  : constant Stream_Element_Array :=
+        Atomic_Command_Section (Commands, Capabilities);
+      File     : Ada.Streams.Stream_IO.File_Type;
+      Pack_Len : constant Natural := Natural (Ada.Directories.Size (Pack_Path));
+      Result   : Stream_Element_Array
+        (1 .. Stream_Element_Offset (Section'Length + Pack_Len));
+      Pos      : Stream_Element_Offset := Result'First;
+      Last     : Stream_Element_Offset;
+   begin
+      Append_Bytes (Result, Pos, Section);
+      Ada.Streams.Stream_IO.Open
+        (File, Ada.Streams.Stream_IO.In_File,
+         Version.Files.To_Native_Path (Pack_Path));
+      Ada.Streams.Stream_IO.Read (File, Result (Pos .. Result'Last), Last);
+      Ada.Streams.Stream_IO.Close (File);
+      if Last /= Result'Last then
+         raise Ada.IO_Exceptions.Data_Error
+           with "could not read complete pack file into atomic request";
+      end if;
+      return Result;
+   exception
+      when others =>
+         if Ada.Streams.Stream_IO.Is_Open (File) then
+            Ada.Streams.Stream_IO.Close (File);
+         end if;
+         raise;
+   end Atomic_Request_From_Pack_File;
+
+   --  Parse batched report-status: require `unpack ok` and `ok <ref>` for every
+   --  command; any `ng` (or side-band channel-3 error) fails the whole push.
+   procedure Parse_Report_Status_Batch
+     (Response_Bytes : Stream_Element_Array;
+      Commands       : Eff_Vectors.Vector)
+   is
+      Parser : Version.Pkt_Line.Parser;
+      Kind   : Version.Pkt_Line.Packet_Kind;
+      Buffer : Stream_Element_Array (1 .. 65_520);
+      Last   : Stream_Element_Offset;
+      Status : Version.Pkt_Line.Parse_Status;
+      Report : Unbounded_String;
+
+      procedure Add (Payload : String) is
+      begin
+         Append (Report, Payload);
+      end Add;
+   begin
+      Version.Pkt_Line.Feed (Parser, Response_Bytes);
+      loop
+         Status := Version.Pkt_Line.Next (Parser, Kind, Buffer, Last);
+         case Status is
+            when Version.Pkt_Line.Ok             => null;
+            when Version.Pkt_Line.Need_More_Data => exit;
+            when others =>
+               raise Ada.IO_Exceptions.Data_Error
+                 with "malformed receive-pack report-status pkt-line";
+         end case;
+
+         if Kind = Version.Pkt_Line.Flush_Packet then
+            exit when Length (Report) > 0;
+         elsif Kind = Version.Pkt_Line.Data_Packet
+           and then Last >= Buffer'First
+         then
+            if Buffer (Buffer'First) = 1 then
+               Add (To_String (Buffer (Buffer'First + 1 .. Last)));
+            elsif Buffer (Buffer'First) = 2 then
+               null;
+            elsif Buffer (Buffer'First) = 3 then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "remote receive-pack error: "
+                      & To_String (Buffer (Buffer'First + 1 .. Last));
+            else
+               Add (To_String (Buffer (Buffer'First .. Last)));
+            end if;
+         end if;
+      end loop;
+
+      declare
+         Text : constant String := To_String (Report);
+         use Ada.Strings.Fixed;
+      begin
+         if Index (Text, "unpack ok") = 0 then
+            raise Ada.IO_Exceptions.Data_Error
+              with "atomic push: unpack failed or missing unpack ok";
+         end if;
+         if Index (Text, LF & "ng ") /= 0
+           or else (Text'Length >= 3 and then Text (Text'First .. Text'First + 2) = "ng ")
+         then
+            raise Ada.IO_Exceptions.Data_Error
+              with "atomic push rejected by remote: " & Text;
+         end if;
+         for C of Commands loop
+            if Index (Text, "ok " & To_String (C.Ref_Name)) = 0 then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "atomic push: missing ok for " & To_String (C.Ref_Name);
+            end if;
+         end loop;
+      end;
+   end Parse_Report_Status_Batch;
+
+   procedure Push_Atomic
+     (Repo        : Version.Repository.Repository_Handle;
+      Remote_Name : String;
+      Url         : String;
+      Commands    : Push_Command_Vectors.Vector;
+      Force       : Boolean := False)
+   is
+      Capabilities       : constant String := Push_Capabilities (Repo);
+      Discovery_Consumer : Collecting_Consumer;
+   begin
+      Version.Ref_Names.Require_Remote_Name (Remote_Name);
+
+      Version.Transport.Http.Discover_Receive_Pack
+        (Url => Url, Consumer => Discovery_Consumer);
+
+      declare
+         Discovery : constant Discovery_Result :=
+           Parse_Discovery (Collected (Discovery_Consumer));
+         Eff       : constant Eff_Vectors.Vector :=
+           Prepare_Atomic (Repo, Discovery, Commands, Force);
+      begin
+         if Eff.Is_Empty then
+            return;  --  everything already up to date
+         end if;
+
+         declare
+            Pack_Path  : constant String :=
+              Version.Files.Join
+                (Version.Repository.Common_Git_Dir (Repo),
+                 "objects/pack/version-push-temp.pack");
+            Index_Path : constant String :=
+              Version.Files.Join
+                (Version.Repository.Common_Git_Dir (Repo),
+                 "objects/pack/version-push-temp.idx");
+         begin
+            Write_Push_Temporary_Pack
+              (Repo       => Repo,
+               Object_Ids => Atomic_Pack_Objects (Repo, Eff),
+               Pack_Path  => Pack_Path,
+               Index_Path => Index_Path);
+            begin
+               declare
+                  Request  : constant Stream_Element_Array :=
+                    Atomic_Request_From_Pack_File (Eff, Capabilities, Pack_Path);
+                  Response : Collecting_Consumer;
+               begin
+                  Version.Transport.Http.Receive_Pack
+                    (Url => Url, Request => Request, Consumer => Response);
+                  Parse_Report_Status_Batch (Collected (Response), Eff);
+               end;
+            exception
+               when others =>
+                  Delete_Push_Temporary_Pack (Pack_Path, Index_Path);
+                  raise;
+            end;
+            Delete_Push_Temporary_Pack (Pack_Path, Index_Path);
+         end;
+      end;
+   end Push_Atomic;
+
+   procedure Push_Atomic_Ssh
+     (Repo        : Version.Repository.Repository_Handle;
+      Remote_Name : String;
+      Url         : String;
+      Commands    : Push_Command_Vectors.Vector;
+      Force       : Boolean := False)
+   is
+      Capabilities      : constant String := Push_Capabilities (Repo);
+      Stream            : Version.Transport.Ssh.Ssh_Stream;
+      Raw_Advertisement : Unbounded_String;
+      Buffer            : Stream_Element_Array (1 .. 8192);
+      Last              : Stream_Element_Offset;
+   begin
+      Version.Ref_Names.Require_Remote_Name (Remote_Name);
+      Version.Transport.Ssh.Open_Receive_Pack (Url, Stream);
+
+      loop
+         Version.Transport.Ssh.Read_Some (Stream, Buffer, Last);
+         exit when Last < Buffer'First;
+         Append (Raw_Advertisement, To_String (Buffer (Buffer'First .. Last)));
+         exit when Ada.Strings.Unbounded.Index (Raw_Advertisement, "0000") /= 0;
+      end loop;
+
+      declare
+         Discovery : constant Discovery_Result :=
+           Parse_Advertisement (To_Stream (To_String (Raw_Advertisement)));
+         Eff       : constant Eff_Vectors.Vector :=
+           Prepare_Atomic (Repo, Discovery, Commands, Force);
+      begin
+         if Eff.Is_Empty then
+            Version.Transport.Ssh.Close (Stream);
+            return;
+         end if;
+
+         declare
+            Pack_Path  : constant String :=
+              Version.Files.Join
+                (Version.Repository.Common_Git_Dir (Repo),
+                 "objects/pack/version-push-temp.pack");
+            Index_Path : constant String :=
+              Version.Files.Join
+                (Version.Repository.Common_Git_Dir (Repo),
+                 "objects/pack/version-push-temp.idx");
+         begin
+            Write_Push_Temporary_Pack
+              (Repo       => Repo,
+               Object_Ids => Atomic_Pack_Objects (Repo, Eff),
+               Pack_Path  => Pack_Path,
+               Index_Path => Index_Path);
+            begin
+               declare
+                  Request  : constant Stream_Element_Array :=
+                    Atomic_Request_From_Pack_File (Eff, Capabilities, Pack_Path);
+                  Response : Unbounded_String;
+               begin
+                  Version.Transport.Ssh.Write (Stream, Request);
+                  loop
+                     Version.Transport.Ssh.Read_Some (Stream, Buffer, Last);
+                     exit when Last < Buffer'First;
+                     Append (Response, To_String (Buffer (Buffer'First .. Last)));
+                  end loop;
+                  Version.Transport.Ssh.Close (Stream);
+                  Parse_Report_Status_Batch
+                    (To_Stream (To_String (Response)), Eff);
+               end;
+            exception
+               when others =>
+                  Delete_Push_Temporary_Pack (Pack_Path, Index_Path);
+                  Version.Transport.Ssh.Close (Stream);
+                  raise;
+            end;
+            Delete_Push_Temporary_Pack (Pack_Path, Index_Path);
+         end;
+      end;
+   exception
+      when others =>
+         Version.Transport.Ssh.Close (Stream);
+         raise;
+   end Push_Atomic_Ssh;
+
+   function Discover_Http (Url : String) return Discovery_Result is
+      Consumer : Collecting_Consumer;
+   begin
+      Version.Transport.Http.Discover_Receive_Pack
+        (Url => Url, Consumer => Consumer);
+      return Parse_Discovery (Collected (Consumer));
+   end Discover_Http;
+
+   function Discover_Ssh (Url : String) return Discovery_Result is
+      Stream : Version.Transport.Ssh.Ssh_Stream;
+      Raw    : Unbounded_String;
+      Buffer : Stream_Element_Array (1 .. 8192);
+      Last   : Stream_Element_Offset;
+   begin
+      Version.Transport.Ssh.Open_Receive_Pack (Url, Stream);
+      loop
+         Version.Transport.Ssh.Read_Some (Stream, Buffer, Last);
+         exit when Last < Buffer'First;
+         Append (Raw, To_String (Buffer (Buffer'First .. Last)));
+         exit when Ada.Strings.Unbounded.Index (Raw, "0000") /= 0;
+      end loop;
+      Version.Transport.Ssh.Close (Stream);
+      return Parse_Advertisement (To_Stream (To_String (Raw)));
+   exception
+      when others =>
+         Version.Transport.Ssh.Close (Stream);
+         raise;
+   end Discover_Ssh;
 
 end Version.Receive_Pack;
