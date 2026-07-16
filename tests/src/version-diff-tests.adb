@@ -5,8 +5,10 @@ with AUnit.Assertions;
 with AUnit.Test_Cases;
 
 with Version.Git_Fixtures;
+with Version.Objects;
 with Version.Pathspec;
 with Version.Repository;
+with Version.Revisions;
 with Version.Test_Support;
 
 package body Version.Diff.Tests is
@@ -36,7 +38,7 @@ package body Version.Diff.Tests is
            Version.Diff.Diff_Working_Tree (Version.Repository.Open);
       begin
          Assert
-           (Contains (Text, "diff --version a/a.txt b/a.txt"),
+           (Contains (Text, "diff --git a/a.txt b/a.txt"),
             "diff header missing");
          Assert (Contains (Text, "-hello"), "old line missing");
          Assert (Contains (Text, "+changed"), "new line missing");
@@ -47,6 +49,54 @@ package body Version.Diff.Tests is
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
    end Diff_Unstaged_Modification;
+
+   procedure Raw_Diff_Plumbing_Shape
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      LF : constant Character := Character'Val (10);
+      HT : constant Character := Character'Val (9);
+      Zeros : constant String (1 .. 40) := [others => '0'];
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);  --  a.txt=hello\n
+      Ada.Directories.Set_Directory (Root);
+
+      --  Unstaged modification: diff-files raw line, working id zeroed.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"), "changed" & LF);
+      Assert
+        (Version.Diff.Raw_Diff_Files (Version.Repository.Open)
+         = ":100644 100644 ce013625030ba8dba906f756967f9e9ca394464a "
+           & Zeros & " M" & HT & "a.txt" & LF,
+         "diff-files raw line for an unstaged modification");
+
+      --  Staged addition: diff-index --cached shows an A line with the blob id.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "b.txt"), "new" & LF);
+      Version.Git_Fixtures.Run (Root, "git add b.txt");
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Tree : constant Version.Objects.Hex_Object_Id :=
+           Version.Revisions.Resolve_Tree (Repo, "HEAD");
+      begin
+         Assert
+           (Contains
+              (Version.Diff.Raw_Diff_Index (Repo, Tree, Cached => True),
+               ":000000 100644 " & Zeros
+               & " 3e757656cf36eca53338e520d134963a44f793f8 A" & HT
+               & "b.txt"),
+            "diff-index --cached raw line for a staged addition");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Raw_Diff_Plumbing_Shape;
 
    procedure Diff_Staged_Addition (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -66,7 +116,7 @@ package body Version.Diff.Tests is
            Version.Diff.Diff_Staged (Version.Repository.Open);
       begin
          Assert
-           (Contains (Text, "diff --version a/b.txt b/b.txt"),
+           (Contains (Text, "diff --git a/b.txt b/b.txt"),
             "staged diff header missing");
          Assert
            (Contains (Text, "--- /dev/null"), "added file old side missing");
@@ -123,7 +173,7 @@ package body Version.Diff.Tests is
            Version.Diff.Diff_Staged (Version.Repository.Open);
       begin
          Assert
-           (Contains (Text, "diff --version a/a.txt b/a.txt"),
+           (Contains (Text, "diff --git a/a.txt b/a.txt"),
             "deletion diff header missing");
          Assert
            (Contains (Text, "+++ /dev/null"), "deleted file new side missing");
@@ -300,11 +350,87 @@ package body Version.Diff.Tests is
          raise;
    end Diff_Cached_Alias_Matches_Staged;
 
+   procedure Diff_Minimal_Hunk_Keeps_Context
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      LF      : constant Character := Character'Val (10);
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "m.txt"),
+         "L1" & LF & "L2" & LF & "L3" & LF & "L4" & LF & "L5" & LF);
+      Version.Git_Fixtures.Run (Root, "git add m.txt");
+      Version.Git_Fixtures.Run (Root, "git commit -q -m multi");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "m.txt"),
+         "L1" & LF & "L2" & LF & "X3" & LF & "L4" & LF & "L5" & LF);
+
+      Ada.Directories.Set_Directory (Root);
+      declare
+         Text : constant String :=
+           Version.Diff.Diff_Working_Tree (Version.Repository.Open);
+      begin
+         Assert (Contains (Text, "index "), "index line missing");
+         Assert (Contains (Text, "@@ "), "hunk header missing");
+         Assert (Contains (Text, "-L3"), "changed old line missing");
+         Assert (Contains (Text, "+X3"), "changed new line missing");
+         Assert (Contains (Text, " L2"), "context line missing");
+         --  Minimality: unchanged lines are context, never re-emitted as -/+.
+         Assert (not Contains (Text, "-L1"), "L1 must not be deleted");
+         Assert (not Contains (Text, "+L5"), "L5 must not be inserted");
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Diff_Minimal_Hunk_Keeps_Context;
+
+   procedure Diff_Stat_Summary (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Opts    : constant Version.Diff.Diff_Options :=
+        (Stat => True, others => <>);
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"),
+         "changed" & Character'Val (10));
+
+      Ada.Directories.Set_Directory (Root);
+      declare
+         Text : constant String :=
+           Version.Diff.Diff_Working_Tree (Version.Repository.Open, Opts);
+      begin
+         Assert (Contains (Text, "a.txt | "), "stat per-file line missing");
+         Assert (Contains (Text, "1 file changed"), "stat footer missing");
+         --  A one-line replacement is 1 insertion + 1 deletion.
+         Assert (Contains (Text, "insertion"), "stat insertion missing");
+         Assert (Contains (Text, "deletion"), "stat deletion missing");
+         Assert
+           (not Contains (Text, "@@ "),
+            "stat output must not include a patch hunk");
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Diff_Stat_Summary;
+
    overriding
    procedure Register_Tests (T : in out Test_Case) is
    begin
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Diff_Unstaged_Modification'Access, "Diff: unstaged modification");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Raw_Diff_Plumbing_Shape'Access,
+         "Diff: raw plumbing (diff-files/diff-index) line shape");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Diff_Staged_Addition'Access, "Diff: staged addition");
       AUnit.Test_Cases.Registration.Register_Routine
@@ -329,6 +455,12 @@ package body Version.Diff.Tests is
         (T,
          Diff_Cached_Alias_Matches_Staged'Access,
          "Diff: cached alias matches staged output");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Diff_Minimal_Hunk_Keeps_Context'Access,
+         "Diff: minimal hunk keeps unchanged lines as context");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Diff_Stat_Summary'Access, "Diff: --stat summary output");
    end Register_Tests;
 
    overriding

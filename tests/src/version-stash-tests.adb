@@ -1012,7 +1012,18 @@ package body Version.Stash.Tests is
       Commit_File (Root, "a.txt", "one" & Character'Val (10), "base");
       Write_File (Root, "a.txt", "two" & Character'Val (10));
       Version.Stash.Push;
+
+      --  git parity: an untracked file must NOT block the apply -- it is not
+      --  part of what the stash restores.  (git ignores untracked files here.)
       Write_File (Root, "local.txt", "local" & Character'Val (10));
+      Version.Stash.Apply;
+      Assert
+        (File_Text (Root, "a.txt") = "two",
+         "an untracked file must not block stash apply");
+
+      --  Apply keeps the entry, so the stash is still there; a *tracked*
+      --  modification must now block a second apply.
+      Write_File (Root, "a.txt", "dirty" & Character'Val (10));
 
       begin
          Version.Stash.Apply;
@@ -1022,9 +1033,9 @@ package body Version.Stash.Tests is
       end;
 
       Assert
-        (Raised, "stash apply must reject a dirty working tree in Phase 29");
+        (Raised, "stash apply must reject a dirty tracked working tree");
       Assert
-        (File_Text (Root, "a.txt") = "one",
+        (File_Text (Root, "a.txt") = "dirty",
          "rejected stash apply must not modify tracked files");
       Assert
         (Version.Stash.List_Entries (Version.Repository.Open).Length = 1,
@@ -1505,11 +1516,11 @@ package body Version.Stash.Tests is
       begin
          Assert
            (Ada.Strings.Fixed.Index
-              (Text, "diff --version a/a.txt b/a.txt") /= 0,
+              (Text, "diff --git a/a.txt b/a.txt") /= 0,
             "stash show patch must include tracked file diff");
          Assert
            (Ada.Strings.Fixed.Index
-              (Text, "diff --version a/u.txt b/u.txt") /= 0,
+              (Text, "diff --git a/u.txt b/u.txt") /= 0,
             "stash show patch must include untracked file diff");
       end;
 
@@ -1583,11 +1594,11 @@ package body Version.Stash.Tests is
       begin
          Assert
            (Ada.Strings.Fixed.Index
-              (Text, "diff --version a/u.txt b/u.txt") /= 0,
+              (Text, "diff --git a/u.txt b/u.txt") /= 0,
             "stash show pathspec patch must include selected untracked path");
          Assert
            (Ada.Strings.Fixed.Index
-              (Text, "diff --version a/a.txt b/a.txt") = 0,
+              (Text, "diff --git a/a.txt b/a.txt") = 0,
             "stash show pathspec patch must omit non-selected tracked path");
       end;
 

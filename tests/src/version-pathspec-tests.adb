@@ -210,8 +210,15 @@ package body Version.Pathspec.Tests is
    begin
       Assert_Rejected
         ("", Version.Pathspec.Empty_Pathspec_Diagnostic);
-      Assert_Rejected
-        (":(icase)a.txt", Version.Pathspec.Unknown_Magic_Diagnostic ("icase"));
+      --  :(icase) is a supported magic word (git parity); it must parse.
+      declare
+         Icase_Item : constant Version.Pathspec.Pathspec_Item :=
+           Version.Pathspec.Parse (":(icase)A.txt");
+      begin
+         Assert
+           (Version.Pathspec.Matches (Icase_Item, "a.txt"),
+            ":(icase) matches case-insensitively");
+      end;
       declare
          Attr_Item : constant Version.Pathspec.Pathspec_Item :=
            Version.Pathspec.Parse (":(attr:generated)a.txt");

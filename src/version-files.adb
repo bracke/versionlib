@@ -2,6 +2,8 @@ with Ada.Directories; use Ada.Directories;
 with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
 with Ada.IO_Exceptions;
+with Ada.Unchecked_Deallocation;
+with Interfaces.C;
 with Version.Platform; use Version.Platform;
 with Version.Files.Rollback;
 with Version.Files.Internal;
@@ -32,6 +34,37 @@ package body Version.Files is
       end if;
    end Require_Reasonable_Path_Length;
 
+   --  Win32 caps a conventional path at MAX_PATH (260, including the NUL), so a
+   --  fully-qualified path of 260 characters or more must be given the
+   --  "\\?\" extended-length prefix (or "\\?\UNC\" for a UNC path) to be usable
+   --  — the same workaround git-for-Windows applies. Only long, already
+   --  absolute, backslash-separated paths are rewritten; relative and short
+   --  paths keep their conventional form.
+   function Extended_Length_Windows_Path (Native : String) return String is
+      Prefix : constant String :=
+        '\' & '\' & '?' & '\';                 --  \\?\
+   begin
+      if Native'Length < 260 then
+         return Native;
+      elsif Native'Length >= Prefix'Length
+        and then Native (Native'First .. Native'First + Prefix'Length - 1)
+                 = Prefix
+      then
+         return Native;                          --  already extended-length
+      elsif Version.Platform.Is_Windows_Drive_Path (Native) then
+         return Prefix & Native;                 --  \\?\C:\...
+      elsif Native'Length >= 2
+        and then Native (Native'First) = '\'
+        and then Native (Native'First + 1) = '\'
+      then
+         --  UNC "\\server\share\..." -> "\\?\UNC\server\share\..."
+         return Prefix & "UNC\"
+           & Native (Native'First + 2 .. Native'Last);
+      else
+         return Native;                          --  relative / not qualified
+      end if;
+   end Extended_Length_Windows_Path;
+
    function To_Native_Path (Path : String) return String is
       Result : String := Normalize_Separators (Path);
    begin
@@ -42,6 +75,8 @@ package body Version.Files is
                Result (I) := '\';
             end if;
          end loop;
+
+         return Extended_Length_Windows_Path (Result);
       end if;
 
       return Result;
@@ -164,29 +199,39 @@ package body Version.Files is
             return "";
          end if;
 
+         --  Read into a heap buffer rather than a file-sized array on the task
+         --  stack (which overflows for large files); the result String is
+         --  produced by the extended return, so no large stack local remains.
          declare
-            Data :
-              Ada.Streams.Stream_Element_Array
-                (1 .. Ada.Streams.Stream_Element_Offset (Size));
+            type Buffer_Access is access Ada.Streams.Stream_Element_Array;
+            procedure Free is new Ada.Unchecked_Deallocation
+              (Ada.Streams.Stream_Element_Array, Buffer_Access);
 
+            Data : Buffer_Access :=
+              new Ada.Streams.Stream_Element_Array
+                    (1 .. Ada.Streams.Stream_Element_Offset (Size));
             Last : Ada.Streams.Stream_Element_Offset;
-
-            Result : String (1 .. Natural (Size));
          begin
-            Ada.Streams.Stream_IO.Read (File, Data, Last);
+            Ada.Streams.Stream_IO.Read (File, Data.all, Last);
             Ada.Streams.Stream_IO.Close (File);
 
-            if Last /= Data'Last then
+            if Last /= Data.all'Last then
+               Free (Data);
                raise Ada.IO_Exceptions.Data_Error
                  with "could not read complete file: " & Path;
             end if;
 
-            for I in Result'Range loop
-               Result (I) :=
-                 Character'Val (Data (Ada.Streams.Stream_Element_Offset (I)));
-            end loop;
-
-            return Result;
+            return Result : String (1 .. Natural (Size)) do
+               for I in Result'Range loop
+                  Result (I) :=
+                    Character'Val (Data (Ada.Streams.Stream_Element_Offset (I)));
+               end loop;
+               Free (Data);
+            end return;
+         exception
+            when others =>
+               Free (Data);   --  no-op if already freed (Data is null)
+               raise;
          end;
       end;
 
@@ -198,6 +243,21 @@ package body Version.Files is
 
          raise;
    end Read_Binary_File;
+
+   procedure Set_Executable (Path : String; Executable : Boolean) is
+      function C_Chmod
+        (Name : Interfaces.C.char_array; Mode : Interfaces.C.int)
+         return Interfaces.C.int
+        with Import, Convention => C, External_Name => "chmod";
+      Mode   : constant Interfaces.C.int := (if Executable then 8#755# else 8#644#);
+      Result : Interfaces.C.int;
+   begin
+      if Version.Platform.Supports_Executable_Bit then
+         Result :=
+           C_Chmod (Interfaces.C.To_C (To_Native_Path (Path)), Mode);
+         pragma Unreferenced (Result);
+      end if;
+   end Set_Executable;
 
    procedure Delete_File_If_Exists (Path : String) is
       Native : constant String := To_Native_Path (Path);
@@ -269,6 +329,13 @@ package body Version.Files is
 
    function Is_Ordinary_File (Path : String) return Boolean is
    begin
+      --  An empty path is never a file; Ada.Directories rejects it with
+      --  Name_Error, so answer directly rather than raising for callers that
+      --  probe optional/absent paths (e.g. a suppressed config scope).
+      if Path = "" then
+         return False;
+      end if;
+
       return
         Ada.Directories.Exists (To_Native_Path (Path))
         and then

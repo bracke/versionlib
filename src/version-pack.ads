@@ -16,11 +16,17 @@ package Version.Pack is
       return Version.Objects.Git_Object;
 
    procedure Index_Pack
-     (Repo      : Version.Repository.Repository_Handle;
-      Pack_Path : String);
+     (Repo         : Version.Repository.Repository_Handle;
+      Pack_Path    : String;
+      Canonicalize : Boolean := True);
    --  Build a Git pack index (.idx v2) beside Pack_Path. The index is
    --  generated from the pack contents so Version.Objects.Read_Object can
    --  locate fetched objects through the existing pack reader.
+   --
+   --  Canonicalize renames the pair to git's "pack-<checksum>" name, which is
+   --  what a fetch wants (a fixed temporary name would collide and truncate an
+   --  earlier pack).  `index-pack <file>` wants the opposite: the pack stays
+   --  where it is and only the index is written.
 
    type Pack_Location is record
       Found      : Boolean := False;
@@ -53,9 +59,29 @@ package Version.Pack is
      (Location : Pack_Location)
       return Packed_Object_Header;
 
+   --  Where a delta-encoded entry's base lives: an absolute pack offset for an
+   --  OFS delta, an object id for a REF delta.  Not a delta -> Is_Delta False.
+   --  `verify-pack` needs this to report each object's chain depth.
+   type Delta_Base_Info is record
+      Is_Delta    : Boolean := False;
+      By_Offset   : Boolean := False;
+      Base_Offset : Interfaces.Unsigned_64 := 0;
+      Base_Id     : Version.Objects.Object_Id_Storage;
+   end record;
+
+   function Read_Delta_Base
+     (Repo     : Version.Repository.Repository_Handle;
+      Location : Pack_Location) return Delta_Base_Info;
+
    function Read_Object_At_Location
      (Repo     : Version.Repository.Repository_Handle;
       Location : Pack_Location)
       return Version.Objects.Git_Object;
+
+   function All_Pack_Objects
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Object_Id_Vectors.Vector;
+   --  Every object id listed in the repository's pack index (`*.idx`) files.
+   --  Used by `cat-file --batch-all-objects` together with the loose objects.
 
 end Version.Pack;

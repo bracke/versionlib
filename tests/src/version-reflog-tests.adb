@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -48,6 +49,12 @@ package body Version.Reflog.Tests is
 
       Ada.Directories.Set_Directory (Root);
 
+      --  Pin the committer date so the reflog's timezone offset is
+      --  deterministic; the writer stamps entries in the local timezone
+      --  (as git does), which would otherwise vary with the test host.
+      Ada.Environment_Variables.Set
+        ("GIT_COMMITTER_DATE", "1700000000 +0000");
+
       declare
          Repo : constant Version.Repository.Repository_Handle :=
            Version.Repository.Open;
@@ -59,6 +66,8 @@ package body Version.Reflog.Tests is
             New_Id  => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Message => "test reflog");
       end;
+
+      Ada.Environment_Variables.Clear ("GIT_COMMITTER_DATE");
 
       declare
          Text : constant String :=
@@ -90,6 +99,7 @@ package body Version.Reflog.Tests is
 
    exception
       when others =>
+         Ada.Environment_Variables.Clear ("GIT_COMMITTER_DATE");
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
    end Append_Reflog_Entry;

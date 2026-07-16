@@ -316,11 +316,7 @@ package body Version.Revert is
       Original  : Version.Objects.Hex_Object_Id)
       return Version.Objects.Hex_Object_Id
    is
-      User : constant Version.Config.Identity := Version.Config.User_Identity (Repo);
       Content : Unbounded_String;
-      User_Line : constant String :=
-        To_String (User.Name) & " <" & To_String (User.Email) & "> "
-        & Unix_Time_Image & " +0000";
       Message : constant String :=
         Version.Hooks.Prepare_Commit_Message
           (Repo      => Repo,
@@ -329,8 +325,14 @@ package body Version.Revert is
    begin
       Append (Content, "tree " & To_String (Tree_Id) & Character'Val (10));
       Append (Content, "parent " & To_String (Parent_Id) & Character'Val (10));
-      Append (Content, "author " & User_Line & Character'Val (10));
-      Append (Content, "committer " & User_Line & Character'Val (10));
+      Append
+        (Content,
+         "author " & Version.Config.Author_Signature (Repo)
+         & Character'Val (10));
+      Append
+        (Content,
+         "committer " & Version.Config.Committer_Signature (Repo)
+         & Character'Val (10));
       Append (Content, Character'Val (10));
       Append (Content, Message);
       declare
@@ -458,7 +460,7 @@ package body Version.Revert is
                     (Path => File_Item.Path,
                      Id   => Blob_Id,
                      Mode => To_Unbounded_String ("100644"),
-                     Stage => 0));
+                     Stage => 0, Skip_Worktree => False));
             end;
          end loop;
       end if;
@@ -510,13 +512,18 @@ package body Version.Revert is
 
       Version.Merge.Merge_Trees
         (Repo          => Repo,
-         Current_Name  => "revert-current",
-         Target_Name   => "revert-parent",
+         Current_Name  => "HEAD",
+         Target_Name   =>
+           "parent of " & Version.Merge.Commit_Label_For (Repo, Commit_Id),
          Base_Items    => Base_Items,
          Current_Items => Current_Items,
          Target_Items  => Target_Items,
          Merged_Index  => Merged_Index,
-         Conflicts     => Conflicts);
+         Conflicts     => Conflicts,
+         Behavior      => Version.Merge.Merge_Behavior'
+           (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
+              (Version.Merge.Base_Label_For (Repo, Base_Id)),
+            others     => <>));
 
       if not Conflicts.Is_Empty then
          Version.Merge_State.Clear_State (Repo);

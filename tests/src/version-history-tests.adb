@@ -186,12 +186,12 @@ package body Version.History.Tests is
            (Version.Staging.Index_Entry'(Path => Ada.Strings.Unbounded.To_Unbounded_String ("a.txt"),
              Id   => A_Blob,
              Mode => Ada.Strings.Unbounded.To_Unbounded_String ("100644"),
-             Stage => 0));
+             Stage => 0, Skip_Worktree => False));
          B_Entries.Append
            (Version.Staging.Index_Entry'(Path => Ada.Strings.Unbounded.To_Unbounded_String ("b.txt"),
              Id   => B_Blob,
              Mode => Ada.Strings.Unbounded.To_Unbounded_String ("100644"),
-             Stage => 0));
+             Stage => 0, Skip_Worktree => False));
 
          declare
             A_Tree : constant Version.Objects.Hex_Object_Id :=

@@ -26,6 +26,28 @@ package Version.Config is
      (Repo : Version.Repository.Repository_Handle)
       return Identity;
 
+   --  The "Name <email> <seconds> <+-hhmm>" line a new commit records.  git
+   --  lets the environment override every part of it -- GIT_AUTHOR_NAME,
+   --  GIT_AUTHOR_EMAIL and GIT_AUTHOR_DATE (and the GIT_COMMITTER_* trio) win
+   --  over the configured identity and the current time, which is what makes
+   --  a commit's object id reproducible.  An absent date means "now", in the
+   --  local timezone, as git records it.
+   function Author_Signature
+     (Repo : Version.Repository.Repository_Handle)
+      return String;
+
+   function Committer_Signature
+     (Repo : Version.Repository.Repository_Handle)
+      return String;
+
+   --  Normalise one of git's accepted date spellings to git's own
+   --  "<seconds> <+-hhmm>".  Returns "" if Text is not a date we understand.
+   function Normalize_Date (Text : String) return String;
+
+   --  The "<seconds> <+-hhmm>" a new reflog entry is stamped with: what
+   --  GIT_COMMITTER_DATE says, or now in the local timezone.
+   function Committer_Timestamp return String;
+
    function Trim
      (Value : String)
       return String;

@@ -2,6 +2,7 @@ with Ada.IO_Exceptions;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Directories;
+with Ada.Environment_Variables;
 
 with Version.Files;
 with Version.Compression;
@@ -250,32 +251,75 @@ package body Version.Objects is
       end;
    end Read_Loose_Object;
 
+   --  Resolve a `refs/replace/<oid>` chain (loose refs), as `git` does when
+   --  reading objects, unless GIT_NO_REPLACE_OBJECTS is set. Read directly
+   --  from the filesystem to avoid a dependency cycle with Version.Refs.
+   function Replacement_Of
+     (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
+      return Hex_Object_Id
+   is
+      Current : Hex_Object_Id := Id;
+   begin
+      if Ada.Environment_Variables.Exists ("GIT_NO_REPLACE_OBJECTS") then
+         return Id;
+      end if;
+
+      for Depth in 1 .. 30 loop
+         declare
+            Ref_Path : constant String :=
+              Join
+                (Join (Join (Version.Repository.Common_Git_Dir (Repo),
+                             "refs"), "replace"),
+                 To_String (Current));
+         begin
+            exit when not Ada.Directories.Exists (Ref_Path);
+            declare
+               Raw  : constant String :=
+                 Version.Files.Read_Binary_File (Ref_Path);
+               Last : Natural := Raw'First - 1;
+            begin
+               for K in Raw'Range loop
+                  exit when Raw (K) = Character'Val (10)
+                    or else Raw (K) = Character'Val (13)
+                    or else Raw (K) = ' ';
+                  Last := K;
+               end loop;
+               exit when Last < Raw'First
+                 or else not Is_Valid_Hex_Object_Id (Raw (Raw'First .. Last));
+               Current := To_Object_Id (Raw (Raw'First .. Last));
+            end;
+         end;
+      end loop;
+      return Current;
+   end Replacement_Of;
+
    function Read_Object
      (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
       return Git_Object
    is
-      Path : constant String := Loose_Object_Path (Repo, Id);
+      Eff  : constant Hex_Object_Id := Replacement_Of (Repo, Id);
+      Path : constant String := Loose_Object_Path (Repo, Eff);
    begin
       if Ada.Directories.Exists (Path) then
-         return Read_Loose_Object (Repo, Id);
+         return Read_Loose_Object (Repo, Eff);
       end if;
 
-      if Version.Pack.Contains (Repo, Id) then
-         return Version.Pack.Read_Object (Repo, Id);
+      if Version.Pack.Contains (Repo, Eff) then
+         return Version.Pack.Read_Object (Repo, Eff);
       end if;
 
-      if Version.Promisor.Fetch_Promised_Object (Repo, To_String (Id)) then
+      if Version.Promisor.Fetch_Promised_Object (Repo, To_String (Eff)) then
          if Ada.Directories.Exists (Path) then
-            return Read_Loose_Object (Repo, Id);
+            return Read_Loose_Object (Repo, Eff);
          end if;
 
-         if Version.Pack.Contains (Repo, Id) then
-            return Version.Pack.Read_Object (Repo, Id);
+         if Version.Pack.Contains (Repo, Eff) then
+            return Version.Pack.Read_Object (Repo, Eff);
          end if;
       end if;
 
       raise Ada.IO_Exceptions.Data_Error with
-        Version.Promisor.Missing_Object_Diagnostic (Repo, To_String (Id));
+        Version.Promisor.Missing_Object_Diagnostic (Repo, To_String (Eff));
    end Read_Object;
 
    function To_Hex (Bytes : String) return Hex_Object_Id is

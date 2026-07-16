@@ -43,10 +43,18 @@ package body Version.Notes.Tests is
          Assert (Version.Notes.Show (Repo, Head) = "",
                  "no note before adding one");
          Version.Notes.Add (Repo, Head, "remember this");
-         Assert (Version.Notes.Show (Repo, Head) = "remember this",
-                 "show returns the note that was added");
-         --  git reads the note we wrote (flat layout).
+         --  git normalises a note to a single trailing newline; the blob and
+         --  Show output must match that byte-for-byte.
+         Assert (Version.Notes.Show (Repo, Head) = "remember this" & LF,
+                 "show returns the note with git's trailing newline");
+         --  git reads the note we wrote (flat layout) ...
          Version.Git_Fixtures.Run (Root, "git notes show HEAD");
+         --  ... and its blob is exactly "remember this\n" (14 bytes), i.e.
+         --  byte-identical to a git-written note.
+         Version.Git_Fixtures.Run
+           (Root,
+            "test ""$(git cat-file blob"
+            & " $(git notes list HEAD | cut -d' ' -f1) | wc -c)"" = ""14""");
       end;
    end Add_Then_Show_And_Git_Reads;
 

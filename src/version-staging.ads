@@ -13,6 +13,9 @@ package Version.Staging is
       Id    : Version.Objects.Object_Id_Storage;
       Mode  : Unbounded_String;
       Stage : Natural := 0;
+      --  git's skip-worktree bit (extended flag 0x4000): the path is tracked
+      --  but intentionally absent from the working tree (sparse checkout).
+      Skip_Worktree : Boolean := False;
    end record;
 
    package Index_Entry_Vectors is new Ada.Containers.Vectors

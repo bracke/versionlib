@@ -345,8 +345,8 @@ package body Version.Cherry_Pick is
       Append (Content, Author_Line (Original_Obj) & Character'Val (10));
       Append
         (Content,
-         "committer " & To_String (User.Name) & " <" & To_String (User.Email)
-         & "> " & Unix_Time_Image & " +0000" & Character'Val (10));
+         "committer " & Version.Config.Committer_Signature (Repo)
+         & Character'Val (10));
       Append (Content, Character'Val (10));
       Append (Content, Message);
       declare
@@ -474,7 +474,7 @@ package body Version.Cherry_Pick is
                     (Path => File_Item.Path,
                      Id   => Blob_Id,
                      Mode => To_Unbounded_String ("100644"),
-                     Stage => 0));
+                     Stage => 0, Skip_Worktree => False));
             end;
          end loop;
       end if;
@@ -525,13 +525,17 @@ package body Version.Cherry_Pick is
 
       Version.Merge.Merge_Trees
         (Repo          => Repo,
-         Current_Name  => "cherry-pick-current",
-         Target_Name   => "cherry-pick-commit",
+         Current_Name  => "HEAD",
+         Target_Name   => Version.Merge.Commit_Label_For (Repo, Commit_Id),
          Base_Items    => Base_Items,
          Current_Items => Current_Items,
          Target_Items  => Target_Items,
          Merged_Index  => Merged_Index,
-         Conflicts     => Conflicts);
+         Conflicts     => Conflicts,
+         Behavior      => Version.Merge.Merge_Behavior'
+           (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
+              (Version.Merge.Base_Label_For (Repo, Base_Id)),
+            others     => <>));
 
       if not Conflicts.Is_Empty then
          Version.Merge_State.Clear_State (Repo);

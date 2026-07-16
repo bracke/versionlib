@@ -5,13 +5,20 @@ with Ada.Text_IO;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Containers;        use Ada.Containers;
 with Ada.Containers.Indefinite_Ordered_Maps;
+with Ada.Containers.Indefinite_Ordered_Sets;
+with Ada.Containers.Ordered_Sets;
+with Ada.Characters.Handling;
+with Version.Config;
+with Version.Console;
 with Version.Objects;
 with Version.Refs;
 with Version.Repository;
 with Version.Staging;
 with Version.Working_Tree;
 with Version.Ignore;
+with GNAT.OS_Lib;
 with Version.Files;
+with Version.Platform;
 with Version.Tracking;
 with Version.Object_Cache;
 with Version.Ref_Cache;
@@ -30,6 +37,9 @@ package body Version.Status is
       case Kind is
          when New_File      =>
             return "added";
+
+         when Renamed_File  =>
+            return "renamed";
 
          when Modified_File =>
             return "modified";
@@ -62,6 +72,31 @@ package body Version.Status is
       return "nothing to save, working tree clean";
    end Clean_Status_Line;
 
+   --  The mode git would record for a path as it is on disk right now.  A
+   --  mode-only change (chmod +x) is a change to git, even when the content is
+   --  untouched -- status compared blob ids only and missed it entirely.
+   function Working_Index_Mode
+     (Repo : Version.Repository.Repository_Handle;
+      Path : String) return String
+   is
+      Full : constant String :=
+        Version.Files.Join (Version.Repository.Root_Path (Repo), Path);
+   begin
+      if GNAT.OS_Lib.Is_Symbolic_Link (Version.Files.To_Native_Path (Full)) then
+         return "120000";
+      elsif Version.Platform.Supports_Executable_Bit
+        and then GNAT.OS_Lib.Is_Executable_File
+                   (Version.Files.To_Native_Path (Full))
+      then
+         return "100755";
+      else
+         return "100644";
+      end if;
+   exception
+      when others =>
+         return "100644";
+   end Working_Index_Mode;
+
    function Change_Kind_Text (Kind : Change_Kind) return String is
    begin
       return Kind_Image (Kind);
@@ -78,6 +113,9 @@ package body Version.Status is
       case Kind is
          when New_File      =>
             return "A";
+
+         when Renamed_File  =>
+            return "R";
 
          when Modified_File =>
             return "M";
@@ -102,47 +140,129 @@ package body Version.Status is
       end case;
    end Porcelain_Kind_Code;
 
-   procedure Append_Porcelain_List
-     (Text   : in out Unbounded_String;
-      Prefix : String;
-      List   : File_Change_Vectors.Vector) is
-   begin
-      if List.Is_Empty then
-         return;
-      end if;
-
-      for I in List.First_Index .. List.Last_Index loop
-         Append
-           (Text,
-            Prefix
-            & " "
-            & Porcelain_Kind_Code (List.Element (I).Kind)
-            & " "
-            & To_String (List.Element (I).Path)
-            & Ada.Characters.Latin_1.LF);
-      end loop;
-   end Append_Porcelain_List;
-
+   --  git status --porcelain (v1): one "XY path" line per change, where X is
+   --  the index/staged state and Y the working-tree state; untracked files are
+   --  "?? path" and ignored files "!! path". Tracked changes are sorted by
+   --  path, then untracked, then ignored. Clean status prints nothing.
    function Porcelain_Status_Text
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String
    is
-      Text : Unbounded_String;
+      LF : constant Character := Ada.Characters.Latin_1.LF;
+
+      type XY is record
+         X : Character := ' ';
+         Y : Character := ' ';
+         --  A rename is keyed on its *old* path (that is what git sorts by)
+         --  and displayed as `old -> new`.
+         Display : Unbounded_String;
+      end record;
+
+      package XY_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => XY);
+      package Str_Sets is new Ada.Containers.Indefinite_Ordered_Sets
+        (Element_Type => String);
+
+      Tracked : XY_Maps.Map;
+      Text    : Unbounded_String;
+
+      function Reg_Code (K : Change_Kind) return Character is
+        (case K is
+            when New_File      => 'A',
+            when Modified_File => 'M',
+            when Deleted_File  => 'D',
+            when others        => 'M');
+
+      procedure Set_X (Path : String; C : Character) is
+         Pair : XY :=
+           (if Tracked.Contains (Path) then Tracked.Element (Path)
+            else (others => <>));
+      begin
+         Pair.X := C;
+         Tracked.Include (Path, Pair);
+      end Set_X;
+
+      procedure Set_Y (Path : String; C : Character) is
+         Pair : XY :=
+           (if Tracked.Contains (Path) then Tracked.Element (Path)
+            else (others => <>));
+      begin
+         Pair.Y := C;
+         Tracked.Include (Path, Pair);
+      end Set_Y;
+
+      procedure Emit_Sorted (List : File_Change_Vectors.Vector; Code : String) is
+         S : Str_Sets.Set;
+      begin
+         for I in List.First_Index .. List.Last_Index loop
+            S.Include (To_String (List.Element (I).Path));
+         end loop;
+         for P of S loop
+            Append (Text, Code & " " & P & LF);
+         end loop;
+      end Emit_Sorted;
    begin
-      --  Project-specific stable porcelain subset.  Prefixes identify the
-      --  source of each change instead of promising full Git porcelain parity:
-      --    U <UU|AA|DU|DF> path  unmerged/conflicted path
-      --    S <A|M|D> path        staged/index change
-      --    W <A|M|D> path        working-tree change
-      --    ? A path              untracked file
-      --    ! ! path              ignored untracked path, when requested
-      --  Clean status intentionally prints no output.
-      Append_Porcelain_List (Text, "U", Result.Conflicted);
-      Append_Porcelain_List (Text, "S", Result.Staged);
-      Append_Porcelain_List (Text, "W", Result.Changes);
-      Append_Porcelain_List (Text, "?", Result.Untracked);
+      for I in Result.Conflicted.First_Index .. Result.Conflicted.Last_Index loop
+         declare
+            Path : constant String :=
+              To_String (Result.Conflicted.Element (I).Path);
+         begin
+            case Result.Conflicted.Element (I).Kind is
+               when Both_Added_File       =>
+                  Tracked.Include (Path, ('A', 'A', Null_Unbounded_String));
+               when Deleted_Modified_File =>
+                  Tracked.Include (Path, ('D', 'U', Null_Unbounded_String));
+               when others                =>
+                  Tracked.Include (Path, ('U', 'U', Null_Unbounded_String));
+            end case;
+         end;
+      end loop;
+      --  A rename is keyed on its *destination* -- that is what git sorts the
+      --  entries by -- and displayed as `old -> new`.  Keying on the
+      --  destination also means a worktree change to it lands on the same line
+      --  by itself (git prints `RM old -> new`).
+      for I in Result.Staged.First_Index .. Result.Staged.Last_Index loop
+         declare
+            E : constant File_Change := Result.Staged.Element (I);
+         begin
+            if E.Kind = Renamed_File then
+               declare
+                  New_P : constant String := To_String (E.Path);
+                  Pair  : XY;
+               begin
+                  Pair.X := 'R';
+                  Pair.Display :=
+                    To_Unbounded_String
+                      (To_String (E.Old_Path) & " -> " & New_P);
+                  Tracked.Include (New_P, Pair);
+               end;
+            else
+               Set_X (To_String (E.Path), Reg_Code (E.Kind));
+            end if;
+         end;
+      end loop;
+
+      for I in Result.Changes.First_Index .. Result.Changes.Last_Index loop
+         Set_Y (To_String (Result.Changes.Element (I).Path),
+                Reg_Code (Result.Changes.Element (I).Kind));
+      end loop;
+
+      for C in Tracked.Iterate loop
+         declare
+            Shown : constant String :=
+              (if Length (XY_Maps.Element (C).Display) > 0
+               then To_String (XY_Maps.Element (C).Display)
+               else XY_Maps.Key (C));
+         begin
+            Append
+              (Text,
+               XY_Maps.Element (C).X & XY_Maps.Element (C).Y & " "
+               & Shown & LF);
+         end;
+      end loop;
+      Emit_Sorted (Result.Untracked, "??");
       if Include_Ignored then
-         Append_Porcelain_List (Text, "!", Result.Ignored);
+         Emit_Sorted (Result.Ignored, "!!");
       end if;
       return To_String (Text);
    end Porcelain_Status_Text;
@@ -304,16 +424,107 @@ package body Version.Status is
       Kind : Change_Kind) is
    begin
       List.Append
-        (File_Change'(Path => To_Unbounded_String (Path), Kind => Kind));
+        (File_Change'(Path     => To_Unbounded_String (Path),
+                      Kind     => Kind,
+                      Old_Path => Null_Unbounded_String));
    end Add_Change;
+
+   --  status.renames (git default: true).
+   function Renames_Enabled
+     (Repo : Version.Repository.Repository_Handle) return Boolean
+   is
+      Text : constant String :=
+        (if Version.Config.Has_Key (Repo, "status.renames")
+         then Version.Config.Get_Value (Repo, "status.renames") else "");
+      Lower : String := Text;
+   begin
+      for I in Lower'Range loop
+         Lower (I) := Ada.Characters.Handling.To_Lower (Lower (I));
+      end loop;
+      return not (Lower = "false" or else Lower = "0" or else Lower = "no");
+   end Renames_Enabled;
+
+   --  git's rename detection for the staged side: a deleted path and an added
+   --  path whose contents are similar enough (50%, git's default) are one
+   --  rename.  Reported as `R  old -> new`.
+   function Blob_Text
+     (Repo : Version.Repository.Repository_Handle;
+      Id   : Version.Objects.Hex_Object_Id) return String is
+   begin
+      return Version.Objects.Content (Version.Objects.Read_Object (Repo, Id));
+   exception
+      when others =>
+         return "";
+   end Blob_Text;
+
+   function Similarity (Old_Text, New_Text : String) return Natural is
+      package Count_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => Natural);
+
+      procedure Tally (Text : String; Into : in out Count_Maps.Map;
+                       Lines : out Natural)
+      is
+         Start : Natural := Text'First;
+      begin
+         Lines := 0;
+         for I in Text'Range loop
+            if Text (I) = Ada.Characters.Latin_1.LF then
+               declare
+                  L : constant String := Text (Start .. I);
+               begin
+                  Into.Include
+                    (L, (if Into.Contains (L) then Into.Element (L) + 1
+                         else 1));
+                  Lines := Lines + 1;
+               end;
+               Start := I + 1;
+            end if;
+         end loop;
+         if Start <= Text'Last then
+            declare
+               L : constant String := Text (Start .. Text'Last);
+            begin
+               Into.Include
+                 (L, (if Into.Contains (L) then Into.Element (L) + 1 else 1));
+               Lines := Lines + 1;
+            end;
+         end if;
+      end Tally;
+
+      Old_Counts, New_Counts : Count_Maps.Map;
+      Old_Lines, New_Lines   : Natural := 0;
+      Common                 : Natural := 0;
+   begin
+      if Old_Text = New_Text then
+         return 100;
+      end if;
+
+      Tally (Old_Text, Old_Counts, Old_Lines);
+      Tally (New_Text, New_Counts, New_Lines);
+
+      if Old_Lines = 0 or else New_Lines = 0 then
+         return 0;
+      end if;
+
+      for C in Old_Counts.Iterate loop
+         if New_Counts.Contains (Count_Maps.Key (C)) then
+            Common := Common
+              + Natural'Min (Count_Maps.Element (C),
+                             New_Counts.Element (Count_Maps.Key (C)));
+         end if;
+      end loop;
+
+      return (Common * 100) / Natural'Max (Old_Lines, New_Lines);
+   end Similarity;
 
    function Build_Status
      (Head_Entries    : Version.Objects.Tree_Entry_Vectors.Vector;
       Index_Entries   : Version.Staging.Index_Entry_Vectors.Vector;
       Working_Files   : Version.Working_Tree.Working_File_Vectors.Vector;
       Ignore_Rules    : Version.Ignore.Ignore_Rules;
-      Sparse_Enabled  : Boolean;
-      Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector)
+      Repo            : Version.Repository.Repository_Handle;
+      All_Untracked   : Boolean := False;
+      Detect_Renames  : Boolean := True)
       return Status_Result
    is
       Result      : Status_Result;
@@ -322,7 +533,55 @@ package body Version.Status is
         Index_Map (Index_Entries);
       Working_Pos : constant Path_Position_Maps.Map :=
         Working_Map (Working_Files);
+
+      package Path_Sets is new Ada.Containers.Indefinite_Ordered_Sets
+        (Element_Type => String);
+      package Mask_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => Natural);
+      Conflicted : Path_Sets.Set;   --  paths with any index stage > 0
    begin
+      --  Unmerged (conflicted) paths come from the index stages (1=base,
+      --  2=ours, 3=theirs), exactly as git reports them, independent of how
+      --  the conflict was created (a git merge leaves no Merge_State).
+      declare
+         Masks : Mask_Maps.Map;
+      begin
+         for I in Index_Entries.First_Index .. Index_Entries.Last_Index loop
+            declare
+               St : constant Natural := Index_Entries.Element (I).Stage;
+            begin
+               if St in 1 .. 3 then
+                  declare
+                     Path : constant String :=
+                       To_String (Index_Entries.Element (I).Path);
+                     Cur  : constant Natural :=
+                       (if Masks.Contains (Path) then Masks.Element (Path)
+                        else 0);
+                  begin
+                     --  Set the stage's bit (each index stage is unique per
+                     --  path, so a sum is equivalent to a bitwise or here).
+                     Masks.Include
+                       (Path,
+                        (if (Cur / (2 ** (St - 1))) mod 2 = 1 then Cur
+                         else Cur + 2 ** (St - 1)));
+                  end;
+               end if;
+            end;
+         end loop;
+         for C in Masks.Iterate loop
+            declare
+               M : constant Natural := Mask_Maps.Element (C);
+               K : constant Change_Kind :=
+                 (if M = 6 then Both_Added_File        --  ours+theirs, no base
+                  elsif M = 5 then Deleted_Modified_File  --  base+theirs (ours del)
+                  else Unmerged_File);                 --  both modified / other
+            begin
+               Add_Change (Result.Conflicted, Mask_Maps.Key (C), K);
+               Conflicted.Include (Mask_Maps.Key (C));
+            end;
+         end loop;
+      end;
+
       if not Head_Entries.Is_Empty then
          for I in Head_Entries.First_Index .. Head_Entries.Last_Index loop
             declare
@@ -331,11 +590,16 @@ package body Version.Status is
                Pos  : constant Path_Position_Maps.Cursor :=
                  Index_Pos.Find (Path);
             begin
-               if not Path_Position_Maps.Has_Element (Pos) then
+               if Conflicted.Contains (Path) then
+                  null;   --  reported as unmerged, not deleted
+               elsif not Path_Position_Maps.Has_Element (Pos) then
                   Add_Change (Result.Staged, Path, Deleted_File);
                elsif Index_Entries.Element (Path_Position_Maps.Element (Pos))
                        .Id
                  /= Head_Entries.Element (I).Id
+                 or else Index_Entries.Element
+                           (Path_Position_Maps.Element (Pos)).Mode
+                         /= Head_Entries.Element (I).Mode
                then
                   Add_Change (Result.Staged, Path, Modified_File);
                end if;
@@ -370,15 +634,20 @@ package body Version.Status is
                     Working_Pos.Find (Path);
                begin
                   if not Path_Position_Maps.Has_Element (Pos) then
-                     if (not Sparse_Enabled)
-                       or else
-                         Version.Pathspec.Matches_Any (Sparse_Patterns, Path)
-                     then
+                     if Version.Sparse.Included (Repo, Path) then
                         Add_Change (Result.Changes, Path, Deleted_File);
                      end if;
                   elsif Working_Files.Element (Path_Position_Maps.Element (Pos))
                           .Id
                     /= Index_Entries.Element (I).Id
+                    --  A gitlink is a submodule directory, not a file: its
+                    --  worktree "mode" is meaningless here, and comparing it
+                    --  would report every submodule as permanently modified.
+                    or else (To_String (Index_Entries.Element (I).Mode)
+                             /= "160000"
+                             and then Working_Index_Mode (Repo, Path)
+                                      /= To_String
+                                           (Index_Entries.Element (I).Mode))
                   then
                      Add_Change (Result.Changes, Path, Modified_File);
                   end if;
@@ -387,29 +656,223 @@ package body Version.Status is
          end loop;
       end if;
 
-      if not Working_Files.Is_Empty then
-         for I in Working_Files.First_Index .. Working_Files.Last_Index loop
-            declare
-               Path : constant String :=
-                 To_String (Working_Files.Element (I).Path);
-               Pos  : constant Path_Position_Maps.Cursor :=
-                 Index_Pos.Find (Path);
+      --  Pair staged deletes with staged adds of similar content: that is a
+      --  rename, and git reports it as one (status.renames, on by default).
+      if Detect_Renames then
+         declare
+            package Nat_Sets is new Ada.Containers.Ordered_Sets (Natural);
+            Used   : Nat_Sets.Set;
+            Paired : File_Change_Vectors.Vector;
+
+            function Head_Blob (Path : String) return String is
+               Pos : constant Path_Position_Maps.Cursor := Head_Pos.Find (Path);
             begin
-               if not Path_Position_Maps.Has_Element (Pos)
-                 and then
-                   ((not Sparse_Enabled)
-                    or else
-                      Version.Pathspec.Matches_Any (Sparse_Patterns, Path))
-                 and then
-                   not Version.Ignore.Is_Ignored
-                         (Rules         => Ignore_Rules,
-                          Relative_Path => Path,
-                          Is_Directory  => False)
-               then
-                  Add_Change (Result.Untracked, Path, New_File);
+               if not Path_Position_Maps.Has_Element (Pos) then
+                  return "";
                end if;
-            end;
-         end loop;
+               return Blob_Text
+                 (Repo,
+                  Head_Entries.Element (Path_Position_Maps.Element (Pos)).Id);
+            end Head_Blob;
+
+            function Index_Blob (Path : String) return String is
+               Pos : constant Path_Position_Maps.Cursor := Index_Pos.Find (Path);
+            begin
+               if not Path_Position_Maps.Has_Element (Pos) then
+                  return "";
+               end if;
+               return Blob_Text
+                 (Repo,
+                  Index_Entries.Element (Path_Position_Maps.Element (Pos)).Id);
+            end Index_Blob;
+         begin
+            --  Pass 1, as git does: pair identical blobs first.  Only then
+            --  fall back to similarity -- otherwise a merely *similar* add can
+            --  steal the delete that an identical one should have claimed.
+            for D in Result.Staged.First_Index .. Result.Staged.Last_Index loop
+               if Result.Staged.Element (D).Kind = Deleted_File
+                 and then not Used.Contains (D)
+               then
+                  declare
+                     Old_Path : constant String :=
+                       To_String (Result.Staged.Element (D).Path);
+                     Old_Id   : constant Version.Objects.Hex_Object_Id :=
+                       Head_Entries.Element
+                         (Path_Position_Maps.Element
+                            (Head_Pos.Find (Old_Path))).Id;
+                  begin
+                     for A in Result.Staged.First_Index
+                                .. Result.Staged.Last_Index
+                     loop
+                        if Result.Staged.Element (A).Kind = New_File
+                          and then not Used.Contains (A)
+                        then
+                           declare
+                              New_Path : constant String :=
+                                To_String (Result.Staged.Element (A).Path);
+                           begin
+                              if Index_Entries.Element
+                                   (Path_Position_Maps.Element
+                                      (Index_Pos.Find (New_Path))).Id = Old_Id
+                              then
+                                 Used.Include (D);
+                                 Used.Include (A);
+                                 Paired.Append
+                                   (File_Change'
+                                      (Path     =>
+                                         Result.Staged.Element (A).Path,
+                                       Kind     => Renamed_File,
+                                       Old_Path =>
+                                         To_Unbounded_String (Old_Path)));
+                                 exit;
+                              end if;
+                           end;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+            end loop;
+
+            --  Pass 2: similarity.  Destination-major, like git's
+            --  diffcore-rename -- for each added path pick the *best* deleted
+            --  source.  Doing it source-major lets an early, poorer source
+            --  claim a destination that a later, better one should have won.
+            for A in Result.Staged.First_Index .. Result.Staged.Last_Index loop
+               if Result.Staged.Element (A).Kind = New_File
+                 and then not Used.Contains (A)
+               then
+                  declare
+                     New_Path : constant String :=
+                       To_String (Result.Staged.Element (A).Path);
+                     New_Text : constant String := Index_Blob (New_Path);
+                     Best     : Natural := 0;
+                     Best_Idx : Integer := -1;
+                  begin
+                     for D in Result.Staged.First_Index
+                                .. Result.Staged.Last_Index
+                     loop
+                        if Result.Staged.Element (D).Kind = Deleted_File
+                          and then not Used.Contains (D)
+                        then
+                           declare
+                              Score : constant Natural :=
+                                Similarity
+                                  (Head_Blob
+                                     (To_String
+                                        (Result.Staged.Element (D).Path)),
+                                   New_Text);
+                           begin
+                              if Score > Best then
+                                 Best := Score;
+                                 Best_Idx := D;
+                              end if;
+                           end;
+                        end if;
+                     end loop;
+
+                     --  git's default similarity threshold is 50%.
+                     if Best_Idx >= 0 and then Best >= 50 then
+                        Used.Include (A);
+                        Used.Include (Best_Idx);
+                        Paired.Append
+                          (File_Change'
+                             (Path     => Result.Staged.Element (A).Path,
+                              Kind     => Renamed_File,
+                              Old_Path =>
+                                Result.Staged.Element (Best_Idx).Path));
+                     end if;
+                  end;
+               end if;
+            end loop;
+
+            if not Used.Is_Empty then
+               declare
+                  Rebuilt : File_Change_Vectors.Vector;
+               begin
+                  for I in Result.Staged.First_Index
+                             .. Result.Staged.Last_Index
+                  loop
+                     if not Used.Contains (I) then
+                        Rebuilt.Append (Result.Staged.Element (I));
+                     end if;
+                  end loop;
+                  for R of Paired loop
+                     Rebuilt.Append (R);
+                  end loop;
+                  Result.Staged := Rebuilt;
+               end;
+            end if;
+         end;
+      end if;
+
+      if not Working_Files.Is_Empty then
+         declare
+            --  git collapses a directory holding nothing but untracked files
+            --  to `dir/` and does not look inside; a directory that also holds
+            --  a tracked file is descended into.  (`-uall` lists every file.)
+            Tracked_Dirs : Path_Sets.Set;
+            Reported     : Path_Sets.Set;
+
+            function Collapsed (Path : String) return String is
+            begin
+               for K in Path'Range loop
+                  if Path (K) = '/' then
+                     declare
+                        Dir : constant String := Path (Path'First .. K - 1);
+                     begin
+                        if not Tracked_Dirs.Contains (Dir) then
+                           return Dir & "/";
+                        end if;
+                     end;
+                  end if;
+               end loop;
+               return Path;
+            end Collapsed;
+         begin
+            --  Every ancestor directory of a tracked path holds something
+            --  tracked.
+            for I in Index_Entries.First_Index .. Index_Entries.Last_Index loop
+               declare
+                  P : constant String :=
+                    To_String (Index_Entries.Element (I).Path);
+               begin
+                  for K in P'Range loop
+                     if P (K) = '/' then
+                        Tracked_Dirs.Include (P (P'First .. K - 1));
+                     end if;
+                  end loop;
+               end;
+            end loop;
+
+            for I in Working_Files.First_Index .. Working_Files.Last_Index loop
+               declare
+                  Path : constant String :=
+                    To_String (Working_Files.Element (I).Path);
+                  Pos  : constant Path_Position_Maps.Cursor :=
+                    Index_Pos.Find (Path);
+               begin
+                  if not Path_Position_Maps.Has_Element (Pos)
+                    and then not Conflicted.Contains (Path)
+                    and then Version.Sparse.Included (Repo, Path)
+                    and then
+                      not Version.Ignore.Is_Ignored
+                            (Rules         => Ignore_Rules,
+                             Relative_Path => Path,
+                             Is_Directory  => False)
+                  then
+                     declare
+                        Shown : constant String :=
+                          (if All_Untracked then Path else Collapsed (Path));
+                     begin
+                        if not Reported.Contains (Shown) then
+                           Reported.Include (Shown);
+                           Add_Change (Result.Untracked, Shown, New_File);
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+         end;
       end if;
 
       return Result;
@@ -419,8 +882,7 @@ package body Version.Status is
      (Index_Entries   : Version.Staging.Index_Entry_Vectors.Vector;
       Working_Files   : Version.Working_Tree.Working_File_Vectors.Vector;
       Ignore_Rules    : Version.Ignore.Ignore_Rules;
-      Sparse_Enabled  : Boolean;
-      Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector;
+      Repo            : Version.Repository.Repository_Handle;
       Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector)
       return File_Change_Vectors.Vector
    is
@@ -436,9 +898,7 @@ package body Version.Status is
                  Index_Pos.Find (Path);
             begin
                if not Path_Position_Maps.Has_Element (Pos)
-                 and then
-                   ((not Sparse_Enabled)
-                    or else Version.Pathspec.Matches_Any (Sparse_Patterns, Path))
+                 and then Version.Sparse.Included (Repo, Path)
                  and then
                    (Pathspecs.Is_Empty
                     or else Version.Pathspec.Matches_Any (Pathspecs, Path))
@@ -499,12 +959,22 @@ package body Version.Status is
       if not Conflicts.Is_Empty then
          for I in Conflicts.First_Index .. Conflicts.Last_Index loop
             declare
-               C : constant Version.Merge.Conflict := Conflicts.Element (I);
+               C     : constant Version.Merge.Conflict := Conflicts.Element (I);
+               Path  : constant String := To_String (C.Path);
+               Dup   : Boolean := False;
             begin
-               Add_Change
-                 (Result.Conflicted,
-                  To_String (C.Path),
-                  Conflict_Change_Kind (C.Kind));
+               --  Do not double-report a path already found via index stages.
+               for J in Result.Conflicted.First_Index ..
+                        Result.Conflicted.Last_Index
+               loop
+                  if To_String (Result.Conflicted.Element (J).Path) = Path then
+                     Dup := True;
+                  end if;
+               end loop;
+               if not Dup then
+                  Add_Change
+                    (Result.Conflicted, Path, Conflict_Change_Kind (C.Kind));
+               end if;
             end;
          end loop;
       end if;
@@ -586,16 +1056,11 @@ package body Version.Status is
    end Has_Tracked_Path_Under;
 
    function Is_Sparse_Included
-     (Sparse_Enabled  : Boolean;
-      Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector;
-      Path            : String;
-      Is_Directory    : Boolean) return Boolean is
+     (Repo         : Version.Repository.Repository_Handle;
+      Path         : String;
+      Is_Directory : Boolean) return Boolean is
    begin
-      return
-        (not Sparse_Enabled)
-        or else
-          Version.Pathspec.Matches_Any
-            (Sparse_Patterns, Path, Is_Directory => Is_Directory);
+      return Version.Sparse.Included (Repo, Path, Is_Directory);
    end Is_Sparse_Included;
 
    function Pathspec_Selects
@@ -615,8 +1080,7 @@ package body Version.Status is
       Dir             : String;
       Index_Entries   : Version.Staging.Index_Entry_Vectors.Vector;
       Ignore_Rules    : Version.Ignore.Ignore_Rules;
-      Sparse_Enabled  : Boolean;
-      Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector;
+      Repo            : Version.Repository.Repository_Handle;
       Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Result          : in out File_Change_Vectors.Vector)
    is
@@ -659,10 +1123,7 @@ package body Version.Status is
                      begin
                         if Ignored then
                            if Is_Sparse_Included
-                                (Sparse_Enabled,
-                                 Sparse_Patterns,
-                                 Rel_Dir,
-                                 Is_Directory => True)
+                                (Repo, Rel_Dir, Is_Directory => True)
                              and then Pathspec_Selects
                                (Pathspecs, Rel_Dir, Is_Directory => True)
                            then
@@ -675,8 +1136,7 @@ package body Version.Status is
                               Dir             => Full,
                               Index_Entries   => Index_Entries,
                               Ignore_Rules    => Ignore_Rules,
-                              Sparse_Enabled  => Sparse_Enabled,
-                              Sparse_Patterns => Sparse_Patterns,
+                              Repo            => Repo,
                               Pathspecs       => Pathspecs,
                               Result          => Result);
                         end if;
@@ -691,10 +1151,7 @@ package body Version.Status is
                   begin
                      if not Path_Position_Maps.Has_Element (Pos)
                        and then Is_Sparse_Included
-                         (Sparse_Enabled,
-                          Sparse_Patterns,
-                          Rel_File,
-                          Is_Directory => False)
+                         (Repo, Rel_File, Is_Directory => False)
                        and then Pathspec_Selects
                          (Pathspecs, Rel_File, Is_Directory => False)
                        and then Version.Ignore.Is_Ignored
@@ -723,8 +1180,6 @@ package body Version.Status is
      (Repo            : Version.Repository.Repository_Handle;
       Index_Entries   : Version.Staging.Index_Entry_Vectors.Vector;
       Ignore_Rules    : Version.Ignore.Ignore_Rules;
-      Sparse_Enabled  : Boolean;
-      Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector;
       Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector)
       return File_Change_Vectors.Vector
    is
@@ -735,8 +1190,7 @@ package body Version.Status is
          Dir             => Version.Repository.Root_Path (Repo),
          Index_Entries   => Index_Entries,
          Ignore_Rules    => Ignore_Rules,
-         Sparse_Enabled  => Sparse_Enabled,
-         Sparse_Patterns => Sparse_Patterns,
+         Repo            => Repo,
          Pathspecs       => Pathspecs,
          Result          => Result);
       return Result;
@@ -778,7 +1232,11 @@ package body Version.Status is
       for I in List.First_Index .. List.Last_Index loop
          Ada.Text_IO.Put_Line
            (Change_Output_Line
-              (List.Element (I).Kind, To_String (List.Element (I).Path)));
+              (List.Element (I).Kind,
+               (if List.Element (I).Kind = Renamed_File
+                then To_String (List.Element (I).Old_Path) & " -> "
+                     & To_String (List.Element (I).Path)
+                else To_String (List.Element (I).Path))));
       end loop;
 
       Ada.Text_IO.New_Line;
@@ -819,7 +1277,8 @@ package body Version.Status is
       end;
    end Load_Head_Tree;
 
-   function Current_Status return Status_Result is
+   function Current_Status
+     (All_Untracked : Boolean := False) return Status_Result is
       Repo          : Version.Repository.Repository_Handle;
       Commit        : Unbounded_String;
       Head_Entries  : Version.Objects.Tree_Entry_Vectors.Vector;
@@ -852,23 +1311,15 @@ package body Version.Status is
            Ignore_Rules  => Ignore_Rules,
            Tracked_Paths => Index_Entries);
 
-      declare
-         Sparse_Enabled  : constant Boolean := Version.Sparse.Enabled (Repo);
-         Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector;
-      begin
-         if Sparse_Enabled then
-            Sparse_Patterns := Version.Sparse.Patterns (Repo);
-         end if;
-
-         Result :=
-           Build_Status
-             (Head_Entries    => Head_Entries,
-              Index_Entries   => Index_Entries,
-              Working_Files   => Working_Files,
-              Ignore_Rules    => Ignore_Rules,
-              Sparse_Enabled  => Sparse_Enabled,
-              Sparse_Patterns => Sparse_Patterns);
-      end;
+      Result :=
+        Build_Status
+          (Head_Entries    => Head_Entries,
+           Index_Entries   => Index_Entries,
+           Working_Files   => Working_Files,
+           Ignore_Rules    => Ignore_Rules,
+           Repo            => Repo,
+           All_Untracked   => All_Untracked,
+           Detect_Renames  => Renames_Enabled (Repo));
 
       Append_Merge_Conflicts (Repo, Result);
 
@@ -915,7 +1366,8 @@ package body Version.Status is
    end Filter_Result;
 
    function Current_Status
-     (Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector)
+     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
+      All_Untracked : Boolean := False)
       return Status_Result
    is
       Repo          : Version.Repository.Repository_Handle;
@@ -955,23 +1407,15 @@ package body Version.Status is
            Tracked_Paths => Index_Entries,
            Pathspecs     => Pathspecs);
 
-      declare
-         Sparse_Enabled  : constant Boolean := Version.Sparse.Enabled (Repo);
-         Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector;
-      begin
-         if Sparse_Enabled then
-            Sparse_Patterns := Version.Sparse.Patterns (Repo);
-         end if;
-
-         Result :=
-           Build_Status
-             (Head_Entries    => Head_Entries,
-              Index_Entries   => Index_Entries,
-              Working_Files   => Working_Files,
-              Ignore_Rules    => Ignore_Rules,
-              Sparse_Enabled  => Sparse_Enabled,
-              Sparse_Patterns => Sparse_Patterns);
-      end;
+      Result :=
+        Build_Status
+          (Head_Entries    => Head_Entries,
+           Index_Entries   => Index_Entries,
+           Working_Files   => Working_Files,
+           Ignore_Rules    => Ignore_Rules,
+           Repo            => Repo,
+           All_Untracked   => All_Untracked,
+           Detect_Renames  => Renames_Enabled (Repo));
 
       Append_Merge_Conflicts (Repo, Result);
       Result := Filter_Result (Result, Pathspecs);
@@ -986,17 +1430,20 @@ package body Version.Status is
    end Current_Status;
 
    function Current_Status_With_Ignored
-     (Mode : Ignored_Display_Mode := Ignored_Traditional)
+     (Mode          : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked : Boolean := False)
       return Status_Result
    is
       Empty_Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
    begin
-      return Current_Status_With_Ignored (Empty_Pathspecs, Mode);
+      return Current_Status_With_Ignored
+        (Empty_Pathspecs, Mode, All_Untracked);
    end Current_Status_With_Ignored;
 
    function Current_Status_With_Ignored
-     (Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
-      Mode      : Ignored_Display_Mode := Ignored_Traditional)
+     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
+      Mode          : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked : Boolean := False)
       return Status_Result
    is
       Repo          : constant Version.Repository.Repository_Handle :=
@@ -1007,22 +1454,15 @@ package body Version.Status is
         Version.Ignore.Load (Repo);
       Working_Files : constant Version.Working_Tree.Working_File_Vectors.Vector :=
         Version.Working_Tree.Scan (Repo);
-      Result        : Status_Result := Current_Status (Pathspecs);
-      Sparse_Enabled  : constant Boolean := Version.Sparse.Enabled (Repo);
-      Sparse_Patterns : Version.Pathspec.Pathspec_Vectors.Vector;
+      Result        : Status_Result :=
+        Current_Status (Pathspecs, All_Untracked);
    begin
-      if Sparse_Enabled then
-         Sparse_Patterns := Version.Sparse.Patterns (Repo);
-      end if;
-
       if Mode = Ignored_Matching then
          Result.Ignored :=
            Build_Ignored_Matching
              (Repo            => Repo,
               Index_Entries   => Index_Entries,
               Ignore_Rules    => Ignore_Rules,
-              Sparse_Enabled  => Sparse_Enabled,
-              Sparse_Patterns => Sparse_Patterns,
               Pathspecs       => Pathspecs);
       else
          Result.Ignored :=
@@ -1030,8 +1470,7 @@ package body Version.Status is
              (Index_Entries   => Index_Entries,
               Working_Files   => Working_Files,
               Ignore_Rules    => Ignore_Rules,
-              Sparse_Enabled  => Sparse_Enabled,
-              Sparse_Patterns => Sparse_Patterns,
+              Repo            => Repo,
               Pathspecs       => Pathspecs);
       end if;
       Sort_Changes (Result.Ignored);
@@ -1180,89 +1619,99 @@ package body Version.Status is
 
    end Print_Status_Result;
 
-   procedure Print_Status is
+   procedure Print_Status (All_Untracked : Boolean := False) is
    begin
-      Print_Status_Result (Current_Status);
+      Print_Status_Result (Current_Status (All_Untracked));
    end Print_Status;
 
    procedure Print_Status
-     (Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector) is
+     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
+      All_Untracked : Boolean := False) is
    begin
-      Print_Status_Result (Current_Status (Pathspecs));
+      Print_Status_Result (Current_Status (Pathspecs, All_Untracked));
    end Print_Status;
 
    procedure Print_Porcelain_Status
      (Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional) is
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
    begin
-      Ada.Text_IO.Put
+      Version.Console.Put
         (Porcelain_Status_Text
            ((if Include_Ignored
-             then Current_Status_With_Ignored (Ignored_Mode)
-             else Current_Status),
+             then Current_Status_With_Ignored (Ignored_Mode, All_Untracked)
+             else Current_Status (All_Untracked)),
             Include_Ignored));
    end Print_Porcelain_Status;
 
    procedure Print_Porcelain_Status
      (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional) is
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
    begin
-      Ada.Text_IO.Put
+      Version.Console.Put
         (Porcelain_Status_Text
            ((if Include_Ignored
-             then Current_Status_With_Ignored (Pathspecs, Ignored_Mode)
-             else Current_Status (Pathspecs)),
+             then Current_Status_With_Ignored
+                    (Pathspecs, Ignored_Mode, All_Untracked)
+             else Current_Status (Pathspecs, All_Untracked)),
             Include_Ignored));
    end Print_Porcelain_Status;
 
    procedure Print_Short_Status
      (Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional) is
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
    begin
-      Ada.Text_IO.Put
+      Version.Console.Put
         (Short_Status_Text
            ((if Include_Ignored
-             then Current_Status_With_Ignored (Ignored_Mode)
-             else Current_Status),
+             then Current_Status_With_Ignored (Ignored_Mode, All_Untracked)
+             else Current_Status (All_Untracked)),
             Include_Ignored));
    end Print_Short_Status;
 
    procedure Print_Short_Status
      (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional) is
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
    begin
-      Ada.Text_IO.Put
+      Version.Console.Put
         (Short_Status_Text
            ((if Include_Ignored
-             then Current_Status_With_Ignored (Pathspecs, Ignored_Mode)
-             else Current_Status (Pathspecs)),
+             then Current_Status_With_Ignored
+                    (Pathspecs, Ignored_Mode, All_Untracked)
+             else Current_Status (Pathspecs, All_Untracked)),
             Include_Ignored));
    end Print_Short_Status;
 
    procedure Print_Branch_Status
      (Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional) is
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
    begin
-      Ada.Text_IO.Put
+      Version.Console.Put
         (Branch_Status_Text
            ((if Include_Ignored
-             then Current_Status_With_Ignored (Ignored_Mode)
-             else Current_Status),
+             then Current_Status_With_Ignored (Ignored_Mode, All_Untracked)
+             else Current_Status (All_Untracked)),
             Include_Ignored));
    end Print_Branch_Status;
 
    procedure Print_Branch_Status
      (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional) is
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
    begin
-      Ada.Text_IO.Put
+      Version.Console.Put
         (Branch_Status_Text
            ((if Include_Ignored
-             then Current_Status_With_Ignored (Pathspecs, Ignored_Mode)
-             else Current_Status (Pathspecs)),
+             then Current_Status_With_Ignored
+                    (Pathspecs, Ignored_Mode, All_Untracked)
+             else Current_Status (Pathspecs, All_Untracked)),
             Include_Ignored));
    end Print_Branch_Status;
 

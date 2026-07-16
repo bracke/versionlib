@@ -37,7 +37,7 @@ package body Version.Notes is
                        (Path  => E.Path,
                         Id    => E.Id,
                         Mode  => E.Mode,
-                        Stage => 0));
+                        Stage => 0, Skip_Worktree => False));
                end if;
             end loop;
          end;
@@ -50,10 +50,30 @@ package body Version.Notes is
       Commit  : Version.Objects.Hex_Object_Id;
       Message : String)
    is
+      --  git normalises a note message: trailing blank lines / whitespace are
+      --  stripped and exactly one trailing newline is ensured (internal blank
+      --  lines are kept), so the note blob ends in a single "\n" and matches
+      --  git's note object byte-for-byte.
+      function Cleanup (Text : String) return String is
+         Last : Natural := Text'Last;
+      begin
+         while Last >= Text'First
+           and then (Text (Last) = ' ' or else Text (Last) = ASCII.HT
+                     or else Text (Last) = ASCII.LF
+                     or else Text (Last) = ASCII.CR)
+         loop
+            Last := Last - 1;
+         end loop;
+         if Last < Text'First then
+            return "";
+         end if;
+         return Text (Text'First .. Last) & ASCII.LF;
+      end Cleanup;
+
       Entries : Version.Staging.Index_Entry_Vectors.Vector :=
         Notes_Tree_Entries (Repo);
       Blob    : constant Version.Objects.Hex_Object_Id :=
-        Version.Write.Write_Blob (Repo, Message);
+        Version.Write.Write_Blob (Repo, Cleanup (Message));
       Parents : Version.Objects.Object_Id_Vectors.Vector;
       Old     : Unbounded_String;
    begin
@@ -62,7 +82,7 @@ package body Version.Notes is
          (Path  => To_Unbounded_String (To_String (Commit)),
           Id    => Blob,
           Mode  => To_Unbounded_String ("100644"),
-          Stage => 0));
+          Stage => 0, Skip_Worktree => False));
       Version.Staging.Sort_By_Path (Entries);
 
       if Version.Refs.Ref_Exists (Repo, Notes_Ref) then

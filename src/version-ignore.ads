@@ -37,6 +37,16 @@ package Version.Ignore is
       Is_Directory  : Boolean)
       return Match_Result;
 
+   --  git's wildmatch with pathname semantics: `*`, `?` and `[...]` do not
+   --  cross a '/', `**` does.  `.gitattributes` matches with exactly this,
+   --  so the attribute engine borrows it rather than reimplementing it.
+   --  (Note this is the raw glob -- it carries none of gitignore's rules
+   --  about directories and their contents.)
+   function Wildcard_Matches
+     (Pattern : String;
+      Text    : String)
+      return Boolean;
+
 private
 
    type Rule is record

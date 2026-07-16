@@ -352,6 +352,55 @@ package body Version.Tar is
       end if;
    end Add_File;
 
+   procedure Add_Pax_Global_Header
+     (Writer  : in out Tar_Writer;
+      Comment : String)
+   is
+      Field : constant String :=
+        "comment=" & Comment & Character'Val (10);
+
+      --  A pax record is "<len> <field>" where <len> is the total record
+      --  length in decimal, including its own digits -- solve the self-
+      --  reference by iterating to a fixed point.
+      function Dec (N : Natural) return String is
+         S : constant String := Natural'Image (N);
+      begin
+         return S (S'First + 1 .. S'Last);  --  drop the leading space
+      end Dec;
+
+      function Record_Text return String is
+         N : Natural := Field'Length + 1;
+      begin
+         loop
+            declare
+               Candidate : constant String := Dec (N) & " " & Field;
+            begin
+               if Candidate'Length = N then
+                  return Candidate;
+               end if;
+               N := Candidate'Length;
+            end;
+         end loop;
+      end Record_Text;
+
+      Content : constant String := Record_Text;
+      Pad     : constant Natural :=
+        (if Content'Length mod Block_Size = 0
+         then 0
+         else Block_Size - (Content'Length mod Block_Size));
+   begin
+      Write_Header
+        (Writer       => Writer,
+         Archive_Path => "pax_global_header",
+         Size         => Content'Length,
+         Mode         => 8#666#,
+         Typeflag     => 'g');
+      Write_String (Writer.File, Content);
+      if Pad > 0 then
+         Write_String (Writer.File, String'(1 .. Pad => Character'Val (0)));
+      end if;
+   end Add_Pax_Global_Header;
+
    procedure Add_Directory
      (Writer       : in out Tar_Writer;
       Archive_Path : String)

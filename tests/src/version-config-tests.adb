@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
 with AUnit.Assertions;
 with AUnit.Test_Cases;
@@ -609,7 +610,7 @@ package body Version.Config.Tests is
               & Character'Val (10)
               & "remote.origin.fetch"
               & Character'Val (10)
-              & "remote.origin.tagOpt"
+              & "remote.origin.tagopt"
               & Character'Val (10),
             "config set must keep deterministic flattened key order");
 
@@ -737,9 +738,173 @@ package body Version.Config.Tests is
          raise;
    end Config_Worktree_Write_Targets_Worktree_File;
 
+   procedure Config_Follows_Include_And_IncludeIf
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF  : constant Character := Character'Val (10);
+      HT  : constant Character := Character'Val (9);
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Git_Dir : constant String := Version.Test_Support.Join (Root, ".git");
+   begin
+      Version.Init.Init (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      --  Include targets live beside .git/config; relative include paths are
+      --  resolved against that directory.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Git_Dir, "shared.cfg"),
+         "[user]" & LF & HT & "name = SharedName" & LF
+         & "[core]" & LF & HT & "editor = vim" & LF);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Git_Dir, "ident.cfg"),
+         "[user]" & LF & HT & "email = ident@example.com" & LF);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Git_Dir, "nope.cfg"),
+         "[danger]" & LF & HT & "loaded = yes" & LF);
+
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Git_Dir, "config"),
+         "[user]" & LF & HT & "name = LocalName" & LF
+         & "[include]" & LF & HT & "path = shared.cfg" & LF
+         & "[includeIf ""gitdir:" & Git_Dir & """]" & LF
+         & HT & "path = ident.cfg" & LF
+         & "[includeIf ""gitdir:/does/not/match/**""]" & LF
+         & HT & "path = nope.cfg" & LF);
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Loaded : Boolean := True;
+      begin
+         --  Unconditional include is followed and, appearing after the local
+         --  [user] name, wins under git's last-value semantics.
+         Assert
+           (Version.Config.Get_Value (Repo, "user.name") = "SharedName",
+            "unconditional [include] must be followed (last value wins)");
+         Assert
+           (Version.Config.Get_Value (Repo, "core.editor") = "vim",
+            "keys from an included file must be visible");
+
+         --  Matching includeIf gitdir condition pulls in ident.cfg.
+         Assert
+           (Version.Config.Get_Value (Repo, "user.email")
+            = "ident@example.com",
+            "matching [includeIf gitdir:] must be followed");
+
+         --  The directive itself stays a readable key (git keeps include.path).
+         Assert
+           (Version.Config.Get_Value (Repo, "include.path") = "shared.cfg",
+            "the include directive must remain a readable config key");
+
+         --  A non-matching condition must NOT load its file.
+         begin
+            declare
+               Ignore : constant String :=
+                 Version.Config.Get_Value (Repo, "danger.loaded");
+            begin
+               pragma Unreferenced (Ignore);
+            end;
+         exception
+            when Ada.IO_Exceptions.Data_Error =>
+               Loaded := False;
+         end;
+         Assert
+           (not Loaded,
+            "a non-matching [includeIf] must not load its target file");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Config_Follows_Include_And_IncludeIf;
+
+   procedure Config_Reads_Global_Scope
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF  : constant Character := Character'Val (10);
+      HT  : constant Character := Character'Val (9);
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Git_Dir : constant String := Version.Test_Support.Join (Root, ".git");
+      Global  : constant String := Version.Test_Support.Join (Root, "global");
+
+      Had_Global : constant Boolean :=
+        Ada.Environment_Variables.Exists ("GIT_CONFIG_GLOBAL");
+      Old_Global : constant String :=
+        (if Had_Global
+         then Ada.Environment_Variables.Value ("GIT_CONFIG_GLOBAL") else "");
+
+      procedure Restore_Env is
+      begin
+         if Had_Global then
+            Ada.Environment_Variables.Set ("GIT_CONFIG_GLOBAL", Old_Global);
+         else
+            Ada.Environment_Variables.Clear ("GIT_CONFIG_GLOBAL");
+         end if;
+      end Restore_Env;
+   begin
+      Version.Init.Init (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Version.Test_Support.Write_Text_File
+        (Global,
+         "[user]" & LF & HT & "name = GlobalName" & LF
+         & HT & "email = global@example.com" & LF);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Git_Dir, "config"),
+         "[user]" & LF & HT & "email = local@example.com" & LF);
+
+      --  GIT_CONFIG_NOSYSTEM is pinned by the test harness; point the global
+      --  scope at our fixture for the duration of the check.
+      Ada.Environment_Variables.Set ("GIT_CONFIG_GLOBAL", Global);
+      begin
+         declare
+            Repo : constant Version.Repository.Repository_Handle :=
+              Version.Repository.Open;
+         begin
+            --  A key present only in global config resolves.
+            Assert
+              (Version.Config.Get_Value (Repo, "user.name") = "GlobalName",
+               "global config must be read for the effective config");
+            --  Local config overrides global (read later, last value wins).
+            Assert
+              (Version.Config.Get_Value (Repo, "user.email")
+               = "local@example.com",
+               "local config must override global config");
+         end;
+      exception
+         when others =>
+            Restore_Env;
+            raise;
+      end;
+
+      Restore_Env;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Restore_Env;
+         if Ada.Directories.Current_Directory /= Old_Dir then
+            Ada.Directories.Set_Directory (Old_Dir);
+         end if;
+         raise;
+   end Config_Reads_Global_Scope;
+
    overriding
    procedure Register_Tests (T : in out Test_Case) is
    begin
+      Register_Routine
+        (T,
+         Config_Follows_Include_And_IncludeIf'Access,
+         "Config: [include] and [includeIf gitdir:] are followed");
+      Register_Routine
+        (T,
+         Config_Reads_Global_Scope'Access,
+         "Config: effective read includes global scope, local overrides");
       Register_Routine
         (T,
          Config_Worktree_Config_Overrides_Common'Access,

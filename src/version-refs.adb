@@ -207,6 +207,18 @@ package body Version.Refs is
                    (Version.Transport.Local.Read_First_Line (Ref_Path),
                     Ada.Strings.Both);
             begin
+               --  Follow a loose symbolic ref (e.g. refs/remotes/*/HEAD),
+               --  just as the reftable branch above resolves Ref_Symref.
+               if Id_Text'Length > 5
+                 and then Id_Text (Id_Text'First .. Id_Text'First + 4) = "ref: "
+               then
+                  return Resolve_Ref
+                    (Repo,
+                     Ada.Strings.Fixed.Trim
+                       (Id_Text (Id_Text'First + 5 .. Id_Text'Last),
+                        Ada.Strings.Both));
+               end if;
+
                if not Version.Objects.Is_Valid_Hex_Object_Id (Id_Text) then
                   raise Ada.IO_Exceptions.Data_Error
                     with "invalid ref object id: " & Name;

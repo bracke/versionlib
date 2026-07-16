@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded;
@@ -460,10 +461,73 @@ package body Version.Windows_Portability.Tests is
          "Windows-invalid branch filename character must be rejected");
    end Ref_Names_Reject_Windows_Filesystem_Components;
 
+   --  On Windows, a fully-qualified path of >= MAX_PATH (260) characters must
+   --  be given git-for-Windows's "\\?\" extended-length prefix. Forced here by
+   --  making Version.Platform report Windows via the OS environment variable.
+   procedure Long_Windows_Path_Gets_Extended_Length_Prefix
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Had_OS    : constant Boolean := Ada.Environment_Variables.Exists ("OS");
+      Old_OS    : constant String :=
+        (if Had_OS then Ada.Environment_Variables.Value ("OS") else "");
+      Long_Tail : constant String (1 .. 300) := [others => 'a'];
+      Prefix    : constant String := "\\?\";
+
+      procedure Restore is
+      begin
+         if Had_OS then
+            Ada.Environment_Variables.Set ("OS", Old_OS);
+         else
+            Ada.Environment_Variables.Clear ("OS");
+         end if;
+      end Restore;
+
+      function Starts (S, P : String) return Boolean is
+        (S'Length >= P'Length
+         and then S (S'First .. S'First + P'Length - 1) = P);
+   begin
+      Ada.Environment_Variables.Set ("OS", "windows_nt");
+      begin
+         --  Short absolute path: separators converted, no prefix.
+         Assert
+           (Version.Files.To_Native_Path ("C:/tmp/x") = "C:\tmp\x",
+            "a short Windows path keeps its conventional form");
+
+         --  Long absolute drive path: "\\?\C:\...".
+         Assert
+           (Starts
+              (Version.Files.To_Native_Path ("C:/" & Long_Tail),
+               Prefix & "C:\"),
+            "a long absolute drive path gets the \\?\ prefix");
+
+         --  Long UNC path: "\\?\UNC\server\share\...".
+         Assert
+           (Starts
+              (Version.Files.To_Native_Path ("//server/share/" & Long_Tail),
+               Prefix & "UNC\server\share\"),
+            "a long UNC path gets the \\?\UNC\ prefix");
+
+         --  Long RELATIVE path: never prefixed (it is not fully qualified).
+         Assert
+           (not Starts
+                  (Version.Files.To_Native_Path ("sub/" & Long_Tail), Prefix),
+            "a long relative path is not extended-length prefixed");
+      exception
+         when others =>
+            Restore;
+            raise;
+      end;
+      Restore;
+   end Long_Windows_Path_Gets_Extended_Length_Prefix;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
    begin
+      Register_Routine
+        (T, Long_Windows_Path_Gets_Extended_Length_Prefix'Access,
+         "WindowsPath: long paths get the \\?\ extended-length prefix");
       Register_Routine (T, Drive_Absolute_Recognized'Access,
                         "WindowsPath: drive absolute recognized");
       Register_Routine (T, Backslashes_Normalize'Access,

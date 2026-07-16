@@ -91,7 +91,7 @@ package body Version.Move is
          (Path  => To_Unbounded_String (Dst_Norm),
           Id    => Src_Entry.Id,
           Mode  => Src_Entry.Mode,
-          Stage => 0));
+          Stage => 0, Skip_Worktree => False));
       Version.Staging.Sort_By_Path (Entries);
       Version.Staging.Write (Repo, Entries);
    end Move_Path;

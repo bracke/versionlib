@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -33,6 +34,55 @@ package body Version.Write.Tests is
       & "oid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       & Character'Val (10)
       & "size 123456");
+
+   --  Build a tree from explicit, unsorted entries and confirm the id equals
+   --  the known `git mktree` value (entries a=hello, b=world). This pins both
+   --  git tree-order sorting and the object serialisation/hash.
+   procedure Write_Tree_Matches_Git
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      LF : constant Character := Character'Val (10);
+   begin
+      Version.Init.Init (Root);
+      Version.Git_Fixtures.Run (Root, "git config gc.auto 0");
+      Ada.Directories.Set_Directory (Root);
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Hello : constant Hex_Object_Id :=
+           Version.Write.Write_Blob (Repo, "hello" & LF);
+         World : constant Hex_Object_Id :=
+           Version.Write.Write_Blob (Repo, "world" & LF);
+         Entries : Tree_Entry_Vectors.Vector;
+      begin
+         --  Deliberately out of order: Write_Tree must sort b after a.
+         Entries.Append
+           (Tree_Entry'
+              (Path => Ada.Strings.Unbounded.To_Unbounded_String ("b"),
+               Id   => World, Kind => Tree_Blob,
+               Mode => Ada.Strings.Unbounded.To_Unbounded_String ("100644")));
+         Entries.Append
+           (Tree_Entry'
+              (Path => Ada.Strings.Unbounded.To_Unbounded_String ("a"),
+               Id   => Hello, Kind => Tree_Blob,
+               Mode => Ada.Strings.Unbounded.To_Unbounded_String ("100644")));
+
+         Assert
+           (To_String (Version.Write.Write_Tree (Repo, Entries))
+            = "87c9da4bbac768329fcff3d3fc80964f5f574e02",
+            "Write_Tree matches git mktree oid");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Write_Tree_Matches_Git;
 
    procedure Save_Root_File_As_Git_Commit
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1014,6 +1064,96 @@ package body Version.Write.Tests is
          raise;
    end Save_Amend_Appends_Reflog_Entry;
 
+   --  Regression: Save must honour commit.gpgSign (so a plain `save` produces a
+   --  signed commit when configured), Sign_Force must sign regardless, and
+   --  Sign_Disable must override the config. A fake gpg on PATH stands in for a
+   --  real key so the suite stays self-contained.
+   procedure Save_Honours_Commit_Signing
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      LF : constant Character := Character'Val (10);
+      Had_Path : constant Boolean := Ada.Environment_Variables.Exists ("PATH");
+      Old_Path : constant String :=
+        (if Had_Path then Ada.Environment_Variables.Value ("PATH") else "");
+      Bin_Dir : constant String := Version.Test_Support.Join (Root, "fake-bin");
+
+      function HEAD_Is_Signed return Boolean is
+      begin
+         --  git cat-file exits 0 and grep finds the header only when signed.
+         Version.Git_Fixtures.Run
+           (Root,
+            "git cat-file commit HEAD"
+            & " | grep -q '^gpgsig -----BEGIN PGP SIGNATURE-----'");
+         return True;
+      exception
+         when others =>
+            return False;
+      end HEAD_Is_Signed;
+   begin
+      Version.Init.Init (Root);
+      Version.Git_Fixtures.Run (Root, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Root, "git config user.name Test");
+      Version.Git_Fixtures.Run (Root, "git config gc.auto 0");
+      Ada.Directories.Set_Directory (Root);
+
+      if not Ada.Directories.Exists (Bin_Dir) then
+         Ada.Directories.Create_Directory (Bin_Dir);
+      end if;
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Bin_Dir, "gpg"),
+         "#!/bin/sh" & LF
+         & "out=" & LF
+         & "while [ $# -gt 0 ]; do" & LF
+         & "  if [ ""$1"" = ""--output"" ]; then shift; out=$1; fi" & LF
+         & "  shift" & LF
+         & "done" & LF
+         & "cat > ""$out"" <<'EOF'" & LF
+         & "-----BEGIN PGP SIGNATURE-----" & LF & LF
+         & "fake-signature" & LF
+         & "-----END PGP SIGNATURE-----" & LF
+         & "EOF" & LF);
+      Version.Git_Fixtures.Run (Root, "chmod +x fake-bin/gpg");
+      Ada.Environment_Variables.Set ("PATH", Bin_Dir & ":" & Old_Path);
+
+      --  (1) commit.gpgSign=true -> a plain Save signs.
+      Version.Git_Fixtures.Run (Root, "git config commit.gpgSign true");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"), "a" & LF);
+      Version.Git_Fixtures.Run (Root, "git add a.txt");
+      Version.Write.Save ("configured signing");
+      Assert (HEAD_Is_Signed,
+              "commit.gpgSign=true must make a plain save sign the commit");
+
+      --  (2) Sign_Disable overrides the config.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"), "b" & LF);
+      Version.Git_Fixtures.Run (Root, "git add a.txt");
+      Version.Write.Save ("disabled override", Sign => Version.Write.Sign_Disable);
+      Assert (not HEAD_Is_Signed,
+              "--no-gpg-sign (Sign_Disable) must override commit.gpgSign");
+
+      --  (3) Sign_Force signs even with the config off.
+      Version.Git_Fixtures.Run (Root, "git config commit.gpgSign false");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"), "c" & LF);
+      Version.Git_Fixtures.Run (Root, "git add a.txt");
+      Version.Write.Save ("forced signing", Sign => Version.Write.Sign_Force);
+      Assert (HEAD_Is_Signed, "-S (Sign_Force) must sign regardless of config");
+
+      Ada.Environment_Variables.Set ("PATH", Old_Path);
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         if Had_Path then
+            Ada.Environment_Variables.Set ("PATH", Old_Path);
+         end if;
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Save_Honours_Commit_Signing;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
@@ -1022,6 +1162,11 @@ package body Version.Write.Tests is
         (T,
          Save_Root_File_As_Git_Commit'Access,
          "Save: root-level staged file creates Git-readable commit");
+
+      Register_Routine
+        (T,
+         Save_Honours_Commit_Signing'Access,
+         "Save: honours commit.gpgSign / -S / --no-gpg-sign");
 
       Register_Routine
         (T,
@@ -1092,6 +1237,10 @@ package body Version.Write.Tests is
         (T,
          Save_HEAD_Reflog_Lock_Preserves_Detached_State'Access,
          "Save: HEAD reflog lock preserves detached state");
+
+      Register_Routine
+        (T, Write_Tree_Matches_Git'Access,
+         "Write_Tree: explicit tree matches git mktree oid");
 
    end Register_Tests;
 

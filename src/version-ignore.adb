@@ -779,6 +779,15 @@ package body Version.Ignore is
       end;
    end Add_Rule;
 
+   function Wildcard_Matches
+     (Pattern : String;
+      Text    : String)
+      return Boolean
+   is
+   begin
+      return Glob_Match (Pattern => Pattern, Text => Text);
+   end Wildcard_Matches;
+
    function Strip_UTF8_BOM (Line : String) return String is
    begin
       if Line'Length >= 3

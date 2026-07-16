@@ -265,10 +265,13 @@ package body Version.Upload_Pack.Tests is
 
       Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
       Assert (Status = Version.Pkt_Line.Ok, "filtered want packet should parse");
+      --  The `filter` capability must be advertised in the want line, else
+      --  upload-pack rejects the following `filter` command and sends no pack.
       Assert
         (To_String (Payload (Payload'First .. Last))
-         = "want " & To_String (Main_Id) & " side-band-64k ofs-delta agent=version" & LF,
-         "filtered request should start with want capabilities");
+         = "want " & To_String (Main_Id)
+           & " side-band-64k ofs-delta filter agent=version" & LF,
+         "filtered want line must advertise the filter capability");
 
       Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
       Assert (Status = Version.Pkt_Line.Ok, "filter packet should parse");
@@ -512,6 +515,97 @@ package body Version.Upload_Pack.Tests is
               "deepen request should flush after deepen");
    end Builds_Depth_Want_Request;
 
+   procedure Builds_Deepen_Relative_Want_Request
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Boundary : Version.Objects.Object_Id_Vectors.Vector;
+   begin
+      Boundary.Append (Tag_Id);
+      declare
+         Request : constant Stream_Element_Array :=
+           Version.Upload_Pack.Build_Want_Request
+             (Want_Id      => Main_Id,
+              Depth        => 2,
+              Include_Tag  => False,
+              Relative     => True,
+              Have_Shallow => Boundary);
+         Parser  : Version.Pkt_Line.Parser;
+         Kind    : Version.Pkt_Line.Packet_Kind;
+         Payload : Stream_Element_Array (1 .. 256);
+         Last    : Stream_Element_Offset;
+         Status  : Version.Pkt_Line.Parse_Status;
+      begin
+         Version.Pkt_Line.Feed (Parser, Request);
+
+         Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
+         Assert (Status = Version.Pkt_Line.Ok, "want packet should parse");
+         Assert
+           (To_String (Payload (Payload'First .. Last))
+            = "want " & To_String (Main_Id)
+              & " side-band-64k ofs-delta deepen-relative agent=version" & LF,
+            "deepen-relative want advertises the deepen-relative capability");
+
+         Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
+         Assert (Status = Version.Pkt_Line.Ok, "shallow packet should parse");
+         Assert
+           (To_String (Payload (Payload'First .. Last))
+            = "shallow " & To_String (Tag_Id) & LF,
+            "the existing shallow boundary is echoed to the server");
+
+         Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
+         Assert (Status = Version.Pkt_Line.Ok, "deepen packet should parse");
+         Assert
+           (To_String (Payload (Payload'First .. Last)) = "deepen 2" & LF,
+            "the relative deepen count follows the shallow line");
+      end;
+   end Builds_Deepen_Relative_Want_Request;
+
+   procedure Builds_Unshallow_Want_Request
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Boundary : Version.Objects.Object_Id_Vectors.Vector;
+   begin
+      Boundary.Append (Main_Id);
+      declare
+         Request : constant Stream_Element_Array :=
+           Version.Upload_Pack.Build_Want_Request
+             (Want_Id      => Main_Id,
+              Depth        => Positive'Last,
+              Have_Shallow => Boundary);
+         Parser  : Version.Pkt_Line.Parser;
+         Kind    : Version.Pkt_Line.Packet_Kind;
+         Payload : Stream_Element_Array (1 .. 256);
+         Last    : Stream_Element_Offset;
+         Status  : Version.Pkt_Line.Parse_Status;
+      begin
+         Version.Pkt_Line.Feed (Parser, Request);
+
+         Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
+         Assert (Status = Version.Pkt_Line.Ok, "want packet should parse");
+         Assert
+           (To_String (Payload (Payload'First .. Last))
+            = "want " & To_String (Main_Id)
+              & " side-band-64k ofs-delta agent=version" & LF,
+            "unshallow does not request deepen-relative");
+
+         Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
+         Assert (Status = Version.Pkt_Line.Ok, "shallow packet should parse");
+         Assert
+           (To_String (Payload (Payload'First .. Last))
+            = "shallow " & To_String (Main_Id) & LF,
+            "unshallow echoes the current shallow boundary");
+
+         Status := Version.Pkt_Line.Next (Parser, Kind, Payload, Last);
+         Assert (Status = Version.Pkt_Line.Ok, "deepen packet should parse");
+         Assert
+           (To_String (Payload (Payload'First .. Last))
+            = "deepen 2147483647" & LF,
+            "unshallow requests the maximum depth");
+      end;
+   end Builds_Unshallow_Want_Request;
+
    procedure Parses_Shallow_And_Unshallow_Response
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -599,6 +693,16 @@ package body Version.Upload_Pack.Tests is
         (T,
          Builds_Depth_Want_Request'Access,
          "Upload_Pack: builds depth want request");
+
+      Register_Routine
+        (T,
+         Builds_Deepen_Relative_Want_Request'Access,
+         "Upload_Pack: deepen-relative want request (fetch --deepen)");
+
+      Register_Routine
+        (T,
+         Builds_Unshallow_Want_Request'Access,
+         "Upload_Pack: unshallow want request (fetch --unshallow)");
 
       Register_Routine
         (T,

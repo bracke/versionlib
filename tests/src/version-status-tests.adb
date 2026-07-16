@@ -548,7 +548,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("z.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '1']),
             Mode => To_Unbounded_String ("100644"),
-            Stage => 0));
+            Stage => 0, Skip_Worktree => False));
 
       Version.Staging.Replace_Entry
         (Entries,
@@ -556,7 +556,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("a.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '2']),
             Mode => To_Unbounded_String ("100644"),
-            Stage => 0));
+            Stage => 0, Skip_Worktree => False));
 
       Version.Staging.Replace_Entry
         (Entries,
@@ -564,7 +564,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("m.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '3']),
             Mode => To_Unbounded_String ("100644"),
-            Stage => 0));
+            Stage => 0, Skip_Worktree => False));
 
       Version.Staging.Replace_Entry
         (Entries,
@@ -572,7 +572,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("a.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '4']),
             Mode => To_Unbounded_String ("100755"),
-            Stage => 0));
+            Stage => 0, Skip_Worktree => False));
 
       Assert (Natural (Entries.Length) = 3, "replace must not duplicate an existing path");
       Assert
@@ -731,6 +731,14 @@ package body Version.Status.Tests is
       Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
       Version.Test_Support.Make_Directory
         (Version.Test_Support.Join (Root, "docs"));
+      --  docs/ must hold something tracked, or git (and now version) collapses
+      --  a wholly-untracked directory to `docs/`, which no `docs/**/*.md`
+      --  pathspec can match -- verified against `git status --porcelain`.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "docs/kept.txt"), "kept" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add docs/kept.txt");
+      Version.Git_Fixtures.Run
+        (Root, "git -c user.name=T -c user.email=t@t commit -q -m docs");
       Version.Test_Support.Write_Text_File
         (Version.Test_Support.Join (Root, "docs/readme.md"), "doc" & Character'Val (10));
       Version.Test_Support.Write_Text_File
@@ -984,7 +992,7 @@ package body Version.Status.Tests is
          Text   : constant String := Version.Status.Branch_Status_Text (Result);
       begin
          Assert
-           (Ada.Strings.Fixed.Index (Text, "? A new.txt") /= 0,
+           (Ada.Strings.Fixed.Index (Text, "?? new.txt") /= 0,
             "status --branch must append the same short untracked entries");
       end;
 

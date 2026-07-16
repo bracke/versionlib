@@ -1,16 +1,19 @@
 with Version.Repository;
 
---  `git apply`: apply a unified diff to the working tree. Supports modify,
---  create (--- /dev/null) and delete (+++ /dev/null) file patches with -p1
---  path stripping and strict context verification. The patch is parsed and
---  validated in full before any file is written (atomic; --check stops here).
---
---  Not yet supported: -R (reverse), -p other than 1, --index/--cached, fuzz,
---  binary patches, and pure rename/mode-only patches.
+--  `git apply`: apply a unified diff to the working tree and/or index.
+--  Supports modify, create (--- /dev/null), delete (+++ /dev/null),
+--  pure rename and mode-only patches; -R (reverse), -p<n> path stripping,
+--  --index/--cached, whitespace-tolerant context matching (fuzz), and git
+--  binary patches (literal/delta, base85). The patch is parsed and validated
+--  in full before any file is written (atomic; --check stops here).
 package Version.Apply is
 
    type Apply_Options is record
-      Check : Boolean := False;  --  --check: validate only, change nothing
+      Check         : Boolean := False;  --  --check: validate only
+      Reverse_Patch : Boolean := False;  --  -R / --reverse
+      Strip         : Natural := 1;      --  -p<n> (leading path components)
+      Update_Index  : Boolean := False;  --  --index (working tree + index)
+      Cached        : Boolean := False;  --  --cached (index only)
    end record;
 
    procedure Apply_Patch

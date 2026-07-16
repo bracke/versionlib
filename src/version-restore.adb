@@ -742,7 +742,7 @@ package body Version.Restore is
                     (Path => To_Unbounded_String (Safe_Path),
                      Id   => Tree_Item.Id,
                      Mode => Tree_Item.Mode,
-                     Stage => 0));
+                     Stage => 0, Skip_Worktree => False));
             end;
          end loop;
       end if;
@@ -918,7 +918,7 @@ package body Version.Restore is
                        (Path => To_Unbounded_String (Item_Path),
                         Id   => Item.Id,
                         Mode => Item.Mode,
-                        Stage => 0));
+                        Stage => 0, Skip_Worktree => False));
                   Matched := Matched + 1;
                end if;
             end;
@@ -1091,7 +1091,7 @@ package body Version.Restore is
                  (Path => To_Unbounded_String (Normalized),
                   Id   => Tree_Item.Id,
                   Mode => Tree_Item.Mode,
-                  Stage => 0));
+                  Stage => 0, Skip_Worktree => False));
          end;
       end if;
 
@@ -1135,7 +1135,7 @@ package body Version.Restore is
                  (Path => To_Unbounded_String (Normalized),
                   Id   => Tree_Item.Id,
                   Mode => Tree_Item.Mode,
-                  Stage => 0));
+                  Stage => 0, Skip_Worktree => False));
          end;
       end if;
 
@@ -1209,5 +1209,63 @@ package body Version.Restore is
    begin
       Restore_Working_Tree (Repo);
    end Restore_Current_Commit;
+
+   procedure Apply_Sparse_Skip_Worktree
+     (Repo : Version.Repository.Repository_Handle)
+   is
+      Items   : Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+      Enabled : constant Boolean := Version.Sparse.Enabled (Repo);
+      Changed : Boolean := False;
+   begin
+      if Items.Is_Empty then
+         return;
+      end if;
+
+      for I in Items.First_Index .. Items.Last_Index loop
+         declare
+            E    : Version.Staging.Index_Entry := Items.Element (I);
+            Want : constant Boolean :=
+              Enabled
+              and then E.Stage = 0
+              and then not Version.Sparse.Included
+                             (Repo, To_String (E.Path));
+         begin
+            if E.Skip_Worktree /= Want then
+               E.Skip_Worktree := Want;
+               Items.Replace_Element (I, E);
+               Changed := True;
+            end if;
+         end;
+      end loop;
+
+      if Changed then
+         Version.Staging.Write (Repo, Items);
+      end if;
+   end Apply_Sparse_Skip_Worktree;
+
+   procedure Clear_Skip_Worktree
+     (Repo : Version.Repository.Repository_Handle)
+   is
+      Items   : Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+      Changed : Boolean := False;
+   begin
+      for I in Items.First_Index .. Items.Last_Index loop
+         if Items.Element (I).Skip_Worktree then
+            declare
+               E : Version.Staging.Index_Entry := Items.Element (I);
+            begin
+               E.Skip_Worktree := False;
+               Items.Replace_Element (I, E);
+               Changed := True;
+            end;
+         end if;
+      end loop;
+
+      if Changed then
+         Version.Staging.Write (Repo, Items);
+      end if;
+   end Clear_Skip_Worktree;
 
 end Version.Restore;

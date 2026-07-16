@@ -3,8 +3,11 @@ with Ada.Strings.Unbounded;
 
 with Version.Objects; use Version.Objects;
 with Version.Object_Cache;
+with Version.Revisions;
 with Version.Shallow_Cache;
 with Version.Ref_Cache;
+with Version.Pretty_Format;
+with Version.Diff;
 with Version.Verify;
 
 package body Version.Log is
@@ -109,6 +112,118 @@ package body Version.Log is
       return Author (Last_GT + 2 .. Author'Last);
    end Author_Date;
 
+   function Format_Git_Date (Raw : String) return String is
+      --  Raw is "<epoch-seconds> <±HHMM>" from a commit author line. Render
+      --  git's default log format: "Www Mmm D HH:MM:SS YYYY ±HHMM", with the
+      --  day space-padded to width 2 (strftime %e) and the wall clock in the
+      --  commit's own timezone.
+      Weekdays : constant array (0 .. 6) of String (1 .. 3) :=
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      Months   : constant array (1 .. 12) of String (1 .. 3) :=
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      Sep : Natural := 0;
+   begin
+      for I in Raw'Range loop
+         if Raw (I) = ' ' then
+            Sep := I;
+            exit;
+         end if;
+      end loop;
+      if Sep = 0 then
+         return Raw;
+      end if;
+
+      declare
+         Tz      : constant String := Raw (Sep + 1 .. Raw'Last);
+         Epoch   : Long_Long_Integer;
+         Off_Sec : Long_Long_Integer := 0;
+      begin
+         begin
+            Epoch := Long_Long_Integer'Value (Raw (Raw'First .. Sep - 1));
+         exception
+            when others =>
+               return Raw;
+         end;
+
+         if Tz'Length = 5
+           and then (Tz (Tz'First) = '+' or else Tz (Tz'First) = '-')
+         then
+            begin
+               Off_Sec :=
+                 ((Long_Long_Integer'Value (Tz (Tz'First + 1 .. Tz'First + 2))
+                   * 60)
+                  + Long_Long_Integer'Value (Tz (Tz'First + 3 .. Tz'First + 4)))
+                 * 60;
+               if Tz (Tz'First) = '-' then
+                  Off_Sec := -Off_Sec;
+               end if;
+            exception
+               when others =>
+                  return Raw;
+            end;
+         end if;
+
+         declare
+            T         : constant Long_Long_Integer := Epoch + Off_Sec;
+            Day_Count : Long_Long_Integer := T / 86_400;
+            Secs      : Long_Long_Integer := T mod 86_400;
+         begin
+            if Secs < 0 then
+               Secs := Secs + 86_400;
+               Day_Count := Day_Count - 1;
+            end if;
+
+            declare
+               Wd  : constant Long_Long_Integer := (Day_Count + 4) mod 7;
+               Z   : constant Long_Long_Integer := Day_Count + 719_468;
+               Era : constant Long_Long_Integer :=
+                 (if Z >= 0 then Z else Z - 146_096) / 146_097;
+               DOE : constant Long_Long_Integer := Z - Era * 146_097;
+               YOE : constant Long_Long_Integer :=
+                 (DOE - DOE / 1_460 + DOE / 36_524 - DOE / 146_096) / 365;
+               Y0  : constant Long_Long_Integer := YOE + Era * 400;
+               DOY : constant Long_Long_Integer :=
+                 DOE - (365 * YOE + YOE / 4 - YOE / 100);
+               MP  : constant Long_Long_Integer := (5 * DOY + 2) / 153;
+               D   : constant Long_Long_Integer := DOY - (153 * MP + 2) / 5 + 1;
+               M   : constant Long_Long_Integer :=
+                 (if MP < 10 then MP + 3 else MP - 9);
+               Y   : constant Long_Long_Integer := Y0 + (if M <= 2 then 1 else 0);
+               HH  : constant Long_Long_Integer := Secs / 3_600;
+               Mn  : constant Long_Long_Integer := (Secs mod 3_600) / 60;
+               Sc  : constant Long_Long_Integer := Secs mod 60;
+
+               function Trim (V : Long_Long_Integer) return String is
+                  S : constant String := Long_Long_Integer'Image (V);
+               begin
+                  return S (S'First + 1 .. S'Last);
+               end Trim;
+
+               function Pad2 (V : Long_Long_Integer) return String is
+                  D2 : constant String := Trim (V);
+               begin
+                  return (if D2'Length = 1 then "0" & D2 else D2);
+               end Pad2;
+
+               --  git's default log date does not pad the day of month
+               --  ("Feb 1", not "Feb  1").
+               function Day_Pad (V : Long_Long_Integer) return String is
+               begin
+                  return Trim (V);
+               end Day_Pad;
+            begin
+               return
+                 Weekdays (Natural (Wd)) & " "
+                 & Months (Natural (M)) & " "
+                 & Day_Pad (D) & " "
+                 & Pad2 (HH) & ":" & Pad2 (Mn) & ":" & Pad2 (Sc) & " "
+                 & Trim (Y) & " " & Tz;
+            end;
+         end;
+      end;
+   end Format_Git_Date;
+
    procedure Append_Line (Result : in out Unbounded_String; Text : String) is
    begin
       Append (Result, Text);
@@ -145,15 +260,6 @@ package body Version.Log is
       end loop;
    end Append_Indented_Message;
 
-   function Short_Id (Id : String) return String is
-   begin
-      if Id'Length > 12 then
-         return Id (Id'First .. Id'First + 11);
-      else
-         return Id;
-      end if;
-   end Short_Id;
-
    function Format_Commit_Oneline_With_Cache
      (Repo      : Version.Repository.Repository_Handle;
       Cache     : in out Version.Object_Cache.Object_Cache;
@@ -162,6 +268,11 @@ package body Version.Log is
       Obj : constant Version.Objects.Git_Object :=
         Version.Object_Cache.Read_Object
           (Repo => Repo, Cache => Cache, Id => Commit_Id);
+      Full : constant String := To_String (Commit_Id);
+      --  git's `log --oneline` abbreviates to the shortest unique prefix,
+      --  floored at 7 (core.abbrev=auto), not a fixed width.
+      Abbrev : constant Natural :=
+        Version.Revisions.Unique_Abbrev_Length (Repo, Commit_Id, 7);
    begin
       if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
          raise Ada.IO_Exceptions.Data_Error
@@ -169,7 +280,7 @@ package body Version.Log is
       end if;
 
       return
-        Short_Id (To_String (Commit_Id))
+        Full (Full'First .. Full'First + Abbrev - 1)
         & " "
         & Version.Objects.Commit_Message_First_Line (Obj);
    end Format_Commit_Oneline_With_Cache;
@@ -211,7 +322,8 @@ package body Version.Log is
          end;
       end if;
       Append_Line (Result, "Author: " & Author_Name_Date (Content));
-      Append_Line (Result, "Date:   " & Author_Date (Content));
+      Append_Line
+        (Result, "Date:   " & Format_Git_Date (Author_Date (Content)));
       Append_Line (Result, "");
       Append_Indented_Message (Result, Message);
 
@@ -236,14 +348,21 @@ package body Version.Log is
    function Log_From_Commit
      (Repo           : Version.Repository.Repository_Handle;
       Commit_Id      : Version.Objects.Hex_Object_Id;
-      Show_Signature : Boolean := False) return String
+      Show_Signature : Boolean := False;
+      Max_Count      : Natural := 0;
+      Stat           : Boolean := False;
+      Patch          : Boolean := False;
+      Context        : Natural := 3) return String
    is
       Current : Unbounded_String := To_Unbounded_String (To_String (Commit_Id));
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       Shallow : Version.Shallow_Cache.Shallow_Cache;
+      First   : Boolean := True;
+      Shown   : Natural := 0;
    begin
       while Length (Current) > 0 loop
+         exit when Max_Count > 0 and then Shown = Max_Count;
          declare
             Id_Text : constant String := To_String (Current);
          begin
@@ -265,6 +384,11 @@ package body Version.Log is
                     with "object is not a commit: " & To_String (Current_Id);
                end if;
 
+               if not First then
+                  Append_Line (Result, "");
+               end if;
+               First := False;
+               Shown := Shown + 1;
                Append
                  (Result,
                   Format_Commit_With_Cache
@@ -272,7 +396,34 @@ package body Version.Log is
                      Cache          => Objects,
                      Commit_Id      => Current_Id,
                      Show_Signature => Show_Signature));
-               Append_Line (Result, "");
+               if Stat or else Patch then
+                  --  git's --stat/-p: a blank line, then the diffstat or the
+                  --  patch against the first parent (or the empty tree for a
+                  --  root commit).
+                  declare
+                     Parent : constant String :=
+                       Version.Objects.Commit_Parent_Id (Obj);
+                     Opts : constant Version.Diff.Diff_Options :=
+                       (Stat          => Stat,
+                        Context_Lines => Context,
+                        others        => <>);
+                  begin
+                     Append_Line (Result, "");
+                     if Parent'Length > 0 then
+                        Append
+                          (Result,
+                           Version.Diff.Diff_Commits
+                             (Repo,
+                              Version.Objects.To_Object_Id (Parent),
+                              Current_Id, Opts));
+                     else
+                        Append
+                          (Result,
+                           Version.Diff.Diff_Root_Commit
+                             (Repo, Current_Id, Opts));
+                     end if;
+                  end;
+               end if;
                if Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Current_Id)
                then
                   Current := Null_Unbounded_String;
@@ -290,14 +441,17 @@ package body Version.Log is
 
    function Log_Oneline_From_Commit
      (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id) return String
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Max_Count : Natural := 0) return String
    is
       Current : Unbounded_String := To_Unbounded_String (To_String (Commit_Id));
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       Shallow : Version.Shallow_Cache.Shallow_Cache;
+      Shown   : Natural := 0;
    begin
       while Length (Current) > 0 loop
+         exit when Max_Count > 0 and then Shown = Max_Count;
          declare
             Id_Text : constant String := To_String (Current);
          begin
@@ -319,6 +473,7 @@ package body Version.Log is
                     with "object is not a commit: " & To_String (Current_Id);
                end if;
 
+               Shown := Shown + 1;
                Append_Line
                  (Result,
                   Format_Commit_Oneline_With_Cache
@@ -341,7 +496,11 @@ package body Version.Log is
 
    function Log_Head
      (Repo           : Version.Repository.Repository_Handle;
-      Show_Signature : Boolean := False) return String
+      Show_Signature : Boolean := False;
+      Max_Count      : Natural := 0;
+      Stat           : Boolean := False;
+      Patch          : Boolean := False;
+      Context        : Natural := 3) return String
    is
       Refs    : Version.Ref_Cache.Ref_Cache;
       Current : constant String :=
@@ -357,11 +516,13 @@ package body Version.Log is
       end if;
 
       return Log_From_Commit
-        (Repo, Version.Objects.To_Object_Id (Current), Show_Signature);
+        (Repo, Version.Objects.To_Object_Id (Current), Show_Signature,
+         Max_Count, Stat, Patch, Context);
    end Log_Head;
 
    function Log_Oneline_Head
-     (Repo : Version.Repository.Repository_Handle) return String
+     (Repo      : Version.Repository.Repository_Handle;
+      Max_Count : Natural := 0) return String
    is
       Refs    : Version.Ref_Cache.Ref_Cache;
       Current : constant String :=
@@ -378,7 +539,60 @@ package body Version.Log is
 
       return
         Log_Oneline_From_Commit
-          (Repo, Version.Objects.To_Object_Id (Current));
+          (Repo, Version.Objects.To_Object_Id (Current), Max_Count);
    end Log_Oneline_Head;
+
+   function Log_Formatted_From_Commit
+     (Repo      : Version.Repository.Repository_Handle;
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Format    : String;
+      Terminate_Records : Boolean := True;
+      Max_Count : Natural := 0) return String
+   is
+      LF      : constant Character := Character'Val (10);
+      Current : Unbounded_String := To_Unbounded_String (To_String (Commit_Id));
+      Result  : Unbounded_String;
+      Objects : Version.Object_Cache.Object_Cache;
+      Shallow : Version.Shallow_Cache.Shallow_Cache;
+      First   : Boolean := True;
+      Shown   : Natural := 0;
+   begin
+      while Length (Current) > 0 loop
+         exit when Max_Count > 0 and then Shown = Max_Count;
+         declare
+            Id_Text    : constant String := To_String (Current);
+            Current_Id : constant Version.Objects.Hex_Object_Id :=
+              Version.Objects.To_Object_Id (Id_Text);
+            Obj        : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object
+                (Repo => Repo, Cache => Objects, Id => Current_Id);
+         begin
+            if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "object is not a commit: " & Id_Text;
+            end if;
+
+            if not First and then not Terminate_Records then
+               Append (Result, LF);
+            end if;
+            First := False;
+            Shown := Shown + 1;
+            Append (Result, Version.Pretty_Format.Expand
+                              (Repo, Current_Id, Format));
+            if Terminate_Records then
+               Append (Result, LF);
+            end if;
+
+            if Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Current_Id)
+            then
+               Current := Null_Unbounded_String;
+            else
+               Current := To_Unbounded_String
+                 (Version.Objects.Commit_Parent_Id (Obj));
+            end if;
+         end;
+      end loop;
+      return To_String (Result);
+   end Log_Formatted_From_Commit;
 
 end Version.Log;

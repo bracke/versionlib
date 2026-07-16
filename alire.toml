@@ -19,6 +19,12 @@ httpclient = "^1.0.0"
 zlib = "~0.1.0-dev"
 
 [[depends-on]]
+cryptolib = "~0.1.0-dev"
+
+[[depends-on]]
+regexp = "~0.1.0-dev"
+
+[[depends-on]]
 i18n = "^1.0.0"
 
 [[depends-on]]
@@ -32,6 +38,12 @@ httpclient = { path = "../httpclient" }
 
 [[pins]]
 zlib = { path = "../zlib" }
+
+[[pins]]
+cryptolib = { path = "../cryptolib" }
+
+[[pins]]
+regexp = { path = "../regexp" }
 
 [[pins]]
 i18n = { path = "../i18n" }

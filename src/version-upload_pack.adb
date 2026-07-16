@@ -502,8 +502,11 @@ package body Version.Upload_Pack is
       Filter_Spec : String;
       Include_Tag : Boolean := False) return Stream_Element_Array
    is
+      --  The `filter` capability MUST be advertised in the want line's
+      --  capability list, otherwise upload-pack rejects the following
+      --  `filter <spec>` command line and returns no usable pack.
       Capabilities : constant String :=
-        "side-band-64k ofs-delta"
+        "side-band-64k ofs-delta filter"
         & (if Include_Tag then " include-tag" else "")
         & " agent=version";
 
@@ -556,9 +559,12 @@ package body Version.Upload_Pack is
    end Build_Want_Request;
 
    function Build_Want_Request
-     (Want_Id     : Version.Objects.Hex_Object_Id;
-      Depth       : Positive;
-      Include_Tag : Boolean := False)
+     (Want_Id      : Version.Objects.Hex_Object_Id;
+      Depth        : Positive;
+      Include_Tag  : Boolean := False;
+      Relative     : Boolean := False;
+      Have_Shallow : Version.Objects.Object_Id_Vectors.Vector :=
+        Version.Objects.Object_Id_Vectors.Empty_Vector)
       return Stream_Element_Array
    is
       Depth_Text : constant String :=
@@ -567,6 +573,7 @@ package body Version.Upload_Pack is
       Capabilities : constant String :=
         "side-band-64k ofs-delta"
         & (if Include_Tag then " include-tag" else "")
+        & (if Relative then " deepen-relative" else "")
         & " agent=version";
 
       Want_Line : constant String :=
@@ -575,46 +582,75 @@ package body Version.Upload_Pack is
         & " " & Capabilities
         & LF;
 
+      --  Echo the client's current shallow boundary so the server can send
+      --  only the incremental history when deepening an already-shallow repo.
+      Shallow_Body : Unbounded_String;
+
       Deepen_Line : constant String := "deepen " & Depth_Text & LF;
       Done_Line   : constant String := "done" & LF;
 
       Want   : constant Stream_Element_Array :=
         Version.Pkt_Line.Encode_Data (To_Stream (Want_Line));
-      Deepen : constant Stream_Element_Array :=
-        Version.Pkt_Line.Encode_Data (To_Stream (Deepen_Line));
-      Flush  : constant Stream_Element_Array := Version.Pkt_Line.Encode_Flush;
-      Done   : constant Stream_Element_Array :=
-        Version.Pkt_Line.Encode_Data (To_Stream (Done_Line));
-
-      Result :
-        Stream_Element_Array
-          (1
-           ..
-             Stream_Element_Offset
-               (Want'Length + Deepen'Length + Flush'Length + Done'Length));
-      Pos    : Stream_Element_Offset := Result'First;
    begin
-      for I in Want'Range loop
-         Result (Pos) := Want (I);
-         Pos := Pos + 1;
-      end loop;
+      if not Have_Shallow.Is_Empty then
+         for I in Have_Shallow.First_Index .. Have_Shallow.Last_Index loop
+            Append
+              (Shallow_Body,
+               To_String
+                 (Version.Pkt_Line.Encode_Data
+                    (To_Stream
+                       ("shallow "
+                        & Version.Objects.To_String (Have_Shallow.Element (I))
+                        & LF))));
+         end loop;
+      end if;
 
-      for I in Deepen'Range loop
-         Result (Pos) := Deepen (I);
-         Pos := Pos + 1;
-      end loop;
+      declare
+         Shallow : constant Stream_Element_Array :=
+           To_Stream (To_String (Shallow_Body));
+         Deepen  : constant Stream_Element_Array :=
+           Version.Pkt_Line.Encode_Data (To_Stream (Deepen_Line));
+         Flush   : constant Stream_Element_Array :=
+           Version.Pkt_Line.Encode_Flush;
+         Done    : constant Stream_Element_Array :=
+           Version.Pkt_Line.Encode_Data (To_Stream (Done_Line));
 
-      for I in Flush'Range loop
-         Result (Pos) := Flush (I);
-         Pos := Pos + 1;
-      end loop;
+         Result :
+           Stream_Element_Array
+             (1
+              ..
+                Stream_Element_Offset
+                  (Want'Length + Shallow'Length + Deepen'Length
+                   + Flush'Length + Done'Length));
+         Pos    : Stream_Element_Offset := Result'First;
+      begin
+         for I in Want'Range loop
+            Result (Pos) := Want (I);
+            Pos := Pos + 1;
+         end loop;
 
-      for I in Done'Range loop
-         Result (Pos) := Done (I);
-         Pos := Pos + 1;
-      end loop;
+         for I in Shallow'Range loop
+            Result (Pos) := Shallow (I);
+            Pos := Pos + 1;
+         end loop;
 
-      return Result;
+         for I in Deepen'Range loop
+            Result (Pos) := Deepen (I);
+            Pos := Pos + 1;
+         end loop;
+
+         for I in Flush'Range loop
+            Result (Pos) := Flush (I);
+            Pos := Pos + 1;
+         end loop;
+
+         for I in Done'Range loop
+            Result (Pos) := Done (I);
+            Pos := Pos + 1;
+         end loop;
+
+         return Result;
+      end;
    end Build_Want_Request;
 
    procedure Append_Update

@@ -12,12 +12,14 @@ with Version.Objects;
 with Version.Push.Internal;
 with Version.Receive_Pack;
 with Version.Remotes;
+with Version.Url_Rewrite;
 with Version.Ref_Transaction;
 with Version.Ref_Names;
 with Version.LFS;
 with Version.Refs;
 with Version.Revisions;
 with Version.Config;
+with Version.Tracking;
 with Ada.Characters.Handling;
 with Version.Repository;
 with Version.Tags;
@@ -98,7 +100,10 @@ package body Version.Push is
       if not Items.Is_Empty then
          for I in Items.First_Index .. Items.Last_Index loop
             if To_String (Items.Element (I).Name) = Name then
-               return To_String (Items.Element (I).Url);
+               return Version.Url_Rewrite.Rewrite
+                        (Version.Repository.Open,
+                         To_String (Items.Element (I).Url),
+                         For_Push => True);
             end if;
          end loop;
       end if;
@@ -624,9 +629,63 @@ package body Version.Push is
       Url : constant String := Remote_Url (Remote_Name);
       Local_Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
+      Kind : constant Version.Transport.Transport_Kind :=
+        Version.Transport.Detect_Transport (Url);
+
+      function Advertises
+        (Disc : Version.Receive_Pack.Discovery_Result; Full : String)
+         return Boolean is
+      begin
+         for R of Disc.Refs loop
+            if To_String (R.Name) = Full then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Advertises;
+
+      --  Does the remote advertise this full ref?
+      function Remote_Has (Full : String) return Boolean is
+      begin
+         case Kind is
+            when Version.Transport.Local_Transport =>
+               return Version.Refs.Ref_Exists
+                 (Version.Repository.Open_Git_Dir
+                    (Remote_Git_Dir_For (Remote_Name)), Full);
+            when Version.Transport.Http_Transport =>
+               return Advertises
+                 (Version.Receive_Pack.Discover_Http (Url), Full);
+            when Version.Transport.Ssh_Transport =>
+               return Advertises
+                 (Version.Receive_Pack.Discover_Ssh (Url), Full);
+            when others =>
+               return False;
+         end case;
+      end Remote_Has;
+
+      --  Resolve an unqualified delete target against the remote's refs like
+      --  git: a "refs/"-prefixed name is used verbatim; otherwise prefer a
+      --  matching branch, then a tag. When neither exists fall back to the
+      --  branch form so the delete reports git's "remote ref does not exist".
+      function Resolve_Target return String is
+      begin
+         if Ref_Name'Length >= 5
+           and then Ref_Name (Ref_Name'First .. Ref_Name'First + 4) = "refs/"
+         then
+            return Ref_Name;
+         elsif Remote_Has ("refs/heads/" & Ref_Name) then
+            return "refs/heads/" & Ref_Name;
+         elsif Remote_Has ("refs/tags/" & Ref_Name) then
+            return "refs/tags/" & Ref_Name;
+         else
+            return "refs/heads/" & Ref_Name;
+         end if;
+      end Resolve_Target;
+
+      Resolved : constant String := Resolve_Target;
    begin
       Version.Ref_Names.Require_Remote_Name (Remote_Name);
-      Version.Ref_Names.Require_Ref_Name (Ref_Name);
+      Version.Ref_Names.Require_Ref_Name (Resolved);
 
       Run_Pre_Push_Hook
         (Repo        => Local_Repo,
@@ -643,17 +702,17 @@ package body Version.Push is
                  Version.Repository.Open_Git_Dir (Remote_Git_Dir);
                Tx : Version.Ref_Transaction.Transaction;
             begin
-               if not Version.Refs.Ref_Exists (Remote_Repo, Ref_Name) then
+               if not Version.Refs.Ref_Exists (Remote_Repo, Resolved) then
                   raise Ada.IO_Exceptions.Data_Error
-                    with "remote ref does not exist: " & Ref_Name;
+                    with "remote ref does not exist: " & Resolved;
                end if;
 
                Version.Ref_Transaction.Start (Tx, Remote_Repo);
                Version.Ref_Transaction.Add_Delete
                  (Item         => Tx,
-                  Ref_Name     => Ref_Name,
+                  Ref_Name     => Resolved,
                   Expected_Old =>
-                    To_String (Version.Refs.Resolve_Ref (Remote_Repo, Ref_Name)));
+                    To_String (Version.Refs.Resolve_Ref (Remote_Repo, Resolved)));
                Version.Ref_Transaction.Commit (Tx);
             end;
 
@@ -662,20 +721,61 @@ package body Version.Push is
               (Repo        => Local_Repo,
                Remote_Name => Remote_Name,
                Url         => Url,
-               Ref_Name    => Ref_Name);
+               Ref_Name    => Resolved);
 
          when Version.Transport.Ssh_Transport =>
             Version.Receive_Pack.Delete_Ref_Ssh
               (Repo        => Local_Repo,
                Remote_Name => Remote_Name,
                Url         => Url,
-               Ref_Name    => Ref_Name);
+               Ref_Name    => Resolved);
 
          when Version.Transport.Unsupported_Transport =>
             raise Ada.IO_Exceptions.Data_Error with
               Version.Unsupported.Remote_Url;
       end case;
    end Delete_Ref;
+
+   Scratch_Remote : constant String := "send-pack-tmp";
+
+   procedure Push_Refspec_To
+     (Repository : String;
+      Source     : String;
+      Dest_Ref   : String;
+      Force      : Boolean := False;
+      Run_Hooks  : Boolean := True)
+   is
+      function Known (Name : String) return Boolean is
+      begin
+         return Version.Remotes.Remote_Exists (Name);
+      exception
+         when others =>
+            return False;
+      end Known;
+   begin
+      if Known (Repository) then
+         Push_Refspec (Repository, Source, Dest_Ref, Force, Run_Hooks);
+         return;
+      end if;
+
+      if Known (Scratch_Remote) then
+         Version.Remotes.Delete_Remote (Scratch_Remote);
+      end if;
+
+      Version.Remotes.Add_Remote (Scratch_Remote, Repository);
+
+      begin
+         Push_Refspec (Scratch_Remote, Source, Dest_Ref, Force, Run_Hooks);
+         Version.Remotes.Delete_Remote (Scratch_Remote);
+      exception
+         when others =>
+            if Known (Scratch_Remote) then
+               Version.Remotes.Delete_Remote (Scratch_Remote);
+            end if;
+
+            raise;
+      end;
+   end Push_Refspec_To;
 
    procedure Push_Refspec
      (Remote_Name : String;
@@ -1003,11 +1103,87 @@ package body Version.Push is
          end if;
       end loop;
 
-      if not Found then
-         raise Ada.IO_Exceptions.Data_Error with
-           "no refspec given and remote." & Remote_Name
-           & ".push is not configured";
+      if Found then
+         return;
       end if;
+
+      --  No remote.<name>.push refspec configured: fall back to push.default
+      --  (git's default is "simple"). git precedence is command-line refspec,
+      --  then remote.push (handled above), then push.default.
+      declare
+         Mode : constant String :=
+           (if Version.Config.Has_Key (Repo, "push.default")
+            then Ada.Characters.Handling.To_Lower
+                   (Version.Config.Trim
+                      (Version.Config.Get_Value (Repo, "push.default")))
+            else "simple");
+         Cur  : constant String := Version.Refs.Current_Branch_Name (Repo);
+
+         --  Short branch name of a "refs/heads/<x>" merge ref.
+         function Short (Ref : String) return String is
+           (if Ref'Length > 11
+              and then Ref (Ref'First .. Ref'First + 10) = "refs/heads/"
+            then Ref (Ref'First + 11 .. Ref'Last) else Ref);
+
+         procedure Push_Current is
+         begin
+            Push (Remote_Name => Remote_Name,
+                  Branch_Name => Cur,
+                  Run_Hooks   => Run_Hooks);
+         end Push_Current;
+      begin
+         if Mode = "nothing" then
+            raise Ada.IO_Exceptions.Data_Error with
+              "You didn't specify any refspecs to push, and push.default is"
+              & " ""nothing"".";
+         end if;
+
+         if Version.Refs.Is_Detached (Repo) or else Cur'Length = 0 then
+            raise Ada.IO_Exceptions.Data_Error with
+              "You are not currently on a branch.";
+         end if;
+
+         if Mode = "current" then
+            --  Push the current branch to a same-named branch (created if new).
+            Push_Current;
+
+         elsif Mode = "upstream" or else Mode = "tracking"
+           or else Mode = "simple"
+         then
+            if not Version.Tracking.Has_Upstream (Repo, Cur) then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "The current branch " & Cur & " has no upstream branch.";
+            end if;
+
+            declare
+               Info : constant Version.Tracking.Upstream_Info :=
+                 Version.Tracking.Upstream (Repo, Cur);
+               Up   : constant String := Short (To_String (Info.Merge));
+            begin
+               --  "simple" additionally refuses when the upstream branch name
+               --  differs from the local branch name.
+               if Mode = "simple" and then Up /= Cur then
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "The upstream branch of your current branch does not match"
+                    & " the name of your current branch.";
+               end if;
+
+               if Up = Cur then
+                  Push_Current;
+               else
+                  Push_Refspec
+                    (Remote_Name => Remote_Name,
+                     Source      => Cur,
+                     Dest_Ref    => "refs/heads/" & Up,
+                     Run_Hooks   => Run_Hooks);
+               end if;
+            end;
+
+         else
+            raise Ada.IO_Exceptions.Data_Error with
+              "unsupported push.default value: " & Mode;
+         end if;
+      end;
    end Push_Default;
 
    procedure Push_Matching

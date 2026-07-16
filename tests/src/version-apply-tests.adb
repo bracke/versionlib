@@ -106,6 +106,65 @@ package body Version.Apply.Tests is
       end;
    end Rejects_Context_Mismatch;
 
+   procedure Reverse_Strip_And_Rename
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+   begin
+      Configure_Repo (Root);
+      Ada.Directories.Set_Directory (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"), "one" & LF & "two" & LF);
+      Version.Git_Fixtures.Run (Root, "git add -A");
+      Version.Git_Fixtures.Run (Root, "git commit -qm base");
+
+      --  A modify patch: apply forward, then -R restores the original.
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"), "one" & LF & "TWO" & LF);
+      Version.Git_Fixtures.Run (Root, "git diff > mod.patch");
+      Version.Git_Fixtures.Run (Root, "git checkout -- a.txt");
+
+      declare
+         Repo  : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Patch : constant String :=
+           Version.Files.Read_Binary_File
+             (Version.Test_Support.Join (Root, "mod.patch"));
+      begin
+         Version.Apply.Apply_Patch (Repo, Patch);
+         Assert
+           (Version.Test_Support.Read_Text_File
+              (Version.Test_Support.Join (Root, "a.txt"))
+            = "one" & LF & "TWO",
+            "forward apply modifies the file");
+         Version.Apply.Apply_Patch
+           (Repo, Patch, (Reverse_Patch => True, others => <>));
+         Assert
+           (Version.Test_Support.Read_Text_File
+              (Version.Test_Support.Join (Root, "a.txt"))
+            = "one" & LF & "two",
+            "-R apply restores the original content");
+      end;
+
+      --  A rename patch: a.txt -> b.txt.
+      Version.Git_Fixtures.Run (Root, "git mv a.txt b.txt");
+      Version.Git_Fixtures.Run (Root, "git diff --cached -M > ren.patch");
+      Version.Git_Fixtures.Run (Root, "git reset -q --hard HEAD");
+
+      declare
+         Repo  : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Patch : constant String :=
+           Version.Files.Read_Binary_File
+             (Version.Test_Support.Join (Root, "ren.patch"));
+      begin
+         Version.Apply.Apply_Patch (Repo, Patch);
+         Version.Git_Fixtures.Run (Root, "test -e b.txt");
+         Version.Git_Fixtures.Run (Root, "test ! -e a.txt");
+      end;
+   end Reverse_Strip_And_Rename;
+
    overriding procedure Register_Tests (T : in out Test_Case) is
    begin
       Register_Routine
@@ -114,6 +173,9 @@ package body Version.Apply.Tests is
       Register_Routine
         (T, Rejects_Context_Mismatch'Access,
          "Apply: rejects a context mismatch without mutation");
+      Register_Routine
+        (T, Reverse_Strip_And_Rename'Access,
+         "Apply: -R reverse round-trip and rename patches");
    end Register_Tests;
 
    overriding function Name

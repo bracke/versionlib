@@ -34,6 +34,21 @@ package Version.Transport.Http is
    --  HTTPS requests prefer HTTP/2 through ALPN with HTTP/1.1 fallback; plain
    --  HTTP remains HTTP/1.1 because h2c is not supported by the backend.
 
+   --  On an HTTP 401 the transport runs `credential fill` (using the current
+   --  repository's `credential.helper` config), retries the request with HTTP
+   --  Basic authentication, and `credential approve`/`reject`s the result
+   --  (git's smart-HTTP auth flow). URL userinfo (`user[:pass]@host`) is
+   --  honoured for pre-emptive authentication.
+
+   --  A plain GET, for the dumb protocol (`http-fetch` walks loose objects
+   --  and packs over ordinary requests).  Found comes back False when the
+   --  server has no such file -- a missing loose object is how the walker
+   --  learns to go look in the packs -- rather than raising.
+   procedure Get
+     (Url      : String;
+      Consumer : in out Byte_Consumer'Class;
+      Found    : out Boolean);
+
    procedure Discover_Upload_Pack
      (Url      : String;
       Consumer : in out Byte_Consumer'Class);

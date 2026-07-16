@@ -13,6 +13,7 @@ with Version.Init;
 with Version.Pathspec;
 with Version.Repository;
 with Version.Restore;
+with Version.Staging;
 
 with Version.Status;
 with Version.Test_Support;
@@ -436,9 +437,14 @@ package body Version.Sparse.Tests is
          Version.Sparse.Set_From_Strings (Repo, Sparse_Items);
          Version.Sparse.Disable (Repo);
 
+         --  git keeps .git/info/sparse-checkout on disable and only clears the
+         --  config flag.
          Assert
-           (not Ada.Directories.Exists (Path),
-            "sparse-checkout file should be removed on disable");
+           (Ada.Directories.Exists (Path),
+            "sparse-checkout file should be kept on disable (git parity)");
+         Assert
+           (not Version.Sparse.Enabled (Repo),
+            "sparse checkout should report disabled");
          declare
             Config_Text : constant String :=
               Version.Test_Support.Read_Text_File
@@ -842,15 +848,17 @@ package body Version.Sparse.Tests is
          declare
             Config_Text : constant String :=
               Version.Test_Support.Read_Text_File (Config_Path);
+            --  Match the exact key ("sparseCheckout =") so the sibling
+            --  "sparseCheckoutCone =" key does not count as a duplicate.
             First_Key   : constant Natural :=
-              Ada.Strings.Fixed.Index (Config_Text, "sparseCheckout");
+              Ada.Strings.Fixed.Index (Config_Text, "sparseCheckout =");
             Second_Key  : Natural := 0;
          begin
             if First_Key /= 0 then
                Second_Key :=
                  Ada.Strings.Fixed.Index
                    (Source  => Config_Text,
-                    Pattern => "sparseCheckout",
+                    Pattern => "sparseCheckout =",
                     From    => First_Key + 1);
             end if;
 
@@ -1007,9 +1015,150 @@ package body Version.Sparse.Tests is
          raise;
    end Status_Text_Is_Read_Only;
 
+   procedure Cone_Set_Writes_Git_Patterns_And_Includes
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF      : constant Character := Character'Val (10);
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Prepare_Repo (T);
+         Root : constant String := Version.Repository.Root_Path (Repo);
+         Path : constant String :=
+           Version.Files.Join
+             (Version.Repository.Git_Dir (Repo), "info/sparse-checkout");
+         Dirs : Version.Sparse.String_Vectors.Vector;
+      begin
+         --  Add a nested structure: a parent directory with a target subtree
+         --  and a sibling subtree.
+         Create_File (Root, "a/f.txt", "af" & LF);
+         Create_File (Root, "a/deep/g.txt", "ad" & LF);
+         Create_File (Root, "a/other/h.txt", "ao" & LF);
+         Version.Git_Fixtures.Run (Root, "git add .");
+         Version.Write.Save ("nested");
+
+         Dirs.Append ("src");
+         Version.Sparse.Set_Cone (Repo, Dirs);
+
+         Assert (Version.Sparse.Cone_Mode (Repo), "cone mode must be enabled");
+         Assert
+           (Version.Test_Support.Read_Text_File (Path)
+            = "/*" & LF & "!/*/" & LF & "/src/",
+            "cone set must write git's cone patterns");
+         Assert
+           (Version.Sparse.Included (Repo, "README.md"),
+            "top-level file is included by the cone");
+         Assert
+           (Version.Sparse.Included (Repo, "src/main.adb"),
+            "a file under the recursive directory is included");
+         Assert
+           (not Version.Sparse.Included (Repo, "docs/manual.md"),
+            "a file outside the cone is excluded");
+
+         --  Nested cone: the ancestor's own files stay, its sibling subtree
+         --  goes, and the target subtree is included recursively.
+         declare
+            Nested : Version.Sparse.String_Vectors.Vector;
+            Leaves : Version.Sparse.String_Vectors.Vector;
+         begin
+            Nested.Append ("a/deep");
+            Version.Sparse.Set_Cone (Repo, Nested);
+
+            Assert
+              (Version.Test_Support.Read_Text_File (Path)
+               = "/*" & LF & "!/*/" & LF & "/a/" & LF & "!/a/*/" & LF
+                 & "/a/deep/",
+               "nested cone set writes ancestor navigation patterns");
+            Assert
+              (Version.Sparse.Included (Repo, "a/f.txt"),
+               "a parent directory's own files are kept");
+            Assert
+              (Version.Sparse.Included (Repo, "a/deep/g.txt"),
+               "the recursive target subtree is included");
+            Assert
+              (not Version.Sparse.Included (Repo, "a/other/h.txt"),
+               "a sibling subtree of the parent is excluded");
+
+            Leaves := Version.Sparse.Cone_Recursive_Directories (Repo);
+            Assert
+              (Leaves.Length = 1
+               and then Leaves.Element (Leaves.First_Index) = "a/deep",
+               "list reports only the recursive leaf directory");
+         end;
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Cone_Set_Writes_Git_Patterns_And_Includes;
+
+   procedure Skip_Worktree_Bits_Reflect_Sparse
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Prepare_Repo (T);
+         Dirs : Version.Sparse.String_Vectors.Vector;
+
+         function Entry_Skip (P : String) return Boolean is
+            Items : constant Version.Staging.Index_Entry_Vectors.Vector :=
+              Version.Staging.Load (Repo);
+         begin
+            for I in Items.First_Index .. Items.Last_Index loop
+               if To_String (Items.Element (I).Path) = P then
+                  return Items.Element (I).Skip_Worktree;
+               end if;
+            end loop;
+            return False;
+         end Entry_Skip;
+      begin
+         Dirs.Append ("src");
+         Version.Sparse.Set_Cone (Repo, Dirs);
+         Version.Restore.Restore_Working_Tree (Repo);
+         Version.Restore.Apply_Sparse_Skip_Worktree (Repo);
+
+         Assert
+           (not Entry_Skip ("src/main.adb"),
+            "an included path must not be skip-worktree");
+         Assert
+           (Entry_Skip ("docs/manual.md"),
+            "a sparse-excluded path must be skip-worktree");
+         Assert
+           (Entry_Skip ("tests/test.adb"),
+            "every sparse-excluded path is skip-worktree");
+
+         --  git requires the round-tripped bits to survive a plain reload.
+         Assert
+           (Entry_Skip ("docs/manual.md"),
+            "skip-worktree survives an index reload");
+
+         Version.Restore.Clear_Skip_Worktree (Repo);
+         Assert
+           (not Entry_Skip ("docs/manual.md"),
+            "Clear_Skip_Worktree removes every skip-worktree bit");
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Skip_Worktree_Bits_Reflect_Sparse;
+
    overriding
    procedure Register_Tests (T : in out Test_Case) is
    begin
+      Register_Routine
+        (T,
+         Cone_Set_Writes_Git_Patterns_And_Includes'Access,
+         "Sparse cone set writes git patterns and cone inclusion");
+      Register_Routine
+        (T,
+         Skip_Worktree_Bits_Reflect_Sparse'Access,
+         "Sparse skip-worktree bits reflect the pattern set");
       Register_Routine
         (T,
          Set_Writes_File_And_List_Reads_Patterns'Access,
@@ -1049,7 +1198,7 @@ package body Version.Sparse.Tests is
       Register_Routine
         (T,
          Disable_Removes_File_And_Config_Flag'Access,
-         "Sparse disable removes file and config flag");
+         "Sparse disable keeps pattern file, clears config flag");
       Register_Routine
         (T,
          Included_Query_Respects_Configured_Patterns'Access,

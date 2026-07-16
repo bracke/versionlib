@@ -1,4 +1,5 @@
-with Ada.Directories; use Ada.Directories;
+with Ada.Directories;
+with Ada.Environment_Variables; use Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Calendar;
 with Ada.Streams;
@@ -235,7 +236,7 @@ package body Version.Staging is
                                       (Full_Path)),
                                  Id    => Tree_Item.Id,
                                  Mode  => Tree_Item.Mode,
-                                 Stage => 0));
+                                 Stage => 0, Skip_Worktree => False));
                         end;
                      end loop;
                   end if;
@@ -250,12 +251,27 @@ package body Version.Staging is
       return Result;
    end Expand_Sparse_Index;
 
+   --  git lets GIT_INDEX_FILE point the index somewhere else -- `filter-branch
+   --  --index-filter` and `read-tree` into a temporary index depend on it.
+   function Index_File_Path
+     (Repo : Version.Repository.Repository_Handle)
+      return String
+   is
+   begin
+      if Ada.Environment_Variables.Exists ("GIT_INDEX_FILE")
+        and then Ada.Environment_Variables.Value ("GIT_INDEX_FILE") /= ""
+      then
+         return Ada.Environment_Variables.Value ("GIT_INDEX_FILE");
+      end if;
+
+      return Join (Version.Repository.Git_Dir (Repo), "index");
+   end Index_File_Path;
+
    function Load
      (Repo : Version.Repository.Repository_Handle)
       return Index_Entry_Vectors.Vector
    is
-      Path : constant String :=
-        Join (Version.Repository.Git_Dir (Repo), "index");
+      Path : constant String := Index_File_Path (Repo);
 
       Result : Index_Entry_Vectors.Vector;
 
@@ -290,9 +306,9 @@ package body Version.Staging is
             V : constant Natural := U32_BE (Data, Pos + 4);
             Count   : constant Natural := U32_BE (Data, Pos + 8);
          begin
-            if V /= 2 then
+            if V not in 2 | 3 then
                raise Ada.IO_Exceptions.Data_Error with
-                 "unsupported index: only version 2 is supported";
+                 "unsupported index: only versions 2 and 3 are supported";
             end if;
 
             Pos := Pos + 12;
@@ -322,11 +338,19 @@ package body Version.Staging is
                      Name_Start  : constant Stream_Element_Offset :=
                        Pos + 42 + RL + Extra_Flags_Length;
                      Name_End    : Stream_Element_Offset;
+                     Skip_Worktree : Boolean := False;
                   begin
                      if Extended and then Pos + 43 + RL > Data'Last then
                         raise Ada.IO_Exceptions.Data_Error with
                           "corrupt index: truncated extended flags";
                      end if;
+
+                     Skip_Worktree :=
+                       Extended
+                       and then
+                         ((Natural (Data (Pos + 42 + RL)) * 16#100#
+                           + Natural (Data (Pos + 43 + RL)))
+                          / 16#4000#) mod 2 = 1;
 
                      if Name_Len = 16#FFF# then
                         Name_End := Name_Start;
@@ -367,7 +391,8 @@ package body Version.Staging is
                           (Index_Entry'(Path  => To_Unbounded_String (Name),
                                         Id    => Id,
                                         Mode  => To_Unbounded_String (Mode_Image (Mode)),
-                                        Stage => Stage));
+                                        Stage => Stage,
+                                        Skip_Worktree => Skip_Worktree));
                      end;
 
                      Pos := E_Start + 42 + RL + Extra_Flags_Length
@@ -521,8 +546,7 @@ package body Version.Staging is
       Buffer : Unbounded_String;
       Paths  : Version.Path_Safety.Path_Vector;
 
-      Index_Path : constant String :=
-      Join (Version.Repository.Git_Dir (Repo), "index");
+      Index_Path : constant String := Index_File_Path (Repo);
 
       Lock_Path : constant String := Index_Path & ".lock";
    begin
@@ -543,7 +567,21 @@ package body Version.Staging is
          Case_Insensitive => Version.Platform.Is_Case_Insensitive_Default);
 
       Append (Buffer, "DIRC");
-      Append_U32_BE (Buffer, 2);
+      --  git requires index version 3 as soon as any entry carries an
+      --  extended flag such as skip-worktree; otherwise stay at version 2.
+      declare
+         Any_Extended : Boolean := False;
+      begin
+         if not Items.Is_Empty then
+            for I in Items.First_Index .. Items.Last_Index loop
+               if Items.Element (I).Skip_Worktree then
+                  Any_Extended := True;
+                  exit;
+               end if;
+            end loop;
+         end if;
+         Append_U32_BE (Buffer, (if Any_Extended then 3 else 2));
+      end;
       Append_U32_BE (Buffer, Natural (Items.Length));
 
       if not Items.Is_Empty then
@@ -594,11 +632,15 @@ package body Version.Staging is
                --  Object id
                Append (Buffer, To_Raw (Index_Item.Id));
 
-               --  Flags: lower 12 bits are name length, bits 12-13 are stage.
+               --  Flags: lower 12 bits are name length, bits 12-13 are stage,
+               --  bit 14 (0x4000) marks a following extended-flags word.
                declare
                   Stage : constant Natural :=
                     (if Index_Item.Stage > 3 then 3 else Index_Item.Stage);
-                  Flags : constant Natural := Name_Len + Stage * 16#1000#;
+                  Ext_Bit : constant Natural :=
+                    (if Index_Item.Skip_Worktree then 16#4000# else 0);
+                  Flags : constant Natural :=
+                    Name_Len + Stage * 16#1000# + Ext_Bit;
                begin
                   Append
                     (Buffer,
@@ -606,6 +648,12 @@ package body Version.Staging is
                   Append
                     (Buffer,
                      Character'Val (Flags mod 256));
+
+                  --  Extended-flags word: skip-worktree is bit 14 (0x4000).
+                  if Index_Item.Skip_Worktree then
+                     Append (Buffer, Character'Val (16#40#));
+                     Append (Buffer, Character'Val (16#00#));
+                  end if;
                end;
 
                --  Path + NUL
@@ -800,7 +848,7 @@ package body Version.Staging is
                        (Path  => Ada.Strings.Unbounded.To_Unbounded_String (Safe_Path),
                         Id    => Tree_Item.Id,
                         Mode  => Tree_Item.Mode,
-                        Stage => 0));
+                        Stage => 0, Skip_Worktree => False));
                end;
             end;
          end loop;

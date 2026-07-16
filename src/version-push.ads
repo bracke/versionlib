@@ -63,12 +63,28 @@ package Version.Push is
    --  such as "refs/heads/x" or "refs/tags/v1") on the remote over local,
    --  HTTP, or SSH transport. Refuses a non-fast-forward update unless Force.
 
+   --  Like Push_Refspec, but Repository may be a path or URL that is not a
+   --  configured remote (`send-pack <url> <refspec>`): it is registered just
+   --  for the push and taken away again.
+   procedure Push_Refspec_To
+     (Repository : String;
+      Source     : String;
+      Dest_Ref   : String;
+      Force      : Boolean := False;
+      Run_Hooks  : Boolean := True);
+
    procedure Push_Default
      (Remote_Name : String;
       Run_Hooks   : Boolean := True);
-   --  Push using the configured "remote.<Remote_Name>.push" refspec(s), each
-   --  parsed like a command-line refspec (a leading "+" forces, an empty
-   --  source deletes the destination). Errors if none are configured.
+   --  Push with no explicit refspec. If "remote.<Remote_Name>.push" refspec(s)
+   --  are configured, apply them (each parsed like a command-line refspec: a
+   --  leading "+" forces, an empty source deletes the destination). Otherwise
+   --  fall back to push.default (git's default is "simple"): "current" pushes
+   --  the current branch to a same-named remote branch; "upstream"/"tracking"
+   --  push it to its configured upstream branch; "simple" behaves like
+   --  "upstream" but refuses when the upstream branch name differs; "nothing"
+   --  errors. A missing upstream (upstream/simple) or a detached HEAD errors.
+   --  ("matching" is handled by Push_Matching.)
 
    procedure Push_Matching
      (Remote_Name : String;

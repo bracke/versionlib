@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;   use Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
 with Version.Objects;
 with Version.Refs;
+with Version.Tracking;
 with Version.Reftable;
 with Version.Packed_Refs;
 
@@ -262,12 +263,13 @@ package body Version.Ref_Format is
             return True;
          end if;
          declare
-            P : String := Pattern;
-         begin
             --  A trailing slash in the pattern is optional.
-            if P (P'Last) = '/' then
-               P := Pattern (Pattern'First .. Pattern'Last - 1);
-            end if;
+            Effective_Last : constant Natural :=
+              (if Pattern (Pattern'Last) = '/'
+               then Pattern'Last - 1 else Pattern'Last);
+            P : constant String :=
+              Pattern (Pattern'First .. Effective_Last);
+         begin
             return Ref'Length > P'Length
               and then Ref (Ref'First .. Ref'First + P'Length - 1) = P
               and then Ref (Ref'First + P'Length) = '/';
@@ -611,6 +613,32 @@ package body Version.Ref_Format is
          elsif Head_A = "taggerdate" then
             return Git_Date (Ident_Date (Line_Value (Content, "tagger ")),
                              Arg);
+         elsif Head_A = "upstream" then
+            --  A branch's configured upstream, as a remote-tracking ref (empty
+            --  when the ref is not a branch or has no upstream).
+            if Ref'Length > 11
+              and then Ref (Ref'First .. Ref'First + 10) = "refs/heads/"
+              and then Version.Tracking.Has_Upstream (Repo, Short_Name (Ref))
+            then
+               declare
+                  Full : constant String :=
+                    Version.Tracking.Remote_Tracking_Ref
+                      (Version.Tracking.Upstream (Repo, Short_Name (Ref)));
+               begin
+                  --  %(upstream:short) drops the "refs/remotes/" prefix.
+                  if Arg = "short"
+                    and then Full'Length > 13
+                    and then Full (Full'First .. Full'First + 12)
+                             = "refs/remotes/"
+                  then
+                     return Full (Full'First + 13 .. Full'Last);
+                  else
+                     return Full;
+                  end if;
+               end;
+            else
+               return "";
+            end if;
          else
             raise Constraint_Error
               with "unknown for-each-ref field: " & Atom;
@@ -699,14 +727,21 @@ package body Version.Ref_Format is
          --  Sort dates chronologically via their unix timestamp. creatordate
          --  maps to committer for commits, tagger for annotated tags.
          declare
+            use type Version.Objects.Object_Kind;
             B    : constant String := Base_Key (Key);
-            Line : constant String :=
-              (if B = "authordate" then "author "
-               elsif B = "taggerdate" then "tagger "
-               else "committer ");
             Obj  : constant Version.Objects.Git_Object :=
               Version.Objects.Read_Object
                 (Repo, Version.Objects.To_Object_Id (Id));
+            --  creatordate is the tagger date of an annotated tag, else the
+            --  committer date of the commit.
+            Line : constant String :=
+              (if B = "authordate" then "author "
+               elsif B = "taggerdate" then "tagger "
+               elsif B = "committerdate" then "committer "
+               elsif Version.Objects.Kind (Obj)
+                     = Version.Objects.Tag_Object
+               then "tagger "
+               else "committer ");
             Val  : constant String := Line_Value
               (Version.Objects.Content (Obj), Line);
          begin

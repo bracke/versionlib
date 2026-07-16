@@ -104,10 +104,20 @@ package body Version.Shortlog is
       end loop;
 
       for Cur in Groups.Iterate loop
-         Result.Append
-           (Author_Group'
-              (Name     => To_Unbounded_String (Group_Maps.Key (Cur)),
-               Subjects => Group_Maps.Element (Cur)));
+         --  git lists a group's subjects oldest-first (chronological); the
+         --  traversal above accumulates them newest-first, so reverse.
+         declare
+            Src : constant Subject_Vectors.Vector := Group_Maps.Element (Cur);
+            Rev : Subject_Vectors.Vector;
+         begin
+            for I in reverse Src.First_Index .. Src.Last_Index loop
+               Rev.Append (Src.Element (I));
+            end loop;
+            Result.Append
+              (Author_Group'
+                 (Name     => To_Unbounded_String (Group_Maps.Key (Cur)),
+                  Subjects => Rev));
+         end;
       end loop;
       return Result;
    end Summarize;

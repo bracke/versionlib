@@ -116,11 +116,16 @@ package body Version.Repository is
           (Line (Line'First + Prefix'Length .. Line'Last));
 
       declare
+         --  git resolves a relative gitdir against the .git file's directory,
+         --  and every submodule it creates points *upwards*
+         --  (`gitdir: ../.git/modules/<name>`), as does a linked worktree.
+         --  Rejecting `..` here made every git-created submodule unreadable.
          Resolved : constant String :=
            Resolve_Gitdir_Text
-             (Base_Dir => Root,
-              Text     => Ada.Strings.Unbounded.To_String (Value),
-              Context  => "gitdir in .git file");
+             (Base_Dir      => Root,
+              Text          => Ada.Strings.Unbounded.To_String (Value),
+              Context       => "gitdir in .git file",
+              Allow_Dot_Dot => True);
       begin
          if not Ada.Directories.Exists (Version.Files.To_Native_Path (Resolved))
            or else Ada.Directories.Kind (Version.Files.To_Native_Path (Resolved)) /=

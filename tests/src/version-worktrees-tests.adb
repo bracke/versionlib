@@ -268,7 +268,7 @@ package body Version.Worktrees.Tests is
             (Path  => To_Unbounded_String ("linked-only.txt"),
              Id    => Blob,
              Mode  => To_Unbounded_String ("100644"),
-             Stage => 0));
+             Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo, Entries);
       end Stage_Linked_Only;
 

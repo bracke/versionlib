@@ -94,7 +94,7 @@ package body Version.Stage is
             (Path  => To_Unbounded_String (Safe_Path),
              Id    => Blob_Id,
              Mode  => To_Unbounded_String ("120000"),
-             Stage => 0));
+             Stage => 0, Skip_Worktree => False));
 
       else
          if not Ada.Directories.Exists (Full_Path) then
@@ -133,7 +133,7 @@ package body Version.Stage is
             (Path  => To_Unbounded_String (Safe_Path),
              Id    => Blob_Id,
              Mode  => To_Unbounded_String (File_Index_Mode (Full_Path)),
-             Stage => 0));
+             Stage => 0, Skip_Worktree => False));
       end if;
 
       Version.Staging.Sort_By_Path (Entries);

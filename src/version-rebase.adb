@@ -436,8 +436,8 @@ package body Version.Rebase is
       Append (Content, Author_Line (Original_Obj) & Character'Val (10));
       Append
         (Content,
-         "committer " & To_String (User.Name) & " <" & To_String (User.Email)
-         & "> " & Timestamp_Line & Character'Val (10));
+         "committer " & Version.Config.Committer_Signature (Repo)
+         & Character'Val (10));
       Append (Content, Character'Val (10));
       Append (Content, Message);
       declare
@@ -568,7 +568,7 @@ package body Version.Rebase is
                     (Path => File_Item.Path,
                      Id   => Blob_Id,
                      Mode => To_Unbounded_String ("100644"),
-                     Stage => 0));
+                     Stage => 0, Skip_Worktree => False));
             end;
          end loop;
       end if;
@@ -617,13 +617,17 @@ package body Version.Rebase is
 
       Version.Merge.Merge_Trees
         (Repo          => Repo,
-         Current_Name  => "rebase-current",
-         Target_Name   => "rebase-commit",
+         Current_Name  => "HEAD",
+         Target_Name   => Version.Merge.Commit_Label_For (Repo, Commit_Id),
          Base_Items    => Base_Items,
          Current_Items => Current_Items,
          Target_Items  => Target_Items,
          Merged_Index  => Merged_Index,
-         Conflicts     => Conflicts);
+         Conflicts     => Conflicts,
+         Behavior      => Version.Merge.Merge_Behavior'
+           (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
+              (Version.Merge.Base_Label_For (Repo, Base_Id)),
+            others     => <>));
 
       if not Conflicts.Is_Empty then
          Version.Merge_State.Clear_State (Repo);
@@ -1056,6 +1060,11 @@ package body Version.Rebase is
          Has_Reword  : Boolean := False;
          Has_Edit    : Boolean := False;
          Has_Exec    : Boolean := False;
+         --  True once any non-comment, non-blank todo line is seen. git aborts
+         --  with "nothing to do" only for an emptied/all-comment todo; a todo
+         --  that explicitly `drop`s every commit is a successful rebase that
+         --  moves the branch to the upstream.
+         Has_Command : Boolean := False;
          Picked      : Version.Rebase_State.Commit_Vectors.Vector;
          Pick_Actions : Version.Rebase_State.Action_Vectors.Vector;
          Parsed_Execs : Version.Rebase_State.Exec_Vectors.Vector;
@@ -1112,6 +1121,7 @@ package body Version.Rebase is
                if F > Line'Last or else Line (F) = '#' then
                   return;
                end if;
+               Has_Command := True;
 
                declare
                   CE : Natural := F;
@@ -1218,6 +1228,13 @@ package body Version.Rebase is
          end;
 
          Version.Files.Delete_File_If_Exists (Todo_Path);
+
+         --  git aborts an emptied/all-comment todo without touching the branch.
+         --  An explicit `drop` of every commit is NOT empty (Has_Command is
+         --  set): that is a successful rebase that advances to the upstream.
+         if not Has_Command then
+            raise Ada.IO_Exceptions.Data_Error with "nothing to do";
+         end if;
 
          if (Has_Reword or else Has_Edit or else Has_Exec)
            and then Has_Squash
@@ -1757,13 +1774,18 @@ package body Version.Rebase is
                begin
                   Version.Merge.Merge_Trees
                     (Repo          => Repo,
-                     Current_Name  => "rebase-merges-current",
-                     Target_Name   => "rebase-merges-target",
+                     Current_Name  => "HEAD",
+                     Target_Name   => Version.Merge.Commit_Label_For
+                       (Repo, Rebased.Element (1)),
                      Base_Items    => Items_Of (Base),
                      Current_Items => Items_Of (Rebased.Element (0)),
                      Target_Items  => Items_Of (Rebased.Element (1)),
                      Merged_Index  => Merged_Index,
-                     Conflicts     => Conflicts);
+                     Conflicts     => Conflicts,
+                     Behavior      => Version.Merge.Merge_Behavior'
+                       (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
+                          (Version.Merge.Base_Label_For (Repo, Base)),
+                        others     => <>));
                   if not Conflicts.Is_Empty then
                      Version.Merge_State.Clear_State (Repo);
                      Version.Merge_State.Write_State
@@ -1816,13 +1838,19 @@ package body Version.Rebase is
                      begin
                         Version.Merge.Merge_Trees
                           (Repo          => Repo,
-                           Current_Name  => "rebase-merges-current",
-                           Target_Name   => "rebase-merges-target",
+                           Current_Name  => "HEAD",
+                           Target_Name   =>
+                             Version.Merge.Commit_Label_For (Repo, Nxt),
                            Base_Items    => Items_Of (Base),
                            Current_Items => Acc_Items,
                            Target_Items  => Items_Of (Nxt),
                            Merged_Index  => Merged_Index,
-                           Conflicts     => Conflicts);
+                           Conflicts     => Conflicts,
+                           Behavior      => Version.Merge.Merge_Behavior'
+                             (Base_Label =>
+                                Ada.Strings.Unbounded.To_Unbounded_String
+                                  (Version.Merge.Base_Label_For (Repo, Base)),
+                              others     => <>));
                         if not Conflicts.Is_Empty then
                            Abort_Octopus;
                         end if;
@@ -1859,12 +1887,17 @@ package body Version.Rebase is
          Persist (Paused => False, Cur => "");
       end loop;
 
+      --  When HEAD is already an ancestor of the upstream (nothing to replay)
+      --  Original_Head was never mapped: fast-forward to the upstream, as git
+      --  does.
       Finish_Rebase
         (Repo          => Repo,
          Branch_Ref    => Branch_Ref,
          Original_Head => Original_Head,
          Target_Head   => Upstream_Head,
-         Final_Head    => Map.Element (Original_Head));
+         Final_Head    =>
+           (if Map.Contains (Original_Head) then Map.Element (Original_Head)
+            else Upstream_Head));
    end Replay_Merges_Remaining;
 
    procedure Start_Rebase_Merges (Upstream : String) is

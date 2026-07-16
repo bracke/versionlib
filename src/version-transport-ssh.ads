@@ -37,6 +37,12 @@ package Version.Transport.Ssh is
      (Remote    : Ssh_Remote;
       Operation : String) return String;
 
+   function LFS_Transfer_Remote_Command
+     (Remote    : Ssh_Remote;
+      Operation : String) return String;
+   --  "git-lfs-transfer '<path>' <download|upload>" -- the pure-SSH LFS
+   --  transfer protocol (bytes travel over the SSH channel, no HTTP handoff).
+
    function Upload_Pack_Service_Command
      (Remote : Ssh_Remote) return Ssh_Service_Command;
 
@@ -70,6 +76,12 @@ package Version.Transport.Ssh is
      (Url       : String;
       Operation : String;
       Stream    : in out Ssh_Stream);
+
+   procedure Open_LFS_Transfer
+     (Url       : String;
+      Operation : String;
+      Stream    : in out Ssh_Stream);
+   --  Open a channel running `git-lfs-transfer` for the pure-SSH LFS protocol.
 
    procedure Write
      (Stream : in out Ssh_Stream;

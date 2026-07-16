@@ -1200,6 +1200,67 @@ package body Version.Rebase.Tests is
          raise;
    end Rebase_Interactive_Drops_Commit;
 
+   --  Regression: an emptied todo (every command line removed) must abort with
+   --  "nothing to do" and leave the branch untouched -- git's safety net. This
+   --  differs from an explicit `drop` of every commit, which succeeds and moves
+   --  the branch to the upstream (covered by Rebase_Interactive_Drops_Commit).
+   procedure Rebase_Interactive_Empty_Todo_Aborts
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Raised  : Boolean := False;
+   begin
+      Version.Init.Init (Root);
+      Configure_User (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Write_File (Root, "base.txt", "base" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add base.txt");
+      Version.Write.Save ("base");
+      for C of String'("ABC") loop
+         Write_File (Root, C & ".txt", C & Character'Val (10));
+         Version.Git_Fixtures.Run (Root, "git add " & C & ".txt");
+         Version.Write.Save ("add " & C);
+      end loop;
+
+      --  A sequence editor that deletes every command line (emptied todo).
+      Ada.Environment_Variables.Set
+        ("GIT_SEQUENCE_EDITOR", "sed -i '/^pick/d'");
+      begin
+         Version.Rebase.Start_Interactive ("HEAD~3");
+      exception
+         when Ada.IO_Exceptions.Data_Error =>
+            Raised := True;
+      end;
+      Ada.Environment_Variables.Clear ("GIT_SEQUENCE_EDITOR");
+
+      Assert (Raised, "an emptied todo must abort with 'nothing to do'");
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+      begin
+         Assert (not Version.Rebase_State.State_Exists (Repo),
+                 "an aborted empty rebase must leave no rebase state");
+      end;
+      --  The branch is untouched: all four commits and files remain.
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git rev-list --count HEAD)"" = ""4""");
+      Version.Git_Fixtures.Run (Root, "test -e A.txt");
+      Version.Git_Fixtures.Run (Root, "test -e B.txt");
+      Version.Git_Fixtures.Run (Root, "test -e C.txt");
+      Version.Git_Fixtures.Run (Root, "git fsck --strict");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Environment_Variables.Clear ("GIT_SEQUENCE_EDITOR");
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Rebase_Interactive_Empty_Todo_Aborts;
+
    procedure Rebase_Interactive_Squashes_Commit
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1456,6 +1517,51 @@ package body Version.Rebase.Tests is
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
    end Rebase_Merges_Recreates_Octopus;
+
+   --  When the branch is already an ancestor of the upstream, --rebase-merges
+   --  has nothing to replay and must fast-forward to the upstream (previously
+   --  a Constraint_Error on the empty replay set).
+   procedure Rebase_Merges_Fast_Forward_When_Ancestor
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF : constant Character := Character'Val (10);
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Init.Init (Root);
+      Configure_User (Root);
+      Ada.Directories.Set_Directory (Root);
+
+      Write_File (Root, "base.txt", "base" & LF);
+      Version.Git_Fixtures.Run (Root, "git add base.txt");
+      Version.Write.Save ("c1");
+      Version.Git_Fixtures.Run (Root, "git checkout -q -b work");
+      --  Build a merge on main so replay goes through the merges path.
+      Version.Git_Fixtures.Run (Root, "git checkout -q main");
+      Version.Git_Fixtures.Run (Root, "git checkout -q -b feature");
+      Write_File (Root, "f.txt", "f" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("f");
+      Version.Git_Fixtures.Run (Root, "git checkout -q main");
+      Version.Git_Fixtures.Run
+        (Root, "git merge -q --no-ff feature -m ""merge feature""");
+      --  work is still at the base commit: an ancestor of main.
+      Version.Git_Fixtures.Run (Root, "git checkout -q work");
+
+      Version.Rebase.Start_Rebase_Merges ("main");
+
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git rev-parse work)"" = ""$(git rev-parse main)""");
+      Version.Git_Fixtures.Run (Root, "git fsck --strict");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Rebase_Merges_Fast_Forward_When_Ancestor;
 
    --  A linear commit inside a --rebase-merges run conflicts with the moved
    --  upstream: the rebase pauses (state persists), and after resolving,
@@ -1858,12 +1964,20 @@ package body Version.Rebase.Tests is
          "Rebase: --rebase-merges recreates an octopus (3-parent) merge");
       Register_Routine
         (T,
+         Rebase_Merges_Fast_Forward_When_Ancestor'Access,
+         "Rebase: --rebase-merges fast-forwards when HEAD is an ancestor");
+      Register_Routine
+        (T,
          Rebase_Merges_Conflict_Pause_And_Continue'Access,
          "Rebase: --rebase-merges pauses on conflict and --continue finishes");
       Register_Routine
         (T,
          Rebase_Interactive_Drops_Commit'Access,
          "Rebase: interactive todo drops a commit");
+      Register_Routine
+        (T,
+         Rebase_Interactive_Empty_Todo_Aborts'Access,
+         "Rebase: emptied interactive todo aborts, branch untouched");
       Register_Routine
         (T,
          Rebase_Interactive_Squashes_Commit'Access,

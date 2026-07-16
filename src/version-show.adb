@@ -1,7 +1,6 @@
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded;
 
-with Version.Diff;
 with Version.Log;
 with Version.Objects; use Version.Objects;
 with Version.Revisions;
@@ -21,7 +20,8 @@ package body Version.Show is
 
    function Show_Commit
      (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id)
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Options   : Version.Diff.Diff_Options := (others => <>))
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -37,14 +37,16 @@ package body Version.Show is
       Append (Result, Character'Val (10));
 
       if Parent'Length = 0 then
-         Append (Result, Version.Diff.Diff_Root_Commit (Repo, Commit_Id));
+         Append
+           (Result, Version.Diff.Diff_Root_Commit (Repo, Commit_Id, Options));
       else
          Append
            (Result,
             Version.Diff.Diff_Commits
-              (Repo   => Repo,
-               Old_Id => Version.Objects.To_Object_Id (Parent),
-               New_Id => Commit_Id));
+              (Repo    => Repo,
+               Old_Id  => Version.Objects.To_Object_Id (Parent),
+               New_Id  => Commit_Id,
+               Options => Options));
       end if;
 
       return To_String (Result);

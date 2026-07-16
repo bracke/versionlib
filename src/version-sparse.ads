@@ -32,6 +32,26 @@ package Version.Sparse is
      (Repo  : Version.Repository.Repository_Handle;
       Items : String_Vectors.Vector);
 
+   --  True when cone mode (core.sparseCheckoutCone) is enabled.
+   function Cone_Mode
+     (Repo : Version.Repository.Repository_Handle)
+      return Boolean;
+
+   --  Enable cone-mode sparse checkout for the given recursively-included
+   --  directories: writes git's cone patterns ("/*", "!/*/", "/dir/", and the
+   --  ancestor "!/dir/*/" exclusions) to .git/info/sparse-checkout and sets
+   --  core.sparseCheckout=true and core.sparseCheckoutCone=true.
+   procedure Set_Cone
+     (Repo        : Version.Repository.Repository_Handle;
+      Directories : String_Vectors.Vector);
+
+   --  The recursively-included (leaf) cone directories, as `git
+   --  sparse-checkout list` prints them (sorted, without the ancestor
+   --  navigation entries).
+   function Cone_Recursive_Directories
+     (Repo : Version.Repository.Repository_Handle)
+      return String_Vectors.Vector;
+
    procedure Disable
      (Repo : Version.Repository.Repository_Handle);
 

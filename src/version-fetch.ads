@@ -1,8 +1,22 @@
 with Version.Hash;
 with Version.Objects;
 with Version.Repository;
+with Version.Upload_Pack;
 
 package Version.Fetch is
+
+   --  Every ref the remote advertises (`ls-remote`), in git's order: HEAD
+   --  first, then refs sorted by name, an annotated tag followed by its
+   --  peeled `^{}` entry.  Remote is a configured remote name, a path, or a
+   --  URL.
+   function List_Remote_Refs
+     (Remote : String)
+      return Version.Upload_Pack.Advertised_Ref_Vectors.Vector;
+
+   --  Fetch every object the remote has, updating no local ref -- what
+   --  `fetch-pack` does.  Remote is a configured remote name, a path, or a
+   --  URL.
+   procedure Fetch_Objects_From (Remote : String);
 
    function Remote_Object_Format
      (Url : String)
@@ -29,6 +43,18 @@ package Version.Fetch is
    procedure Fetch
      (Remote_Name : String;
       Depth       : Positive);
+
+   --  fetch --deepen N: extend the shallow boundary by N commits relative to
+   --  the current boundary (requests the deepen-relative capability). Requires
+   --  a smart transport (HTTP/SSH).
+   procedure Fetch_Deepen
+     (Remote_Name : String;
+      Depth       : Positive);
+
+   --  fetch --unshallow: fetch the complete history and remove .git/shallow.
+   --  Fails on a repository that is not shallow.
+   procedure Fetch_Unshallow
+     (Remote_Name : String);
 
    procedure Fetch
      (Remote_Name : String;

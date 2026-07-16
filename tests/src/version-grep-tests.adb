@@ -6,6 +6,7 @@ with AUnit.Test_Cases;
 
 with Version.Git_Fixtures;
 with Version.Init;
+with Version.Pathspec;
 with Version.Repository;
 with Version.Test_Support;
 with Version.Write;
@@ -56,10 +57,76 @@ package body Version.Grep.Tests is
       end;
    end Finds_Matches;
 
+   procedure Regex_Options_And_Pathspec
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+   begin
+      Version.Init.Init (Root);
+      Version.Git_Fixtures.Run (Root, "git config user.email t@e");
+      Version.Git_Fixtures.Run (Root, "git config user.name T");
+      Version.Git_Fixtures.Run (Root, "git config gc.auto 0");
+      Ada.Directories.Set_Directory (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"),
+         "foo bar" & LF & "foobar" & LF & "test+plus" & LF);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "sub" & "/" & "b.txt"),
+         "foo in sub" & LF & "quux" & LF);
+      Version.Git_Fixtures.Run (Root, "git add -A");
+      Version.Write.Save ("c1");
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+
+         function Count (Pattern : String; Opts : Version.Grep.Options)
+            return Natural
+         is (Natural (Version.Grep.Search (Repo, Pattern, Opts).Length));
+
+         Sub_Spec : Version.Pathspec.Pathspec_Vectors.Vector;
+      begin
+         --  Extended regex: 'fo+' matches foo/foobar lines.
+         Assert
+           (Count ("fo+", (Kind => Version.Grep.Extended_Regex, others => <>))
+              = 3,
+            "extended regex fo+ matches the three foo lines");
+         --  Default (basic): '+' is literal, so only test+plus matches.
+         Assert
+           (Count ("test+plus", (others => <>)) = 1,
+            "basic regex treats + as literal");
+         --  Fixed string: '+' literal too.
+         Assert
+           (Count ("test+plus", (Kind => Version.Grep.Fixed_String,
+                                 others => <>)) = 1,
+            "fixed-string match of test+plus");
+         --  Whole word: 'foo' as a word (not inside foobar).
+         Assert
+           (Count ("foo", (Word_Match => True, others => <>)) = 2,
+            "whole-word foo excludes foobar");
+         --  Invert: lines NOT containing foo.
+         Assert
+           (Count ("foo", (Invert => True, others => <>)) = 2,
+            "inverted match returns the non-foo lines (test+plus, quux)");
+
+         --  Pathspec: limit to sub/.
+         Version.Pathspec.Append_Parse (Sub_Spec, "sub");
+         Assert
+           (Natural
+              (Version.Grep.Search
+                 (Repo, "foo", (others => <>), Sub_Spec).Length) = 1,
+            "pathspec limits the search to sub/");
+      end;
+   end Regex_Options_And_Pathspec;
+
    overriding procedure Register_Tests (T : in out Test_Case) is
    begin
       Register_Routine
         (T, Finds_Matches'Access, "Grep: finds matching lines in tracked files");
+      Register_Routine
+        (T, Regex_Options_And_Pathspec'Access,
+         "Grep: regex kinds, -w/-v options, and pathspec filtering");
    end Register_Tests;
 
    overriding function Name

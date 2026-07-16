@@ -813,7 +813,7 @@ package body Version.Branch.Tests is
          Assert (Text'Length > 0, "conflict file must exist");
 
          Assert
-           (Ada.Strings.Fixed.Index (Text, "<<<<<<< main") /= 0,
+           (Ada.Strings.Fixed.Index (Text, "<<<<<<< HEAD") /= 0,
             "conflict file must contain current marker");
 
          Assert
@@ -880,7 +880,7 @@ package body Version.Branch.Tests is
          Assert (Found, "conflicted merge must appear in structured status");
          Assert
            (Ada.Strings.Fixed.Index
-              (Version.Status.Porcelain_Status_Text (Status), "U UU a.txt") /= 0,
+              (Version.Status.Porcelain_Status_Text (Status), "UU a.txt") /= 0,
             "conflicted merge must appear in porcelain status");
       end;
 
@@ -978,7 +978,7 @@ package body Version.Branch.Tests is
 
       Assert_File_Contains
         (Conflict_Path,
-         "<<<<<<< main",
+         "<<<<<<< HEAD",
          "conflicted file must keep conflict markers");
 
       Ada.Directories.Set_Directory (Old_Dir);
@@ -1313,10 +1313,13 @@ package body Version.Branch.Tests is
       Options.Whitespace := Version.Branch.Whitespace_Ignore_All_Space;
       Version.Branch.Merge ("feature", Options);
 
+      --  git parity: our side's change is whitespace-only under this mode, so
+      --  it is no change at all and the merge resolves to the other side's
+      --  file verbatim (verified against `git merge -Xignore-all-space`).
       Assert
         (Version.Test_Support.Read_Text_File (File_Path)
-         = "a  b",
-         "ignore-all-space merge must keep the current equivalent text");
+         = "ab",
+         "ignore-all-space merge must take the other side's file");
       Assert
         (not Version.Merge_State.State_Exists (Version.Repository.Open),
          "whitespace-equivalent merge must not leave merge state");
@@ -1425,7 +1428,7 @@ package body Version.Branch.Tests is
         (Raised,
          "explicit no-renormalize must override merge.renormalize config");
       Assert_File_Contains
-        (File_Path, "<<<<<<< main",
+        (File_Path, "<<<<<<< HEAD",
          "no-renormalize override must leave conflict markers");
       Assert
         (Version.Merge_State.State_Exists (Version.Repository.Open),
@@ -1541,7 +1544,7 @@ package body Version.Branch.Tests is
         (Raised,
          "nested merge=text attribute must reset inherited union behavior");
       Assert_File_Contains
-        (File_Path, "<<<<<<< main", "text reset must leave conflict markers");
+        (File_Path, "<<<<<<< HEAD", "text reset must leave conflict markers");
       Assert_File_Contains
         (File_Path, ">>>>>>> feature", "text reset must name target marker");
       Assert
@@ -1607,7 +1610,7 @@ package body Version.Branch.Tests is
         (Raised,
          "nested !merge attribute must reset inherited union behavior");
       Assert_File_Contains
-        (File_Path, "<<<<<<< main", "unset merge attr must leave conflict markers");
+        (File_Path, "<<<<<<< HEAD", "unset merge attr must leave conflict markers");
       Assert
         (Version.Merge_State.State_Exists (Version.Repository.Open),
          "unset merge attr conflict must leave merge state");
@@ -1721,9 +1724,9 @@ package body Version.Branch.Tests is
 
       Assert (Raised, "diff3 conflict merge must stop for user resolution");
       Assert_File_Contains
-        (File_Path, "<<<<<<<<< main", "diff3 must use configured left marker");
+        (File_Path, "<<<<<<<<< HEAD", "diff3 must use configured left marker");
       Assert_File_Contains
-        (File_Path, "||||||||| base", "diff3 must include the base section");
+        (File_Path, "||||||||| ", "diff3 must include the base section");
       Assert_File_Contains
         (File_Path, ">>>>>>>>> feature", "diff3 must use configured right marker");
 
@@ -1775,10 +1778,10 @@ package body Version.Branch.Tests is
 
       Assert (Raised, "configured diff3 conflict merge must stop");
       Assert_File_Contains
-        (File_Path, "<<<<<<< main",
+        (File_Path, "<<<<<<< HEAD",
          "mixed-case merge.conflictstyle must keep left marker");
       Assert_File_Contains
-        (File_Path, "||||||| base",
+        (File_Path, "||||||| ",
          "mixed-case merge.conflictstyle must include base section");
       Assert_File_Contains
         (File_Path, ">>>>>>> feature",
@@ -2369,10 +2372,11 @@ package body Version.Branch.Tests is
       Options.Fast_Forward := Version.Branch.Fast_Forward_Disabled;
       Version.Branch.Merge ("feature", Options);
 
+      --  %X/%Y are the conflict labels git would use (%S, the ancestor label,
+      --  is the abbreviated merge-base oid, so it is not spelled out here).
       Assert_File_Contains
         (Version.Test_Support.Join (Root, "conflict.txt"),
-         "base" & Character'Val (10)
-         & "main" & Character'Val (10)
+         "HEAD" & Character'Val (10)
          & "feature" & Character'Val (10),
          "external merge driver must expand conflict labels");
       Assert_File_Contains
@@ -3409,19 +3413,40 @@ package body Version.Branch.Tests is
       Version.Branch.Switch_Branch ("main");
 
       Options.Fast_Forward := Version.Branch.Fast_Forward_Disabled;
-      Version.Branch.Merge ("feature", Options);
+
+      --  git parity: a change is only merged on its own when at least one
+      --  common line separates it from the other side's change.  Here every
+      --  edit is adjacent to one on the other side (lines 1/2 and 4/5), so
+      --  git's xdl_merge conflicts -- and, the conflicts being fewer than
+      --  three common lines apart, it combines them into a single hunk.
+      --  Verified byte-for-byte against `git merge`.
+      begin
+         Version.Branch.Merge ("feature", Options);
+         Assert (False, "adjacent line edits must conflict, as git does");
+      exception
+         when Ada.IO_Exceptions.Data_Error =>
+            null;
+      end;
 
       Assert
         (Version.Test_Support.Read_Text_File (File_Path)
-         = "one-main" & Character'Val (10)
-           & "two-feature" & Character'Val (10)
+         = "<<<<<<< HEAD" & Character'Val (10)
+           & "one-main" & Character'Val (10)
+           & "two" & Character'Val (10)
            & "three" & Character'Val (10)
            & "four-main" & Character'Val (10)
-           & "five-feature",
-         "multiple independent line edits must auto-merge");
+           & "five" & Character'Val (10)
+           & "=======" & Character'Val (10)
+           & "one" & Character'Val (10)
+           & "two-feature" & Character'Val (10)
+           & "three" & Character'Val (10)
+           & "four" & Character'Val (10)
+           & "five-feature" & Character'Val (10)
+           & ">>>>>>> feature",
+         "adjacent line edits must produce git's combined conflict hunk");
       Assert
-        (not Version.Merge_State.State_Exists (Version.Repository.Open),
-         "multi-line auto-merge must not leave merge state");
+        (Version.Merge_State.State_Exists (Version.Repository.Open),
+         "conflicted merge must leave merge state");
 
       Ada.Directories.Set_Directory (Old_Dir);
    exception
@@ -3484,10 +3509,10 @@ package body Version.Branch.Tests is
       begin
          Assert
            (Ada.Strings.Fixed.Index
-              (Text, "keep-top" & Character'Val (10) & "<<<<<<< main") /= 0,
+              (Text, "keep-top" & Character'Val (10) & "<<<<<<< HEAD") /= 0,
             "zdiff3 must leave common prefix outside the conflict hunk");
          Assert
-           (Ada.Strings.Fixed.Index (Text, "||||||| base") /= 0,
+           (Ada.Strings.Fixed.Index (Text, "||||||| ") /= 0,
             "zdiff3 must include the base section");
          Assert
            (Ada.Strings.Fixed.Index
@@ -3527,8 +3552,8 @@ package body Version.Branch.Tests is
 
       Version.Test_Support.Write_Text_File
         (Old_Path,
-         "alpha" & Character'Val (10)
-         & "beta-main" & Character'Val (10)
+         "alpha-main" & Character'Val (10)
+         & "beta" & Character'Val (10)
          & "gamma" & Character'Val (10)
          & "delta" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add old.txt");
@@ -3555,8 +3580,8 @@ package body Version.Branch.Tests is
          "similarity rename merge must remove the old path");
       Assert
         (Version.Test_Support.Read_Text_File (New_Path)
-         = "alpha" & Character'Val (10)
-           & "beta-main" & Character'Val (10)
+         = "alpha-main" & Character'Val (10)
+           & "beta" & Character'Val (10)
            & "gamma-feature" & Character'Val (10)
            & "delta",
          "similarity rename merge must combine non-overlapping edits");
@@ -3594,8 +3619,8 @@ package body Version.Branch.Tests is
 
       Version.Test_Support.Write_Text_File
         (Old_Path,
-         "alpha" & Character'Val (10)
-         & "beta-main" & Character'Val (10)
+         "alpha-main" & Character'Val (10)
+         & "beta" & Character'Val (10)
          & "gamma" & Character'Val (10)
          & "delta" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add old.txt");
@@ -3624,8 +3649,8 @@ package body Version.Branch.Tests is
          "explicit find-renames must override merge.renames=false");
       Assert
         (Version.Test_Support.Read_Text_File (New_Path)
-         = "alpha" & Character'Val (10)
-           & "beta-main" & Character'Val (10)
+         = "alpha-main" & Character'Val (10)
+           & "beta" & Character'Val (10)
            & "gamma-feature" & Character'Val (10)
            & "delta",
          "explicit find-renames must combine rename/modify edits");
@@ -3779,6 +3804,10 @@ package body Version.Branch.Tests is
         (Sub_Path, "git checkout " & To_String (Main_Sub));
 
       Options.Fast_Forward := Version.Branch.Fast_Forward_Disabled;
+      --  Updating the submodule's working tree is version's opt-in extension:
+      --  git only moves the gitlink (submodule.recurse defaults to false).
+      Options.Recurse_Submodules := True;
+      Options.Recurse_Submodules_Explicit := True;
       Version.Branch.Merge ("feature", Options);
 
       Version.Git_Fixtures.Run
@@ -3869,6 +3898,10 @@ package body Version.Branch.Tests is
          "dirty" & Character'Val (10));
 
       Options.Fast_Forward := Version.Branch.Fast_Forward_Disabled;
+      --  Updating the submodule's working tree is version's opt-in extension:
+      --  git only moves the gitlink (submodule.recurse defaults to false).
+      Options.Recurse_Submodules := True;
+      Options.Recurse_Submodules_Explicit := True;
       begin
          Version.Branch.Merge ("feature", Options);
       exception
@@ -4061,11 +4094,15 @@ package body Version.Branch.Tests is
    begin
       Configure_Test_Repo (Root);
       Ada.Directories.Set_Directory (Root);
+      --  The two edits are kept a common line apart: git only merges a change
+      --  on its own when at least one unchanged line separates it from the
+      --  other side's change (adjacent edits conflict).
       Commit_File
         (Root, "old.txt",
          "one" & Character'Val (10)
          & "two" & Character'Val (10)
-         & "three" & Character'Val (10),
+         & "three" & Character'Val (10)
+         & "four" & Character'Val (10),
          "base");
       Version.Branch.Create_Branch ("feature");
 
@@ -4074,7 +4111,8 @@ package body Version.Branch.Tests is
         (New_Path,
          "one" & Character'Val (10)
          & "two-main" & Character'Val (10)
-         & "three" & Character'Val (10));
+         & "three" & Character'Val (10)
+         & "four" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add new.txt");
       Version.Write.Save ("main rename edit");
 
@@ -4084,7 +4122,8 @@ package body Version.Branch.Tests is
         (New_Path,
          "one" & Character'Val (10)
          & "two" & Character'Val (10)
-         & "three-feature" & Character'Val (10));
+         & "three" & Character'Val (10)
+         & "four-feature" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add new.txt");
       Version.Write.Save ("feature rename edit");
       Version.Branch.Switch_Branch ("main");
@@ -4096,7 +4135,8 @@ package body Version.Branch.Tests is
         (Version.Test_Support.Read_Text_File (New_Path)
          = "one" & Character'Val (10)
            & "two-main" & Character'Val (10)
-           & "three-feature",
+           & "three" & Character'Val (10)
+           & "four-feature",
          "same-destination rename merge must combine non-overlapping edits");
       Assert
         (not Ada.Directories.Exists (Version.Test_Support.Join (Root, "old.txt")),
@@ -4130,6 +4170,7 @@ package body Version.Branch.Tests is
       Version.Branch.Switch_Branch ("feature");
       Version.Git_Fixtures.Run (Root, "git mv old.sh new.sh");
       Version.Git_Fixtures.Run (Root, "git update-index --chmod=+x new.sh");
+      Version.Git_Fixtures.Run (Root, "chmod +x new.sh");
       Version.Write.Save ("feature rename executable bit");
       Version.Branch.Switch_Branch ("main");
 
@@ -6112,6 +6153,7 @@ package body Version.Branch.Tests is
       Version.Branch.Create_Branch ("feature");
 
       Version.Git_Fixtures.Run (Root, "git update-index --chmod=+x script.sh");
+      Version.Git_Fixtures.Run (Root, "chmod +x script.sh");
       Version.Write.Save ("main executable bit");
 
       Version.Branch.Switch_Branch ("feature");
@@ -6181,6 +6223,7 @@ package body Version.Branch.Tests is
          & "five-feature" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add script.sh");
       Version.Git_Fixtures.Run (Root, "git update-index --chmod=+x script.sh");
+      Version.Git_Fixtures.Run (Root, "chmod +x script.sh");
       Version.Write.Save ("feature edit executable bit");
       Version.Branch.Switch_Branch ("main");
 
@@ -6235,6 +6278,7 @@ package body Version.Branch.Tests is
         (Script_Path, "echo shared" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add script.sh");
       Version.Git_Fixtures.Run (Root, "git update-index --chmod=+x script.sh");
+      Version.Git_Fixtures.Run (Root, "chmod +x script.sh");
       Version.Write.Save ("main shared content executable bit");
 
       Version.Branch.Switch_Branch ("feature");
@@ -7752,10 +7796,10 @@ package body Version.Branch.Tests is
          Assert
            (Ada.Strings.Fixed.Index
               (Ada.Strings.Unbounded.To_String (Text),
-               Main_Text (Main_Text'First .. Main_Text'First + 11)
+               Main_Text (Main_Text'First .. Main_Text'First + 6)
                & " initial subject")
             /= 0,
-            "verbose branch list must include short tip id and commit subject");
+            "verbose branch list must include git's 7-hex tip id and subject");
       end;
 
       Version.Git_Fixtures.Run (Root, "git diff --quiet");

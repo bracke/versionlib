@@ -1,7 +1,7 @@
-with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.IO_Exceptions;
 
 with Version.History;
+with Version.Merge;
 with Version.Tree_Cache;
 
 package body Version.Blame is
@@ -10,11 +10,11 @@ package body Version.Blame is
 
    LF : constant Character := Character'Val (10);
 
-   package String_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
-
    package Line_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,
       Element_Type => Unbounded_String);
+
+   type Nat_Array is array (Positive range <>) of Natural;
 
    --  Content of Path in the tree of Commit, or "" when absent.
    function File_Content
@@ -57,17 +57,6 @@ package body Version.Blame is
       end if;
    end Split;
 
-   function Line_Set (S : String) return String_Sets.Set is
-      V   : Line_Vectors.Vector;
-      Out_Set : String_Sets.Set;
-   begin
-      Split (S, V);
-      for L of V loop
-         Out_Set.Include (To_String (L));
-      end loop;
-      return Out_Set;
-   end Line_Set;
-
    function Blame_File
      (Repo : Version.Repository.Repository_Handle;
       Tip  : Version.Objects.Hex_Object_Id;
@@ -84,38 +73,67 @@ package body Version.Blame is
       end if;
 
       declare
-         N        : constant Natural := Natural (Final.Length);
-         Assigned : array (1 .. N) of Boolean := [others => False];
-         Blamed   : array (1 .. N) of Version.Objects.Object_Id_Storage :=
+         N         : constant Natural := Natural (Final.Length);
+         Assigned  : array (1 .. N) of Boolean := [others => False];
+         Blamed    : array (1 .. N) of Version.Objects.Object_Id_Storage :=
            [others => Tip];
-         C        : Version.Objects.Hex_Object_Id := Tip;
+         --  Position of final line I in the file at the commit being examined
+         --  (0 once the line no longer exists there).
+         Pos       : Nat_Array (1 .. N);
+         C         : Version.Objects.Hex_Object_Id := Tip;
+         Cur_Text  : Unbounded_String :=
+           To_Unbounded_String (Tip_Content);
       begin
+         for I in 1 .. N loop
+            Pos (I) := I;
+         end loop;
+
          loop
             declare
                Parents : constant Version.History.Commit_Id_Vectors.Vector :=
                  Version.History.Parent_Commits (Repo, C);
-               Has_Parent : constant Boolean := not Parents.Is_Empty;
-               C_Set : constant String_Sets.Set :=
-                 Line_Set (File_Content (Repo, C, Path));
-               P_Set : constant String_Sets.Set :=
-                 (if Has_Parent
-                  then Line_Set
-                         (File_Content (Repo, Parents.First_Element, Path))
-                  else String_Sets.Empty_Set);
             begin
-               for I in 1 .. N loop
-                  if not Assigned (I)
-                    and then C_Set.Contains (To_String (Final.Element (I)))
-                    and then not P_Set.Contains
-                                  (To_String (Final.Element (I)))
-                  then
-                     Blamed (I) := C;
-                     Assigned (I) := True;
-                  end if;
-               end loop;
+               if Parents.Is_Empty then
+                  for I in 1 .. N loop
+                     if not Assigned (I) and then Pos (I) > 0 then
+                        Blamed (I) := C;
+                        Assigned (I) := True;
+                     end if;
+                  end loop;
+                  exit;
+               end if;
 
-               exit when not Has_Parent;
-               C := Parents.First_Element;
+               declare
+                  Par      : constant Version.Objects.Hex_Object_Id :=
+                    Parents.First_Element;
+                  Par_Text : constant String :=
+                    File_Content (Repo, Par, Path);
+               begin
+                  declare
+                     --  git's own line correspondence (see Version.Merge):
+                     --  blame must follow lines exactly where git follows them.
+                     A : constant Version.Merge.Line_Match_Vectors.Vector :=
+                       Version.Merge.Align_Lines
+                         (Current_Text => To_String (Cur_Text),
+                          Parent_Text  => Par_Text);
+                  begin
+                     for I in 1 .. N loop
+                        if not Assigned (I) and then Pos (I) > 0 then
+                           if Pos (I) > Natural (A.Length)
+                             or else A (Pos (I)) = 0
+                           then
+                              --  Line at Pos(I) was introduced by C.
+                              Blamed (I) := C;
+                              Assigned (I) := True;
+                           else
+                              Pos (I) := A (Pos (I));
+                           end if;
+                        end if;
+                     end loop;
+                  end;
+                  C := Par;
+                  Cur_Text := To_Unbounded_String (Par_Text);
+               end;
             end;
          end loop;
 

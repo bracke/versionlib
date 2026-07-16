@@ -1126,6 +1126,25 @@ package body Version.Branch is
       end if;
    end Infer_Subtree_Prefix;
 
+   function Shift_Subtree_Items
+     (Items         : Version.Objects.Tree_Entry_Vectors.Vector;
+      Current_Items : Version.Objects.Tree_Entry_Vectors.Vector;
+      Target_Items  : Version.Objects.Tree_Entry_Vectors.Vector;
+      Prefix        : String := "")
+      return Version.Objects.Tree_Entry_Vectors.Vector
+   is
+      Effective : constant String :=
+        (if Prefix /= "" then Normalize_Subtree_Prefix (Prefix)
+         else Infer_Subtree_Prefix (Current_Items, Target_Items));
+   begin
+      if Effective = "" then
+         return Items;
+      end if;
+
+      return Rewrite_Subtree_Items (Items => Items, Prefix => Effective);
+   end Shift_Subtree_Items;
+
+
    function Effective_Subtree_Prefix
      (Options       : Merge_Options;
       Current_Items : Version.Objects.Tree_Entry_Vectors.Vector;
@@ -1268,13 +1287,17 @@ package body Version.Branch is
 
             Version.Merge.Merge_Trees
               (Repo          => Repo,
-               Current_Name  => Version.Refs.Current_Branch_Name (Repo),
+               Current_Name  => "HEAD",
                Target_Name   => Name,
                Base_Items    => Base_Items,
                Current_Items => Current_Items,
                Target_Items  => Target_Items,
                Merged_Index  => Merged_Index,
-               Conflicts     => Conflicts);
+               Conflicts     => Conflicts,
+               Behavior      => Version.Merge.Merge_Behavior'
+                 (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
+                    (Version.Merge.Base_Label_For (Repo, Base_Id)),
+                  others     => <>));
 
             if not Conflicts.Is_Empty then
                Version.Merge_State.Write_State
@@ -2108,6 +2131,25 @@ package body Version.Branch is
 
    function Merge_Behavior_For
      (Repo : Version.Repository.Repository_Handle; Options : Merge_Options)
+      return Version.Merge.Merge_Behavior;
+
+   --  Merge_Behavior_For, plus the diff3 base label git would print for this
+   --  merge base.
+   function Merge_Behavior_With_Base
+     (Repo    : Version.Repository.Repository_Handle;
+      Options : Merge_Options;
+      Base_Id : Version.Objects.Hex_Object_Id)
+      return Version.Merge.Merge_Behavior
+   is
+      Result : Version.Merge.Merge_Behavior := Merge_Behavior_For (Repo, Options);
+   begin
+      Result.Base_Label := Ada.Strings.Unbounded.To_Unbounded_String
+        (Version.Merge.Base_Label_For (Repo, Base_Id));
+      return Result;
+   end Merge_Behavior_With_Base;
+
+   function Merge_Behavior_For
+     (Repo : Version.Repository.Repository_Handle; Options : Merge_Options)
       return Version.Merge.Merge_Behavior
    is
       Result : Version.Merge.Merge_Behavior;
@@ -2245,14 +2287,29 @@ package body Version.Branch is
          return False;
    end Is_Local_Branch_Target;
 
+   --  git names what it merged the way you named it: a branch by its branch
+   --  name, a tag as a tag, a remote-tracking branch as such, and anything
+   --  else -- an object id, HEAD~2 -- as a commit, spelled exactly as it was
+   --  given on the command line.
    function Default_Merge_Message (Target : String) return String is
-      Label : constant String := Short_Target_Label (Target);
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+
+      function Exists (Ref : String) return Boolean is
+        (Version.Refs.Ref_Exists (Repo, Ref));
    begin
       if Is_Local_Branch_Target (Target) then
-         return "Merge branch '" & Label & "'";
+         return "Merge branch '" & Target & "'";
+      elsif Exists ("refs/tags/" & Target) then
+         return "Merge tag '" & Target & "'";
+      elsif Exists ("refs/remotes/" & Target) then
+         return "Merge remote-tracking branch '" & Target & "'";
       else
-         return "Merge " & Label;
+         return "Merge commit '" & Target & "'";
       end if;
+   exception
+      when others =>
+         return "Merge commit '" & Target & "'";
    end Default_Merge_Message;
 
    function Selected_Merge_Message
@@ -2858,10 +2915,14 @@ package body Version.Branch is
                   Merged_Index : Version.Staging.Index_Entry_Vectors.Vector;
                   Conflicts    : Version.Merge.Conflict_Vectors.Vector;
                begin
+                  Behavior.Base_Label :=
+                    Ada.Strings.Unbounded.To_Unbounded_String
+                      (Version.Merge.Base_Label_For (Repo, Pair_Base_Id));
+
                   Version.Merge.Merge_Trees
                     (Repo          => Repo,
-                     Current_Name  => "merge-base",
-                     Target_Name   => "merge-base",
+                     Current_Name  => "Temporary merge branch 1",
+                     Target_Name   => "Temporary merge branch 2",
                      Base_Items    => Pair_Base_Items,
                      Current_Items => Accum_Items,
                      Target_Items  => Next_Items,
@@ -3174,14 +3235,15 @@ package body Version.Branch is
 
             Version.Merge.Merge_Trees
               (Repo          => Repo,
-               Current_Name  => Version.Refs.Current_Branch_Name (Repo),
+               Current_Name  => "HEAD",
                Target_Name   => Target,
                Base_Items    => Effective_Base_Items,
                Current_Items => Current_Items,
                Target_Items  => Effective_Target_Items,
                Merged_Index  => Merged_Index,
                Conflicts     => Conflicts,
-               Behavior      => Merge_Behavior_For (Repo, Effective_Options));
+               Behavior      => Merge_Behavior_With_Base
+                 (Repo, Effective_Options, Base_Id));
 
             if not Conflicts.Is_Empty then
                Version.Merge_State.Write_State
@@ -3473,14 +3535,15 @@ package body Version.Branch is
 
                   Version.Merge.Merge_Trees
                     (Repo          => Repo,
-                     Current_Name  => Version.Refs.Current_Branch_Name (Repo),
+                     Current_Name  => "HEAD",
                      Target_Name   => Target_Name,
                      Base_Items    => Effective_Base_Items,
                      Current_Items => Accum_Items,
                      Target_Items  => Effective_Target_Items,
                      Merged_Index  => Merged_Index,
                      Conflicts     => Conflicts,
-                     Behavior      => Merge_Behavior_For (Repo, Effective_Options));
+                     Behavior      => Merge_Behavior_With_Base
+                       (Repo, Effective_Options, Base_Id));
 
                   if not Conflicts.Is_Empty then
                      Version.Merge_State.Write_State
@@ -3885,7 +3948,7 @@ package body Version.Branch is
                      Id    => Blob_Id,
                      Mode  =>
                        Ada.Strings.Unbounded.To_Unbounded_String ("100644"),
-                     Stage => 0));
+                     Stage => 0, Skip_Worktree => False));
             end;
          end loop;
       end if;
@@ -4524,8 +4587,9 @@ package body Version.Branch is
    begin
       Sort_Branch_Names (Branches);
 
+      --  git prints nothing when there are no branches.
       if Branches.Is_Empty then
-         return "No branches" & Character'Val (10);
+         return "";
       end if;
 
       for I in Branches.First_Index .. Branches.Last_Index loop
@@ -4553,8 +4617,13 @@ package body Version.Branch is
 
             Append (Text, (if Name = Current then "* " else "  "));
             Append (Text, Name);
-            Append (Text, Spaces (Max_Name_Length - Name'Length + 2));
-            Append (Text, Short_Id (To_String (Tip)));
+            --  git pads the name to the widest, plus one separating space,
+            --  and abbreviates the tip to seven hex digits.
+            Append (Text, Spaces (Max_Name_Length - Name'Length + 1));
+            Append
+              (Text,
+               To_String (Tip) (To_String (Tip)'First
+                                .. To_String (Tip)'First + 6));
             Ada.Strings.Unbounded.Append (Text, " ");
             Append (Text, Version.Objects.Commit_Message_First_Line (Obj));
             Append (Text, Character'Val (10));

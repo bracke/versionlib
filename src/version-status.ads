@@ -11,6 +11,7 @@ package Version.Status is
      (New_File,
       Modified_File,
       Deleted_File,
+      Renamed_File,
       Ignored_File,
       Unmerged_File,
       Both_Added_File,
@@ -21,6 +22,8 @@ package Version.Status is
    type File_Change is record
       Path : Unbounded_String;
       Kind : Change_Kind;
+      --  For Renamed_File: where the content came from.  Empty otherwise.
+      Old_Path : Unbounded_String;
    end record;
 
    package File_Change_Vectors is new
@@ -44,19 +47,25 @@ package Version.Status is
    --  but returns structured data for tests and future non-text frontends.
    --
    --  It must not modify repository files.
-   function Current_Status return Status_Result;
+   --  All_Untracked is git's `-uall`: list every untracked file instead of
+   --  collapsing a wholly-untracked directory to `dir/`.
+   function Current_Status
+     (All_Untracked : Boolean := False) return Status_Result;
 
    function Current_Status
-     (Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector)
+     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
+      All_Untracked : Boolean := False)
       return Status_Result;
 
    function Current_Status_With_Ignored
-     (Mode : Ignored_Display_Mode := Ignored_Traditional)
+     (Mode          : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked : Boolean := False)
       return Status_Result;
 
    function Current_Status_With_Ignored
-     (Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
-      Mode      : Ignored_Display_Mode := Ignored_Traditional)
+     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
+      Mode          : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked : Boolean := False)
       return Status_Result;
 
    function Clean_Status_Line return String;
@@ -76,37 +85,44 @@ package Version.Status is
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String;
 
-   procedure Print_Status;
+   procedure Print_Status (All_Untracked : Boolean := False);
 
    procedure Print_Status
-     (Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector);
+     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
+      All_Untracked : Boolean := False);
 
    procedure Print_Porcelain_Status
      (Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional);
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
 
    procedure Print_Porcelain_Status
      (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional);
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
 
    procedure Print_Short_Status
      (Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional);
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
 
    procedure Print_Short_Status
      (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional);
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
 
    procedure Print_Branch_Status
      (Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional);
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
 
    procedure Print_Branch_Status
      (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Include_Ignored : Boolean := False;
-      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional);
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
 
    procedure Print_Ignored_Status
      (Mode : Ignored_Display_Mode := Ignored_Traditional);

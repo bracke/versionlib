@@ -35,6 +35,7 @@ package Version.Pathspec is
       Mode             : Match_Mode := Literal_Mode;
       Excluded         : Boolean := False;
       Top_Anchored     : Boolean := False;
+      Icase            : Boolean := False;
       Directory_Prefix : Boolean := False;
       Has_Slash        : Boolean := False;
       Attribute_Mode   : Attribute_Match_Mode := Attribute_Ignored;

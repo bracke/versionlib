@@ -34,7 +34,7 @@ package body Version.Show.Tests is
       begin
          Assert (Contains (Text, "commit "), "show commit line missing");
          Assert (Contains (Text, "initial"), "show message missing");
-         Assert (Contains (Text, "diff --version a/a.txt b/a.txt"), "root patch missing");
+         Assert (Contains (Text, "diff --git a/a.txt b/a.txt"), "root patch missing");
       end;
       Ada.Directories.Set_Directory (Old_Dir);
    exception

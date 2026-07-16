@@ -293,7 +293,7 @@ package body Version.Stash is
                     (Path => Item.Path,
                      Id   => Item.Id,
                      Mode => Item.Mode,
-                     Stage => 0));
+                     Stage => 0, Skip_Worktree => False));
             end;
          end loop;
       end if;
@@ -367,8 +367,9 @@ package body Version.Stash is
 
       Paths.Append
         (Version.Status.File_Change'
-           (Path => To_Unbounded_String (Path),
-            Kind => Version.Status.Modified_File));
+           (Path     => To_Unbounded_String (Path),
+            Kind     => Version.Status.Modified_File,
+            Old_Path => Null_Unbounded_String));
    end Append_Unique_Path;
 
    function Selected_Tracked_Paths
@@ -461,7 +462,7 @@ package body Version.Stash is
                                      (Repo    => Repo,
                                       Content => Version.Files.Read_Binary_File (Full)),
                            Mode => To_Unbounded_String ("100644"),
-                           Stage => 0));
+                           Stage => 0, Skip_Worktree => False));
                   end if;
                end if;
             end;
@@ -513,9 +514,12 @@ package body Version.Stash is
          raise Ada.IO_Exceptions.Data_Error with
            Apply_In_Progress_State_Diagnostic;
       end if;
+      --  Untracked files never block an apply: git ignores them here (they
+      --  are not part of what the stash restores), and refusing on them made
+      --  `stash pop` fail in the extremely ordinary case of one stray new file
+      --  sitting in the tree.
       if not Status.Changes.Is_Empty
         or else not Status.Staged.Is_Empty
-        or else not Status.Untracked.Is_Empty
         or else not Status.Conflicted.Is_Empty
       then
          raise Ada.IO_Exceptions.Data_Error with
@@ -591,7 +595,7 @@ package body Version.Stash is
                        (Path => To_Unbounded_String (Path),
                         Id   => Blob_Id,
                         Mode => To_Unbounded_String ("100644"),
-                        Stage => 0));
+                        Stage => 0, Skip_Worktree => False));
                end if;
             end;
          end loop;
@@ -1619,8 +1623,8 @@ package body Version.Stash is
            (Repo => Repo, Commit_Id => Head_Id, Objects => Objects, Trees => Trees);
          Version.Merge.Merge_Trees
            (Repo          => Repo,
-            Current_Name  => "stash-current",
-            Target_Name   => "stash",
+            Current_Name  => "Updated upstream",
+            Target_Name   => "Stashed changes",
             Base_Items    => Base_Items,
             Current_Items => Current_Items,
             Target_Items  => Target_Items,
@@ -1718,8 +1722,8 @@ package body Version.Stash is
          --  index, leaving any staged merge result in place.
          Version.Merge.Merge_Trees
            (Repo          => Repo,
-            Current_Name  => "stash-current",
-            Target_Name   => "stash",
+            Current_Name  => "Updated upstream",
+            Target_Name   => "Stashed changes",
             Base_Items    => Base_Items,
             Current_Items => Current_Items,
             Target_Items  => Target_Items,

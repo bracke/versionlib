@@ -53,6 +53,11 @@ package Version.Files is
      (Repo_Root     : String;
       Relative_Path : String);
 
+   procedure Set_Executable
+     (Path : String; Executable : Boolean);
+   --  Set (Executable) or clear the executable bits of Path via POSIX chmod
+   --  (mode 0755 vs 0644). A no-op on platforms without an executable bit.
+
    function Is_Ordinary_File
      (Path : String)
       return Boolean;

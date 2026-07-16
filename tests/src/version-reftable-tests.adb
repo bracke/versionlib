@@ -5,6 +5,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Version.Objects;
 with Version.Files;
+with Version.Maintenance;
 with Version.Refs;
 with Version.Repository;
 with Version.Reftable.Writer;
@@ -574,12 +575,64 @@ package body Version.Reftable.Tests is
          raise;
    end Compaction_Bounds_Stack;
 
+   --  Regression: object reachability (used by `verify`/`gc`) must enumerate
+   --  branch/tag roots from the reftable stack. git's reftable backend leaves
+   --  .git/refs/heads as a stub file, which previously crashed the loose-ref
+   --  walk with "unknown directory heads".
+   procedure Verify_Reads_Git_Reftable_Roots
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Git_Fixtures.Run (Root, "git init --ref-format=reftable -q .");
+      Version.Git_Fixtures.Run (Root, "git config user.email t@e.c");
+      Version.Git_Fixtures.Run (Root, "git config user.name T");
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "f.txt"), "hi" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Git_Fixtures.Run (Root, "git commit -q -m c1");
+      --  A branch and an annotated tag: their tips must be reached as roots.
+      Version.Git_Fixtures.Run (Root, "git branch feature");
+      Version.Git_Fixtures.Run (Root, "git tag -a v1 -m rel");
+      Version.Git_Fixtures.Run
+        (Root, "git rev-list --objects --all | wc -l > n.txt");
+
+      Ada.Directories.Set_Directory (Root);
+      declare
+         Expected : constant String :=
+           Ada.Strings.Fixed.Trim
+             (Version.Test_Support.Read_Text_File
+                (Version.Test_Support.Join (Root, "n.txt")),
+              Ada.Strings.Both);
+         Result : constant Version.Maintenance.Maintenance_Result :=
+           Version.Maintenance.Verify (Version.Repository.Open);
+      begin
+         --  verify must not crash and must count exactly git's reachable set
+         --  (commit + tree + blob + annotated tag object = 4).
+         Assert
+           (Natural'Image (Result.Object_Count) = " " & Expected,
+            "verify on a git reftable repo must count git's reachable objects"
+            & " (got" & Natural'Image (Result.Object_Count)
+            & ", git " & Expected & ")");
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Verify_Reads_Git_Reftable_Roots;
+
    overriding procedure Register_Tests (T : in out Test_Case) is
       use AUnit.Test_Cases.Registration;
    begin
       Register_Routine
         (T, Reader_Matches_Git'Access,
          "reftable reader matches git show-ref");
+      Register_Routine
+        (T, Verify_Reads_Git_Reftable_Roots'Access,
+         "verify/gc reachability reads reftable roots (git repo)");
       Register_Routine
         (T, Compaction_Bounds_Stack'Access,
          "reftable geometric compaction keeps the stack bounded");

@@ -1,4 +1,4 @@
-with Ada.Calendar;
+with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.IO_Exceptions;
@@ -416,27 +416,82 @@ package body Version.Write is
           (Repo => Repo, Entries => Entries, Prefix => Null_Unbounded_String);
    end Write_Tree_From_Index;
 
-   function Natural_Image_No_Leading_Space (Value : Natural) return String is
-      Image : constant String := Natural'Image (Value);
+   function Write_Object
+     (Repo    : Version.Repository.Repository_Handle;
+      Kind    : String;
+      Content : String)
+      return Version.Objects.Hex_Object_Id is
    begin
-      return Image (Image'First + 1 .. Image'Last);
-   end Natural_Image_No_Leading_Space;
+      Write_Loose_Object (Repo => Repo, Kind => Kind, Content => Content);
+      return Object_Id_For (Repo, Kind, Content);
+   end Write_Object;
 
-   function Unix_Time_Image return String is
-      Epoch : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (Year => 1970, Month => 1, Day => 1);
+   function Write_Tree
+     (Repo    : Version.Repository.Repository_Handle;
+      Entries : Version.Objects.Tree_Entry_Vectors.Vector)
+      return Version.Objects.Hex_Object_Id
+   is
+      --  git base_name_compare: compare the shared prefix, then a trailing
+      --  virtual byte ('/' for a directory, NUL otherwise), unsigned.
+      function Less (L, R : Tree_Entry) return Boolean is
+         LN : constant String := To_String (L.Path);
+         RN : constant String := To_String (R.Path);
+         N  : constant Natural := Natural'Min (LN'Length, RN'Length);
+      begin
+         for I in 1 .. N loop
+            if LN (LN'First + I - 1) /= RN (RN'First + I - 1) then
+               return LN (LN'First + I - 1) < RN (RN'First + I - 1);
+            end if;
+         end loop;
+         declare
+            LC : constant Character :=
+              (if LN'Length > N then LN (LN'First + N)
+               elsif L.Kind = Tree_Directory then '/'
+               else Character'Val (0));
+            RC : constant Character :=
+              (if RN'Length > N then RN (RN'First + N)
+               elsif R.Kind = Tree_Directory then '/'
+               else Character'Val (0));
+         begin
+            return LC < RC;
+         end;
+      end Less;
 
-      Now : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+      package Tree_Sorting is new
+        Version.Objects.Tree_Entry_Vectors.Generic_Sorting ("<" => Less);
 
-      Seconds : constant Natural := Natural (Ada.Calendar."-" (Now, Epoch));
+      function Canonical_Mode (M : String) return String is
+         First : Positive := M'First;
+      begin
+         --  Drop leading zeros ("040000" -> "40000"); keep at least one digit.
+         while First < M'Last and then M (First) = '0' loop
+            First := First + 1;
+         end loop;
+         return M (First .. M'Last);
+      end Canonical_Mode;
+
+      Sorted  : Tree_Entry_Vectors.Vector := Entries;
+      Content : Unbounded_String;
    begin
-      return Natural_Image_No_Leading_Space (Seconds);
-   end Unix_Time_Image;
+      Tree_Sorting.Sort (Sorted);
 
-   function Timestamp_Line return String is
-   begin
-      return Unix_Time_Image & " +0000";
-   end Timestamp_Line;
+      for E of Sorted loop
+         Append (Content, Canonical_Mode (To_String (E.Mode)));
+         Append (Content, " ");
+         Append (Content, To_String (E.Path));
+         Append (Content, Character'Val (0));
+         Append (Content, Version.Objects.To_Raw (E.Id));
+      end loop;
+
+      declare
+         Tree_Content : constant String := To_String (Content);
+         Id : constant Version.Objects.Hex_Object_Id :=
+           Object_Id_For (Repo, "tree", Tree_Content);
+      begin
+         Write_Loose_Object (Repo, "tree", Tree_Content);
+         return Id;
+      end;
+   end Write_Tree;
 
    function Commit_Header
      (Repo    : Version.Repository.Repository_Handle;
@@ -455,36 +510,15 @@ package body Version.Write is
          end loop;
       end if;
 
-      declare
-         User : constant Version.Config.Identity :=
-           Version.Config.User_Identity (Repo);
+      Append
+        (Content,
+         "author " & Version.Config.Author_Signature (Repo)
+         & Character'Val (10));
 
-         Name : constant String := To_String (User.Name);
-
-         Email : constant String := To_String (User.Email);
-
-         Time_Text : constant String := Timestamp_Line;
-      begin
-         Append
-           (Content,
-            "author "
-            & Name
-            & " <"
-            & Email
-            & "> "
-            & Time_Text
-            & Character'Val (10));
-
-         Append
-           (Content,
-            "committer "
-            & Name
-            & " <"
-            & Email
-            & "> "
-            & Time_Text
-            & Character'Val (10));
-      end;
+      Append
+        (Content,
+         "committer " & Version.Config.Committer_Signature (Repo)
+         & Character'Val (10));
 
       return To_String (Content);
    end Commit_Header;
@@ -684,9 +718,6 @@ package body Version.Write is
       Message : String) return Version.Objects.Hex_Object_Id
    is
       LF     : constant Character := Character'Val (10);
-      User   : constant Version.Config.Identity :=
-        Version.Config.User_Identity (Repo);
-      Time   : constant String := Timestamp_Line;
       Header : Unbounded_String;
    begin
       Append (Header, "tree " & To_String (Tree_Id) & LF);
@@ -696,13 +727,35 @@ package body Version.Write is
       Append (Header, "author " & Author & LF);
       Append
         (Header,
-         "committer " & To_String (User.Name) & " <"
-         & To_String (User.Email) & "> " & Time & LF);
+         "committer " & Version.Config.Committer_Signature (Repo) & LF);
       return Write_Commit_Content
         (Repo    => Repo,
          Content => Commit_Content_From_Header
                       (Header => To_String (Header), Message => Message));
    end Write_Commit_With_Author;
+
+   function Write_Commit_Raw
+     (Repo      : Version.Repository.Repository_Handle;
+      Tree_Id   : Version.Objects.Hex_Object_Id;
+      Parents   : Version.Objects.Object_Id_Vectors.Vector;
+      Author    : String;
+      Committer : String;
+      Message   : String) return Version.Objects.Hex_Object_Id
+   is
+      LF     : constant Character := Character'Val (10);
+      Header : Unbounded_String;
+   begin
+      Append (Header, "tree " & To_String (Tree_Id) & LF);
+      for I in Parents.First_Index .. Parents.Last_Index loop
+         Append (Header, "parent " & To_String (Parents.Element (I)) & LF);
+      end loop;
+      Append (Header, "author " & Author & LF);
+      Append (Header, "committer " & Committer & LF);
+      return Write_Commit_Content
+        (Repo    => Repo,
+         Content => Commit_Content_From_Header
+                      (Header => To_String (Header), Message => Message));
+   end Write_Commit_Raw;
 
    function Write_Signed_Commit_With_Parents
      (Repo        : Version.Repository.Repository_Handle;
@@ -760,17 +813,10 @@ package body Version.Write is
       Append (Content, "type " & Type_Name & Character'Val (10));
       Append (Content, "tag " & Tag_Name & Character'Val (10));
 
-      declare
-         User : constant Version.Config.Identity :=
-           Version.Config.User_Identity (Repo);
-         Name : constant String := To_String (User.Name);
-         Email : constant String := To_String (User.Email);
-      begin
-         Append
-           (Content,
-            "tagger " & Name & " <" & Email & "> " & Timestamp_Line
-            & Character'Val (10));
-      end;
+      Append
+        (Content,
+         "tagger " & Version.Config.Committer_Signature (Repo)
+         & Character'Val (10));
 
       Append (Content, Character'Val (10));
       Append (Content, Message);
@@ -977,7 +1023,102 @@ package body Version.Write is
       end if;
    end Advance_HEAD_After_Save;
 
-   procedure Save_Amend (Message : String; Run_Hooks : Boolean := True) is
+   --  Resolve the OpenPGP key a new commit should be signed with, or "" when it
+   --  must stay unsigned. Mirrors git: commit.gpgSign selects signing, the key
+   --  comes from user.signingKey (else "default" = gpg's default key), and an
+   --  explicit key/`-S` always signs while `--no-gpg-sign` never does.
+   function Commit_Signing_Key
+     (Repo        : Version.Repository.Repository_Handle;
+      Sign        : Sign_Choice;
+      Signing_Key : String) return String
+   is
+      --  Get_Value raises when a key is absent, so guard every read with
+      --  Has_Key (an unconfigured user.signingKey / commit.gpgSign is normal).
+      function Config_Value (Name : String) return String is
+        (if Version.Config.Has_Key (Repo, Name)
+         then Version.Config.Trim (Version.Config.Get_Value (Repo, Name))
+         else "");
+
+      Key_Cfg : constant String := Config_Value ("user.signingKey");
+
+      function Default_Key return String is
+        (if Key_Cfg'Length > 0 then Key_Cfg else "default");
+
+      --  git boolean: a present valueless key is true; explicit false-ish
+      --  spellings are false; everything else present is true.
+      function Config_True (Name : String) return Boolean is
+      begin
+         if not Version.Config.Has_Key (Repo, Name) then
+            return False;
+         else
+            declare
+               Value : constant String :=
+                 Ada.Characters.Handling.To_Lower (Config_Value (Name));
+            begin
+               return Value /= "false" and then Value /= "no"
+                 and then Value /= "off" and then Value /= "0";
+            end;
+         end if;
+      end Config_True;
+   begin
+      case Sign is
+         when Sign_Disable =>
+            return "";
+         when Sign_Force =>
+            return (if Signing_Key'Length > 0 then Signing_Key else Default_Key);
+         when Sign_From_Config =>
+            if Signing_Key'Length > 0 then
+               return Signing_Key;
+            elsif Config_True ("commit.gpgSign") then
+               return Default_Key;
+            else
+               return "";
+            end if;
+      end case;
+   end Commit_Signing_Key;
+
+   --  Write a single-parent commit, signing it when Commit_Signing_Key selects
+   --  a key. Shared by Save and Save_Amend.
+   function Write_Possibly_Signed_Commit
+     (Repo        : Version.Repository.Repository_Handle;
+      Tree_Id     : Version.Objects.Hex_Object_Id;
+      Parent_Id   : String;
+      Message     : String;
+      Sign        : Sign_Choice;
+      Signing_Key : String) return Version.Objects.Hex_Object_Id
+   is
+      Key : constant String := Commit_Signing_Key (Repo, Sign, Signing_Key);
+   begin
+      if Key'Length = 0 then
+         return Write_Commit
+           (Repo => Repo, Tree_Id => Tree_Id,
+            Parent_Id => Parent_Id, Message => Message);
+      end if;
+
+      declare
+         Parents : Version.Objects.Object_Id_Vectors.Vector;
+      begin
+         if Parent_Id'Length > 0 then
+            if not Version.Objects.Is_Valid_Hex_Object_Id (Parent_Id) then
+               raise Ada.IO_Exceptions.Data_Error with "invalid parent commit id";
+            end if;
+            Parents.Append (Version.Objects.To_Object_Id (Parent_Id));
+         end if;
+         return Write_Signed_Commit_With_Parents
+           (Repo        => Repo,
+            Tree_Id     => Tree_Id,
+            Parents     => Parents,
+            Message     => Message,
+            Signing_Key => Key);
+      end;
+   end Write_Possibly_Signed_Commit;
+
+   procedure Save_Amend
+     (Message     : String;
+      Run_Hooks   : Boolean := True;
+      Sign        : Sign_Choice := Sign_From_Config;
+      Signing_Key : String := "")
+   is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
 
@@ -998,11 +1139,13 @@ package body Version.Write is
         Write_Tree_From_Index (Repo, Index);
 
       Commit_Id : constant Version.Objects.Hex_Object_Id :=
-        Write_Commit
-          (Repo      => Repo,
-           Tree_Id   => Tree_Id,
-           Parent_Id => Parent,
-           Message   => Final_Message);
+        Write_Possibly_Signed_Commit
+          (Repo        => Repo,
+           Tree_Id     => Tree_Id,
+           Parent_Id   => Parent,
+           Message     => Final_Message,
+           Sign        => Sign,
+           Signing_Key => Signing_Key);
    begin
       Advance_HEAD_After_Save
         (Repo      => Repo,
@@ -1012,7 +1155,12 @@ package body Version.Write is
       Version.Hooks.Run_Post_Commit (Repo => Repo, Run_Hooks => Run_Hooks);
    end Save_Amend;
 
-   procedure Save (Message : String; Run_Hooks : Boolean := True) is
+   procedure Save
+     (Message     : String;
+      Run_Hooks   : Boolean := True;
+      Sign        : Sign_Choice := Sign_From_Config;
+      Signing_Key : String := "")
+   is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
 
@@ -1038,11 +1186,13 @@ package body Version.Write is
               Run_Hooks => Run_Hooks);
 
          Commit_Id : constant Version.Objects.Hex_Object_Id :=
-           Write_Commit
-             (Repo      => Repo,
-              Tree_Id   => Tree_Id,
-              Parent_Id => Parent,
-              Message   => Final_Message);
+           Write_Possibly_Signed_Commit
+             (Repo        => Repo,
+              Tree_Id     => Tree_Id,
+              Parent_Id   => Parent,
+              Message     => Final_Message,
+              Sign        => Sign,
+              Signing_Key => Signing_Key);
       begin
          Advance_HEAD_After_Save
            (Repo      => Repo,

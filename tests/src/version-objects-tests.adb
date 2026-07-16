@@ -1832,9 +1832,49 @@ package body Version.Objects.Tests is
          "wrong length or non-hex must be rejected");
    end Is_Valid_Hex_Object_Id_Accepts_40_And_64;
 
+   procedure Read_Object_Honors_Replace_Ref
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      LF : constant Character := Character'Val (10);
+      --  Deterministic blob ids for "AAA\n" and "BBB\n".
+      B1 : constant String := "43d5a8ed6ef6c00ff775008633f95787d088285d";
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
+      Ada.Directories.Set_Directory (Root);
+      Version.Git_Fixtures.Run
+        (Root,
+         "B1=$(printf 'AAA\n' | git hash-object -w --stdin); "
+         & "B2=$(printf 'BBB\n' | git hash-object -w --stdin); "
+         & "git replace ""$B1"" ""$B2""");
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+      begin
+         Assert
+           (Version.Objects.Content
+              (Version.Objects.Read_Object
+                 (Repo, Version.Objects.To_Object_Id (B1)))
+            = "BBB" & LF,
+            "Read_Object follows refs/replace to the replacement object");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Read_Object_Honors_Replace_Ref;
+
    overriding
    procedure Register_Tests (T : in out Test_Case) is
    begin
+      Register_Routine
+        (T, Read_Object_Honors_Replace_Ref'Access,
+         "Read_Object honors a refs/replace redirect");
       Register_Routine
         (T,
          Is_Valid_Hex_Object_Id_Accepts_40_And_64'Access,

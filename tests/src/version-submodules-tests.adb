@@ -77,7 +77,7 @@ package body Version.Submodules.Tests is
            (Path => To_Unbounded_String ("deps/libfoo"),
             Id   => Id,
             Mode => To_Unbounded_String ("160000"),
-            Stage => 0));
+            Stage => 0, Skip_Worktree => False));
       Version.Staging.Write (Repo => Repo, Entries => Entries);
    end Add_Gitlink;
 
@@ -420,7 +420,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          begin
@@ -466,7 +466,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          begin
@@ -958,7 +958,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          declare
@@ -999,7 +999,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
          Assert
            (Version.Submodules.Is_Submodule_Path (Repo, "deps/libfoo"),
@@ -1031,7 +1031,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          Assert
@@ -1441,7 +1441,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          declare
@@ -1498,7 +1498,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          Sparse_Items.Append ("src/");
@@ -1621,7 +1621,7 @@ package body Version.Submodules.Tests is
               (Path => To_Unbounded_String ("deps/libfoo"),
                Id   => Commit_Id,
                Mode => To_Unbounded_String ("160000"),
-               Stage => 0));
+               Stage => 0, Skip_Worktree => False));
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          begin

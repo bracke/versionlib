@@ -1,4 +1,7 @@
+with Ada.Directories;
+with GNAT.OS_Lib;
 with Version.Files;
+with Version.Ignore;
 with Version.Staging;
 with Version.Status;
 
@@ -98,6 +101,98 @@ package body Version.Clean is
          for C of State.Ignored loop
             Consider (To_String (C.Path));
          end loop;
+      end if;
+
+      --  git's `-d` also removes untracked directories that hold no untracked
+      --  file — the plain-file scan above never sees them (they contribute no
+      --  entry to State.Untracked). Walk the worktree for the shallowest such
+      --  directories. A directory that does hold an untracked file was already
+      --  collapsed to a "dir/" unit by Consider, so it is skipped here.
+      if Options.Directories then
+         declare
+            Root  : constant String := Version.Repository.Root_Path (Repo);
+            Rules : constant Version.Ignore.Ignore_Rules :=
+              Version.Ignore.Load (Repo);
+
+            --  True if any regular file (or symlink) lies anywhere under Full;
+            --  git treats a symlink as a file, never descending through it.
+            function Contains_File (Full : String) return Boolean is
+               Search : Ada.Directories.Search_Type;
+               E      : Ada.Directories.Directory_Entry_Type;
+               Found  : Boolean := False;
+            begin
+               Ada.Directories.Start_Search
+                 (Search, Full, "",
+                  [Ada.Directories.Ordinary_File => True,
+                   Ada.Directories.Directory     => True,
+                   Ada.Directories.Special_File  => False]);
+               while not Found and then Ada.Directories.More_Entries (Search)
+               loop
+                  Ada.Directories.Get_Next_Entry (Search, E);
+                  declare
+                     Name  : constant String := Ada.Directories.Simple_Name (E);
+                     Child : constant String := Ada.Directories.Full_Name (E);
+                  begin
+                     if Name = "." or else Name = ".." then
+                        null;
+                     elsif GNAT.OS_Lib.Is_Symbolic_Link (Child) then
+                        Found := True;
+                     elsif Version.Files.Is_Directory (Child) then
+                        Found := Contains_File (Child);
+                     else
+                        Found := True;
+                     end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (Search);
+               return Found;
+            end Contains_File;
+
+            procedure Walk (Rel : String) is
+               Full   : constant String :=
+                 (if Rel = "" then Root
+                  else Version.Files.Join (Root, Rel));
+               Search : Ada.Directories.Search_Type;
+               E      : Ada.Directories.Directory_Entry_Type;
+            begin
+               Ada.Directories.Start_Search
+                 (Search, Full, "",
+                  [Ada.Directories.Directory     => True,
+                   Ada.Directories.Ordinary_File => False,
+                   Ada.Directories.Special_File  => False]);
+               while Ada.Directories.More_Entries (Search) loop
+                  Ada.Directories.Get_Next_Entry (Search, E);
+                  declare
+                     Name      : constant String :=
+                       Ada.Directories.Simple_Name (E);
+                     Child     : constant String :=
+                       Ada.Directories.Full_Name (E);
+                     Child_Rel : constant String :=
+                       (if Rel = "" then Name else Rel & "/" & Name);
+                  begin
+                     if Name = "." or else Name = ".." or else Name = ".git"
+                       or else GNAT.OS_Lib.Is_Symbolic_Link (Child)
+                     then
+                        null;
+                     elsif Dir_Has_Tracked (Child_Rel) then
+                        Walk (Child_Rel);
+                     elsif Contains_File (Child) then
+                        null;  --  Consider already listed this directory
+                     elsif Version.Ignore.Is_Ignored
+                             (Rules, Child_Rel, Is_Directory => True)
+                       and then not Options.Ignored
+                     then
+                        null;  --  an ignored empty directory needs -x
+                     elsif not Already_Listed (Child_Rel & "/") then
+                        Result.Append (To_Unbounded_String (Child_Rel & "/"));
+                     end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (Search);
+            end Walk;
+         begin
+            Walk ("");
+         end;
       end if;
 
       Sorting.Sort (Result);

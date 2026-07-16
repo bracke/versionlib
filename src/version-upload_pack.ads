@@ -74,10 +74,19 @@ package Version.Upload_Pack is
       return Ada.Streams.Stream_Element_Array;
 
    function Build_Want_Request
-     (Want_Id     : Version.Objects.Hex_Object_Id;
-      Depth       : Positive;
-      Include_Tag : Boolean := False)
+     (Want_Id      : Version.Objects.Hex_Object_Id;
+      Depth        : Positive;
+      Include_Tag  : Boolean := False;
+      Relative     : Boolean := False;
+      Have_Shallow : Version.Objects.Object_Id_Vectors.Vector :=
+        Version.Objects.Object_Id_Vectors.Empty_Vector)
       return Ada.Streams.Stream_Element_Array;
+   --  Deepen request. Relative requests the "deepen-relative" capability so
+   --  the depth counts from the current shallow boundary (`fetch --deepen`);
+   --  a Depth of Integer'Last with Relative => False implements
+   --  `fetch --unshallow`. Have_Shallow lists the client's existing shallow
+   --  boundary commits, which are echoed as "shallow <oid>" lines so the
+   --  server can compute the incremental history to send.
    --  Build a conservative upload-pack request. Include_Tag requests
    --  annotated tag objects for fetched commits when the server advertised
    --  that capability. Filter_Spec emits a protocol v0 filter line such as

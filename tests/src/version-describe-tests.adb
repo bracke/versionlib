@@ -1,5 +1,6 @@
 with Version.Objects;
 with Ada.Directories;
+with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 
 with AUnit.Assertions;
@@ -36,7 +37,8 @@ package body Version.Describe.Tests is
         (Version.Test_Support.Join (Root, "f.txt"), "1" & LF);
       Version.Git_Fixtures.Run (Root, "git add f.txt");
       Version.Write.Save ("c1");
-      Version.Git_Fixtures.Run (Root, "git tag v1");
+      --  Annotated: git describe considers only annotated tags by default.
+      Version.Git_Fixtures.Run (Root, "git tag -a v1 -m v1");
 
       Version.Test_Support.Write_Text_File
         (Version.Test_Support.Join (Root, "f.txt"), "2" & LF);
@@ -61,11 +63,62 @@ package body Version.Describe.Tests is
       end;
    end Names_Relative_To_Tag;
 
+   --  Regression: by default only annotated tags are eligible (git). A repo
+   --  with only a lightweight tag errors by default but works under --tags.
+   procedure Annotated_Only_By_Default
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+   begin
+      Version.Init.Init (Root);
+      Version.Git_Fixtures.Run (Root, "git config user.email t@e");
+      Version.Git_Fixtures.Run (Root, "git config user.name T");
+      Version.Git_Fixtures.Run (Root, "git config gc.auto 0");
+      Ada.Directories.Set_Directory (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "f.txt"), "1" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Write.Save ("c1");
+      Version.Git_Fixtures.Run (Root, "git tag light");  --  lightweight only
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Head : constant Version.Objects.Hex_Object_Id :=
+           Version.Objects.To_Object_Id
+             (Version.Refs.Current_Commit_Id (Repo));
+         Raised : Boolean := False;
+      begin
+         --  Default ignores the lightweight tag and errors like git.
+         begin
+            declare
+               Ignored : constant String := Version.Describe.Describe (Repo, Head);
+            begin
+               Assert (Ignored'Length = 0, "should not reach");
+            end;
+         exception
+            when Ada.IO_Exceptions.Data_Error =>
+               Raised := True;
+         end;
+         Assert (Raised,
+                 "default describe must ignore a lightweight tag and error");
+
+         --  --tags considers the lightweight tag.
+         Assert
+           (Version.Describe.Describe (Repo, Head, All_Tags => True) = "light",
+            "describe --tags names the lightweight tag");
+      end;
+   end Annotated_Only_By_Default;
+
    overriding procedure Register_Tests (T : in out Test_Case) is
    begin
       Register_Routine
         (T, Names_Relative_To_Tag'Access,
          "Describe: names a commit relative to the nearest tag");
+      Register_Routine
+        (T, Annotated_Only_By_Default'Access,
+         "Describe: annotated-only by default, --tags includes lightweight");
    end Register_Tests;
 
    overriding function Name

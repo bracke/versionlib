@@ -6,7 +6,18 @@ package Version.Diff is
 
    type Diff_Options is record
       Context_Lines : Natural := 3;
+      Stat          : Boolean := False;
+      Summary       : Boolean := False;
+      Name_Only     : Boolean := False;
+      Name_Status   : Boolean := False;
    end record;
+   --  Name_Only lists just the changed paths; Name_Status prefixes each with
+   --  git's status letter (A/D/M) and a tab. Both suppress the patch body.
+   --  Stat renders git's `--stat` summary (per-file change bars plus a
+   --  "N files changed, ..." footer) instead of the unified patch. Summary
+   --  appends git's `--summary` lines (create/delete mode, mode change). When
+   --  either Stat or Summary is set the patch body is suppressed; both may be
+   --  set together (as `git merge` reports).
 
    function Diff_Working_Tree
      (Repo    : Version.Repository.Repository_Handle;
@@ -68,5 +79,59 @@ package Version.Diff is
       Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
       Options   : Diff_Options := (others => <>))
       return String;
+
+   --  Raw (`git diff-tree --raw`) diff between two trees: one line per changed
+   --  path, ":<mode1> <mode2> <sha1> <sha2> <status>\t<path>", sorted by path,
+   --  recursing into subtrees. When Has_Base is False the base is the empty
+   --  tree (every path is an addition), for `diff-tree --root`.
+   function Raw_Diff_Trees
+     (Repo      : Version.Repository.Repository_Handle;
+      Base      : Version.Objects.Hex_Object_Id;
+      Has_Base  : Boolean;
+      Target    : Version.Objects.Hex_Object_Id;
+      Recursive : Boolean := True)
+      return String;
+
+   --  Raw diff of a tree against the index (`git diff-index --cached`, when
+   --  Cached is True) or against the working tree (`git diff-index`, when
+   --  False -- the second object id is all-zero, as git prints for a working
+   --  file). Recurses through subtrees.
+   function Raw_Diff_Index
+     (Repo   : Version.Repository.Repository_Handle;
+      Tree   : Version.Objects.Hex_Object_Id;
+      Cached : Boolean)
+      return String;
+
+   --  Raw diff of the index against the working tree (`git diff-files`): the
+   --  second object id is all-zero.
+   function Raw_Diff_Files
+     (Repo : Version.Repository.Repository_Handle)
+      return String;
+
+   --  One file's patch, exactly as `git diff` writes it: the `diff --git`
+   --  and `index` headers, the mode lines, and the hunks.  A side that is not
+   --  present is an add or a delete.  `diff-pairs` renders raw diff records
+   --  through this.
+   function Unified_Blob_Diff
+     (Path        : String;
+      Old_Text    : String;
+      New_Text    : String;
+      Old_Present : Boolean;
+      New_Present : Boolean;
+      Old_Id      : Version.Objects.Hex_Object_Id;
+      New_Id      : Version.Objects.Hex_Object_Id;
+      Old_Mode    : String;
+      New_Mode    : String;
+      Context     : Natural := 3)
+      return String;
+
+   --  A plain unified diff of two texts: only `--- a/<path>`, `+++ b/<path>`
+   --  and the hunks, with no `diff --git`/`index` header.  This is the shape
+   --  `git rerere diff` prints.
+   function Unified_Text_Diff
+     (Path     : String;
+      Old_Text : String;
+      New_Text : String;
+      Context  : Natural := 3) return String;
 
 end Version.Diff;

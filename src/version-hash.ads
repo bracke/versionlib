@@ -1,4 +1,4 @@
-with Interfaces;
+private with CryptoLib.Hashes;
 
 package Version.Hash is
 
@@ -86,41 +86,22 @@ package Version.Hash is
 
 private
 
-   subtype U32 is Interfaces.Unsigned_32;
-   subtype U64 is Interfaces.Unsigned_64;
-   subtype U8  is Interfaces.Unsigned_8;
-
-   type Sha1_Buffer is array (Positive range 1 .. 64) of U8;
-
+   --  All hashing delegates to CryptoLib.Hashes (the shared crypto library);
+   --  these contexts simply wrap the corresponding cryptolib streaming state.
    type Sha1_Context is record
-      H0 : U32 := 16#67452301#;
-      H1 : U32 := 16#EFCDAB89#;
-      H2 : U32 := 16#98BADCFE#;
-      H3 : U32 := 16#10325476#;
-      H4 : U32 := 16#C3D2E1F0#;
-      Buffer        : Sha1_Buffer := [others => 0];
-      Buffer_Length : Natural range 0 .. 64 := 0;
-      Total_Length  : U64 := 0;
+      Ctx : CryptoLib.Hashes.SHA1_Context;
    end record;
 
-   type Sha256_Buffer is array (Positive range 1 .. 64) of U8;
-   type Sha256_State is array (0 .. 7) of U32;
-
    type Sha256_Context is record
-      H : Sha256_State :=
-        [16#6A09E667#, 16#BB67AE85#, 16#3C6EF372#, 16#A54FF53A#,
-         16#510E527F#, 16#9B05688C#, 16#1F83D9AB#, 16#5BE0CD19#];
-      Buffer        : Sha256_Buffer := [others => 0];
-      Buffer_Length : Natural range 0 .. 64 := 0;
-      Total_Length  : U64 := 0;
+      Ctx : CryptoLib.Hashes.SHA256_Context;
    end record;
 
    type Streaming_Context (Algorithm : Hash_Algorithm) is record
       case Algorithm is
          when Sha1   =>
-            C1 : Sha1_Context;
+            C1 : CryptoLib.Hashes.SHA1_Context;
          when Sha256 =>
-            C256 : Sha256_Context;
+            C256 : CryptoLib.Hashes.SHA256_Context;
       end case;
    end record;
 

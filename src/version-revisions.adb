@@ -11,6 +11,7 @@ with Version.Object_Cache;
 with Version.Pack_Index_Cache;
 with Version.Ref_Cache;
 with Version.Files;
+with Version.Reflog;
 with Version.Staging;
 with Version.Ref_Format;
 
@@ -56,6 +57,82 @@ package body Version.Revisions is
       return Text'Length >= Prefix'Length
         and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix;
    end Has_Prefix;
+
+   function Unique_Abbrev_Length
+     (Repo    : Version.Repository.Repository_Handle;
+      Id      : Version.Objects.Hex_Object_Id;
+      Minimum : Positive)
+      return Natural
+   is
+      Full : constant String := Lower (To_String (Id));
+      Min  : constant Positive :=
+        (if Minimum > Full'Length then Full'Length else Minimum);
+      Fanout : constant String := Full (Full'First .. Full'First + 1);
+      Objects_Dir : constant String :=
+        Join (Version.Repository.Common_Git_Dir (Repo), "objects");
+      Sub : constant String := Join (Objects_Dir, Fanout);
+
+      package Id_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+      Loose : Id_Sets.Set;
+      Packs : Version.Pack_Index_Cache.Cache;
+
+      use type Ada.Directories.File_Kind;
+   begin
+      --  Collect loose object ids sharing the two-char fanout directory; only
+      --  those can collide with Full on a prefix of length >= 2.
+      if Ada.Directories.Exists (Sub)
+        and then Ada.Directories.Kind (Sub) = Ada.Directories.Directory
+      then
+         declare
+            S : Ada.Directories.Search_Type;
+            E : Ada.Directories.Directory_Entry_Type;
+         begin
+            Ada.Directories.Start_Search
+              (S, Sub, "*",
+               [Ada.Directories.Ordinary_File => True, others => False]);
+            while Ada.Directories.More_Entries (S) loop
+               Ada.Directories.Get_Next_Entry (S, E);
+               declare
+                  Name : constant String := Ada.Directories.Simple_Name (E);
+               begin
+                  if Name'Length = Full'Length - 2
+                    and then Is_Hex_Text (Name)
+                  then
+                     Loose.Include (Lower (Fanout & Name));
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (S);
+         end;
+      end if;
+
+      Version.Pack_Index_Cache.Load (Repo => Repo, Item => Packs);
+
+      for L in Min .. Full'Length loop
+         declare
+            Prefix : constant String :=
+              Full (Full'First .. Full'First + L - 1);
+            Count  : Natural := 0;
+            Match  : Version.Objects.Object_Id_Storage :=
+              Version.Objects.Zero_Object_Id;
+         begin
+            for O of Loose loop
+               if Has_Prefix (O, Prefix) then
+                  Count := Count + 1;
+               end if;
+            end loop;
+            Version.Pack_Index_Cache.Match_Prefix
+              (Item => Packs, Prefix => Prefix, Count => Count, Match => Match);
+            if Count <= 1 then
+               return L;
+            end if;
+         end;
+      end loop;
+      return Full'Length;
+   exception
+      when others =>
+         return Min;
+   end Unique_Abbrev_Length;
 
    function Resolve_Ref_Name
      (Repo  : Version.Repository.Repository_Handle;
@@ -654,6 +731,68 @@ package body Version.Revisions is
       if Rev'Length = 0 then
          raise Ada.IO_Exceptions.Data_Error with "empty revision";
       end if;
+
+      --  Reflog syntax: `<ref>@{<n>}` resolves to the value the ref held n
+      --  reflog entries ago (@{0} is the current value; a bare `@{n}` is HEAD).
+      declare
+         At_Pos : Natural := 0;
+      begin
+         for I in Rev'First .. Rev'Last - 1 loop
+            if Rev (I) = '@' and then Rev (I + 1) = '{' then
+               At_Pos := I;
+               exit;
+            end if;
+         end loop;
+
+         if At_Pos > 0 and then Rev (Rev'Last) = '}' then
+            declare
+               Inner  : constant String := Rev (At_Pos + 2 .. Rev'Last - 1);
+               Ref_In : constant String :=
+                 (if At_Pos = Rev'First then "HEAD"
+                  else Rev (Rev'First .. At_Pos - 1));
+               Ref    : constant String :=
+                 (if Ref_In = "HEAD" then "HEAD"
+                  else "refs/heads/" & Ref_In);
+               Is_Num : Boolean := Inner'Length > 0;
+            begin
+               for C of Inner loop
+                  if C not in '0' .. '9' then
+                     Is_Num := False;
+                  end if;
+               end loop;
+
+               if Is_Num then
+                  declare
+                     Entries : constant Version.Reflog.Log_Entry_Vectors.Vector
+                       := Version.Reflog.Read_Entries (Repo, Ref);
+                     N : constant Natural := Natural'Value (Inner);
+                  begin
+                     if Entries.Is_Empty then
+                        raise Ada.IO_Exceptions.Data_Error
+                          with "no reflog for " & Ref;
+                     end if;
+                     --  git accepts @{n} for n in 0 .. entry-count-1.
+                     if N >= Natural (Entries.Length) then
+                        raise Ada.IO_Exceptions.Data_Error with
+                          "log for " & Ref & " only has "
+                          & Ada.Strings.Fixed.Trim
+                              (Integer'Image (Integer (Entries.Length)),
+                               Ada.Strings.Both) & " entries";
+                     end if;
+                     if N = 0 then
+                        return Version.Objects.To_Object_Id
+                          (Ada.Strings.Unbounded.To_String
+                             (Entries.Last_Element.New_Id));
+                     end if;
+                     return Version.Objects.To_Object_Id
+                       (Ada.Strings.Unbounded.To_String
+                          (Entries.Element
+                             (Entries.Last_Index - (N - 1)).Old_Id));
+                  end;
+               end if;
+            end;
+         end if;
+      end;
 
       --  Colon syntax: `<rev>:<path>` resolves <rev> to a tree and looks up
       --  <path> within it; a leading ':' is index / `:/regex` search syntax

@@ -1,10 +1,14 @@
 with Ada.Directories; use Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.IO_Exceptions; use Ada.IO_Exceptions;
 
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
+with GNAT.OS_Lib;
+
 with Version.Clone;
+with Version.Config;
 with Version.Fetch;
 with Version.Files;
 with Version.Filesystem_Guard; use Version.Filesystem_Guard;
@@ -23,7 +27,6 @@ with Version.Transport; use Version.Transport;
 
 package body Version.Submodules is
    use Version.Objects;
-
 
    function Join (Left, Right : String) return String
    renames Version.Files.Join;
@@ -1322,6 +1325,258 @@ package body Version.Submodules is
       end loop;
    end Status;
 
+   function Less_By_Path
+     (Left, Right : Version.Gitmodules.Submodule_Config) return Boolean is
+     (To_String (Left.Path) < To_String (Right.Path));
+
+   package Submodule_Sorting is new
+     Version.Gitmodules.Submodule_Config_Vectors.Generic_Sorting (Less_By_Path);
+
+   --  The configured submodules, sorted by path as git iterates them.
+   function Sorted_Submodules
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Gitmodules.Submodule_Config_Vectors.Vector
+   is
+      Items : Version.Gitmodules.Submodule_Config_Vectors.Vector :=
+        Version.Gitmodules.Read (Repo);
+   begin
+      Submodule_Sorting.Sort (Items);
+      return Items;
+   end Sorted_Submodules;
+
+   --  True when the submodule path is one the operation targets: any path in
+   --  the (normalized) selection, or every submodule when the selection is
+   --  empty and All_Submodules is requested.
+   function Path_Selected
+     (Path           : String;
+      Paths          : Path_Vectors.Vector;
+      All_Submodules : Boolean) return Boolean is
+   begin
+      if All_Submodules then
+         return True;
+      end if;
+      for P of Paths loop
+         if Canonical_Submodule_Path (P) = Canonical_Submodule_Path (Path) then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Path_Selected;
+
+   procedure Foreach
+     (Repo      : Version.Repository.Repository_Handle;
+      Command   : String;
+      Recursive : Boolean := False)
+   is
+      Items    : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
+        Sorted_Submodules (Repo);
+      Toplevel : constant String :=
+        Ada.Directories.Full_Name
+          (Version.Files.To_Native_Path (Version.Repository.Root_Path (Repo)));
+   begin
+      for I in Items.First_Index .. Items.Last_Index loop
+         declare
+            Name : constant String := To_String (Items.Element (I).Name);
+            Path : constant String := To_String (Items.Element (I).Path);
+         begin
+            --  Only populated, active submodules are visited (git skips ones
+            --  that are not checked out).
+            if Version.Sparse.Included (Repo, Path)
+              and then Submodule_Head (Repo, Path)'Length > 0
+            then
+               declare
+                  Work : constant String := Submodule_Worktree_Path (Repo, Path);
+                  Sha  : constant String :=
+                    To_String (Gitlink_Commit (Repo, Path));
+               begin
+                  Ada.Text_IO.Put_Line ("Entering '" & Path & "'");
+
+                  Ada.Environment_Variables.Set ("name", Name);
+                  Ada.Environment_Variables.Set ("sm_path", Path);
+                  Ada.Environment_Variables.Set ("displaypath", Path);
+                  Ada.Environment_Variables.Set ("sha1", Sha);
+                  Ada.Environment_Variables.Set ("toplevel", Toplevel);
+
+                  declare
+                     Old_Dir : constant String :=
+                       Ada.Directories.Current_Directory;
+                     Args    : GNAT.OS_Lib.Argument_List :=
+                       [1 => new String'("-c"), 2 => new String'(Command)];
+                     Status  : Integer;
+                  begin
+                     Ada.Directories.Set_Directory
+                       (Version.Files.To_Native_Path (Work));
+                     Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+                     Ada.Directories.Set_Directory (Old_Dir);
+                     GNAT.OS_Lib.Free (Args (1));
+                     GNAT.OS_Lib.Free (Args (2));
+
+                     if Status /= 0 then
+                        raise Ada.IO_Exceptions.Data_Error with
+                          "run_command returned non-zero status for '"
+                          & Path & "'";
+                     end if;
+                  end;
+
+                  if Recursive then
+                     declare
+                        procedure Recurse is
+                        begin
+                           Foreach
+                             (Version.Repository.Open, Command,
+                              Recursive => True);
+                        end Recurse;
+                     begin
+                        Version.Files.With_Directory (Work, Recurse'Access);
+                     end;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+   end Foreach;
+
+   procedure Foreach (Command : String; Recursive : Boolean := False) is
+   begin
+      Foreach (Version.Repository.Open, Command, Recursive);
+   end Foreach;
+
+   --  Resolve a .gitmodules URL for storing in config: relative URLs are
+   --  resolved against the superproject remote, absolute URLs pass through.
+   function Sync_Url (Raw : String) return String is
+   begin
+      return Resolve_Relative_Submodule_Url (Raw);
+   exception
+      when others =>
+         return Raw;
+   end Sync_Url;
+
+   procedure Sync
+     (Repo      : Version.Repository.Repository_Handle;
+      Recursive : Boolean := False)
+   is
+      Items : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
+        Sorted_Submodules (Repo);
+   begin
+      for I in Items.First_Index .. Items.Last_Index loop
+         declare
+            Name     : constant String := To_String (Items.Element (I).Name);
+            Path     : constant String := To_String (Items.Element (I).Path);
+            Resolved : constant String :=
+              Sync_Url (To_String (Items.Element (I).Url));
+         begin
+            Ada.Text_IO.Put_Line
+              ("Synchronizing submodule url for '" & Path & "'");
+
+            Version.Config.Set_Key
+              (Repo, "submodule." & Name & ".url", Resolved);
+
+            --  Update the submodule's own origin URL when it is checked out.
+            if Submodule_Head (Repo, Path)'Length > 0 then
+               begin
+                  declare
+                     Sub : constant Version.Repository.Repository_Handle :=
+                       Version.Repository.Open_Git_Dir
+                         (Resolved_Submodule_Git_Dir (Repo, Path));
+                  begin
+                     Version.Config.Set_Key
+                       (Sub, "remote.origin.url", Resolved);
+                  end;
+               exception
+                  when others =>
+                     null;
+               end;
+
+               if Recursive then
+                  declare
+                     procedure Recurse is
+                     begin
+                        Sync (Version.Repository.Open, Recursive => True);
+                     end Recurse;
+                  begin
+                     Version.Files.With_Directory
+                       (Submodule_Worktree_Path (Repo, Path), Recurse'Access);
+                  end;
+               end if;
+            end if;
+         end;
+      end loop;
+   end Sync;
+
+   procedure Sync (Recursive : Boolean := False) is
+   begin
+      Sync (Version.Repository.Open, Recursive);
+   end Sync;
+
+   procedure Deinit
+     (Repo           : Version.Repository.Repository_Handle;
+      Paths          : Path_Vectors.Vector;
+      All_Submodules : Boolean := False;
+      Force          : Boolean := False)
+   is
+      Items : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
+        Sorted_Submodules (Repo);
+
+      function Registered_Url (Name, Fallback : String) return String is
+      begin
+         return Version.Config.Get_Value (Repo, "submodule." & Name & ".url");
+      exception
+         when others =>
+            return Fallback;
+      end Registered_Url;
+   begin
+      if not All_Submodules and then Paths.Is_Empty then
+         raise Ada.IO_Exceptions.Data_Error with
+           "Use '--all' if you really want to deinitialize all submodules";
+      end if;
+
+      for I in Items.First_Index .. Items.Last_Index loop
+         declare
+            Name : constant String := To_String (Items.Element (I).Name);
+            Path : constant String := To_String (Items.Element (I).Path);
+         begin
+            if Path_Selected (Path, Paths, All_Submodules) then
+               declare
+                  Url : constant String :=
+                    Registered_Url (Name, To_String (Items.Element (I).Url));
+               begin
+                  if Submodule_Head (Repo, Path)'Length > 0 then
+                     if not Force and then Submodule_Is_Dirty (Repo, Path) then
+                        raise Ada.IO_Exceptions.Data_Error with
+                          "submodule work tree '" & Path
+                          & "' contains local modifications;"
+                          & " use --force to discard them";
+                     end if;
+
+                     declare
+                        Work : constant String :=
+                          Submodule_Worktree_Path (Repo, Path);
+                     begin
+                        Version.Files.Delete_Directory_Tree_If_Exists (Work);
+                        Version.Files.Create_Directory_If_Missing (Work);
+                     end;
+                     Ada.Text_IO.Put_Line ("Cleared directory '" & Path & "'");
+                  end if;
+
+                  Version.Config.Remove_Section
+                    (Repo, "submodule """ & Name & """");
+                  Ada.Text_IO.Put_Line
+                    ("Submodule '" & Name & "' (" & Url
+                     & ") unregistered for path '" & Path & "'");
+               end;
+            end if;
+         end;
+      end loop;
+   end Deinit;
+
+   procedure Deinit
+     (Paths          : Path_Vectors.Vector;
+      All_Submodules : Boolean := False;
+      Force          : Boolean := False) is
+   begin
+      Deinit (Version.Repository.Open, Paths, All_Submodules, Force);
+   end Deinit;
+
    procedure Stage_Submodule
      (Repo : Version.Repository.Repository_Handle; Path : String)
    is
@@ -1355,7 +1610,7 @@ package body Version.Submodules is
            (Path => To_Unbounded_String (Safe_Path),
             Id   => Version.Objects.To_Object_Id (Head),
             Mode => To_Unbounded_String ("160000"),
-            Stage => 0));
+            Stage => 0, Skip_Worktree => False));
       Version.Staging.Sort_By_Path (Entries);
       Version.Staging.Write (Repo => Repo, Entries => Entries);
    end Stage_Submodule;

@@ -67,7 +67,7 @@ package body Version.Log.Tests is
          Text    : constant String := Version.Log.Log_Oneline_Head (Repo);
       begin
          Assert
-           (Starts_With (Text, Full_Id (Full_Id'First .. Full_Id'First + 11) & " initial"),
+           (Starts_With (Text, Full_Id (Full_Id'First .. Full_Id'First + 6) & " initial"),
             "oneline log must begin with short id and subject");
          Assert
            (not Contains (Text, "commit "),
@@ -196,12 +196,78 @@ package body Version.Log.Tests is
          raise;
    end Log_Show_Signature_Emits_Gpg_Lines;
 
+   procedure Log_Max_Count_Limits_Commits
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "b.txt"),
+         "second" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add b.txt && git commit -m second");
+
+      Ada.Directories.Set_Directory (Root);
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Text : constant String := Version.Log.Log_Oneline_Head (Repo, 1);
+      begin
+         Assert (Contains (Text, " second"), "newest subject missing");
+         Assert
+           (not Contains (Text, " initial"),
+            "Max_Count => 1 must stop before the parent commit");
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Log_Max_Count_Limits_Commits;
+
+   procedure Log_Date_Uses_Git_Default_Format
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
+      Ada.Directories.Set_Directory (Root);
+      declare
+         Text : constant String :=
+           Version.Log.Log_Head (Version.Repository.Open);
+         Pos  : constant Natural :=
+           Ada.Strings.Fixed.Index (Text, "Date:   ");
+      begin
+         Assert (Pos /= 0, "Date line missing");
+         --  git's default format begins with a weekday name (a letter), not
+         --  the raw epoch (a digit).
+         Assert
+           (Text (Pos + 8) in 'A' .. 'Z',
+            "Date must render in git's default format, not raw epoch");
+      end;
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Log_Date_Uses_Git_Default_Format;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
    begin
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Log_Prints_Head_Commit'Access, "Log: prints HEAD commit");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Log_Max_Count_Limits_Commits'Access,
+         "Log: Max_Count limits commit count");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Log_Date_Uses_Git_Default_Format'Access,
+         "Log: date renders in git default format");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Log_Show_Signature_Emits_Gpg_Lines'Access,
          "Log: --show-signature emits gpg verification lines");

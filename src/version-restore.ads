@@ -93,4 +93,15 @@ package Version.Restore is
      (Source : String;
       Path   : String);
 
+   --  Set git skip-worktree bits on the index to reflect the current
+   --  sparse-checkout pattern set (every stage-0 tracked path that is not
+   --  sparse-included is marked), and rewrite the index (as version 3 when any
+   --  bit is set). No-op when sparse checkout is disabled or nothing changes.
+   procedure Apply_Sparse_Skip_Worktree
+     (Repo : Version.Repository.Repository_Handle);
+
+   --  Clear every skip-worktree bit from the index (used by `sparse disable`).
+   procedure Clear_Skip_Worktree
+     (Repo : Version.Repository.Repository_Handle);
+
 end Version.Restore;

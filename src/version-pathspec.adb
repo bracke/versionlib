@@ -253,6 +253,7 @@ package body Version.Pathspec is
       Mode            : in out Match_Mode;
       Excluded        : in out Boolean;
       Top_Anchored    : in out Boolean;
+      Icase           : in out Boolean;
       Attribute_Mode  : in out Attribute_Match_Mode;
       Attribute_Name  : in out Unbounded_String;
       Attribute_Value : in out Unbounded_String)
@@ -267,6 +268,8 @@ package body Version.Pathspec is
          Mode := Glob_Mode;
       elsif W = "top" then
          Top_Anchored := True;
+      elsif W = "icase" then
+         Icase := True;
       elsif W = "exclude" then
          Excluded := True;
       elsif Starts_With (W, "attr:") then
@@ -284,6 +287,7 @@ package body Version.Pathspec is
       Mode            : in out Match_Mode;
       Excluded        : in out Boolean;
       Top_Anchored    : in out Boolean;
+      Icase           : in out Boolean;
       Attribute_Mode  : in out Attribute_Match_Mode;
       Attribute_Name  : in out Unbounded_String;
       Attribute_Value : in out Unbounded_String)
@@ -307,7 +311,7 @@ package body Version.Pathspec is
 
          Apply_Magic
            (Text (Start .. Stop - 1), Explicit_Mode, Mode,
-            Excluded, Top_Anchored, Attribute_Mode,
+            Excluded, Top_Anchored, Icase, Attribute_Mode,
             Attribute_Name, Attribute_Value);
 
          if Stop > Text'Last then
@@ -328,6 +332,7 @@ package body Version.Pathspec is
       Explicit_Mode : Boolean := False;
       Excluded      : Boolean := False;
       Top_Anchored    : Boolean := False;
+      Icase           : Boolean := False;
       Attribute_Mode  : Attribute_Match_Mode := Attribute_Ignored;
       Attribute_Name  : Unbounded_String;
       Attribute_Value : Unbounded_String;
@@ -368,7 +373,7 @@ package body Version.Pathspec is
 
             Parse_Magic_List
               (Text (Text'First + 2 .. Close - 1), Explicit_Mode, Mode,
-               Excluded, Top_Anchored, Attribute_Mode,
+               Excluded, Top_Anchored, Icase, Attribute_Mode,
                Attribute_Name, Attribute_Value);
             Body_First := Close + 1;
          end;
@@ -394,6 +399,7 @@ package body Version.Pathspec is
             Mode             => Mode,
             Excluded         => Excluded,
             Top_Anchored     => Top_Anchored,
+            Icase            => Icase,
             Directory_Prefix => Directory_Prefix,
             Has_Slash        => Contains_Slash (Pattern),
             Attribute_Mode   => Attribute_Mode,
@@ -737,8 +743,26 @@ package body Version.Pathspec is
       Is_Directory : Boolean := False)
       return Boolean
    is
-      Pattern_Text : constant String := To_String (Item.Pattern);
-      Pattern      : constant String := Strip_Trailing_Slash (Pattern_Text);
+      --  `:(icase)` matches case-insensitively; fold both sides for the path
+      --  comparison (the real Path is still used for attribute lookups).
+      function Fold (S : String) return String is
+         R : String := S;
+      begin
+         if Item.Icase then
+            for I in R'Range loop
+               if R (I) in 'A' .. 'Z' then
+                  R (I) :=
+                    Character'Val (Character'Pos (R (I))
+                    - Character'Pos ('A') + Character'Pos ('a'));
+               end if;
+            end loop;
+         end if;
+         return R;
+      end Fold;
+
+      Pattern    : constant String := Fold (Strip_Trailing_Slash
+                                              (To_String (Item.Pattern)));
+      Match_Path : constant String := Fold (Path);
    begin
       if Path'Length = 0 then
          return False;
@@ -748,19 +772,20 @@ package body Version.Pathspec is
          Path_Matches : constant Boolean :=
            (if Item.Mode = Literal_Mode then
               (if Item.Directory_Prefix or else Is_Directory then
-                  Starts_With_Directory (Path, Pattern)
+                  Starts_With_Directory (Match_Path, Pattern)
                else
-                  Path = Pattern or else Starts_With_Directory (Path, Pattern))
+                  Match_Path = Pattern
+                  or else Starts_With_Directory (Match_Path, Pattern))
             else
               (if Item.Directory_Prefix then
-                  Starts_With_Directory (Path, Pattern)
+                  Starts_With_Directory (Match_Path, Pattern)
                elsif not Item.Has_Slash then
                   (if Item.Top_Anchored then
-                      Glob_Match (Pattern, Path)
+                      Glob_Match (Pattern, Match_Path)
                    else
-                      Glob_Match (Pattern, Basename (Path)))
+                      Glob_Match (Pattern, Basename (Match_Path)))
                else
-                  Glob_Match (Pattern, Path)));
+                  Glob_Match (Pattern, Match_Path)));
       begin
          return Path_Matches and then Attribute_Requirement_Matches (Item, Path);
       end;

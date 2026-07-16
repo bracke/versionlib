@@ -69,6 +69,101 @@ package body Version.Ref_Names is
       return True;
    end Components_Are_Safe;
 
+   function Is_Valid_Check_Ref_Format
+     (Name            : String;
+      Allow_Onelevel  : Boolean := False;
+      Refspec_Pattern : Boolean := False)
+      return Boolean
+   is
+      Slash_Count : Natural := 0;
+      Star_Count  : Natural := 0;
+      Start       : Natural := Name'First;
+   begin
+      if Name'Length = 0 or else Name = "@" then
+         return False;
+      end if;
+      if Name (Name'First) = '/' or else Name (Name'Last) = '/'
+        or else Name (Name'Last) = '.'
+      then
+         return False;
+      end if;
+      if Ada.Strings.Fixed.Index (Name, "..") /= 0
+        or else Ada.Strings.Fixed.Index (Name, "@{") /= 0
+        or else Ada.Strings.Fixed.Index (Name, "//") /= 0
+      then
+         return False;
+      end if;
+
+      for C of Name loop
+         if Is_Control (C) or else C = ' ' or else C = '~' or else C = '^'
+           or else C = ':' or else C = '?' or else C = '[' or else C = '\'
+         then
+            return False;
+         elsif C = '*' then
+            Star_Count := Star_Count + 1;
+         end if;
+      end loop;
+
+      --  '*' is only permitted (once) in refspec-pattern mode.
+      if Star_Count > 0
+        and then (not Refspec_Pattern or else Star_Count > 1)
+      then
+         return False;
+      end if;
+
+      --  Per-component rules: no leading '.', no ".lock" suffix, non-empty.
+      while Start <= Name'Last loop
+         declare
+            Stop : Natural := Start;
+         begin
+            while Stop <= Name'Last and then Name (Stop) /= '/' loop
+               Stop := Stop + 1;
+            end loop;
+            declare
+               Comp : constant String := Name (Start .. Stop - 1);
+            begin
+               if Comp'Length = 0
+                 or else Comp (Comp'First) = '.'
+                 or else Ends_With (Comp, ".lock")
+               then
+                  return False;
+               end if;
+            end;
+            if Stop <= Name'Last then
+               Slash_Count := Slash_Count + 1;
+            end if;
+            Start := Stop + 1;
+         end;
+      end loop;
+
+      return Slash_Count > 0 or else Allow_Onelevel;
+   end Is_Valid_Check_Ref_Format;
+
+   function Normalize_Ref_Format (Name : String) return String is
+      Result : String (1 .. Name'Length);
+      Last   : Natural := 0;
+      Prev_Slash : Boolean := True;  --  drop leading slashes
+   begin
+      for C of Name loop
+         if C = '/' then
+            if not Prev_Slash then
+               Last := Last + 1;
+               Result (Last) := '/';
+               Prev_Slash := True;
+            end if;
+         else
+            Last := Last + 1;
+            Result (Last) := C;
+            Prev_Slash := False;
+         end if;
+      end loop;
+      --  Drop any trailing slash left by collapsing.
+      if Last > 0 and then Result (Last) = '/' then
+         Last := Last - 1;
+      end if;
+      return Result (1 .. Last);
+   end Normalize_Ref_Format;
+
    function Is_Valid_Ref_Name
      (Name : String)
       return Boolean
@@ -88,7 +183,10 @@ package body Version.Ref_Names is
       if not (Starts_With (Name, "refs/heads/")
               or else Starts_With (Name, "refs/tags/")
               or else Starts_With (Name, "refs/remotes/")
-              or else Starts_With (Name, "refs/notes/"))
+              or else Starts_With (Name, "refs/notes/")
+              or else Starts_With (Name, "refs/replace/")
+              --  filter-branch keeps the pre-rewrite tip under refs/original/.
+              or else Starts_With (Name, "refs/original/"))
       then
          return False;
       end if;

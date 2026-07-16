@@ -1,8 +1,42 @@
+with Ada.Unchecked_Deallocation;
+
 with AUnit.Assertions;   use AUnit.Assertions;
 
 package body Version.Hash.Tests is
 
    use AUnit.Test_Cases.Registration;
+
+   --  Hashing a multi-megabyte input (larger than the task stack) must not
+   --  overflow and must agree with the incremental digest of the same bytes
+   --  (regression for the streaming/chunked delegation to CryptoLib.Hashes).
+   procedure Large_Input_Hashing
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Size : constant := 9_000_000;
+      type String_Access is access String;
+      procedure Free is new Ada.Unchecked_Deallocation (String, String_Access);
+      Data : String_Access := new String'(1 .. Size => 'A');
+   begin
+      declare
+         One_Shot : constant String := Version.Hash.Sha1_Hex (Data.all);
+         Ctx      : Version.Hash.Sha1_Context;
+      begin
+         Version.Hash.Initialize (Ctx);
+         Version.Hash.Update (Ctx, Data.all);
+         Assert (One_Shot'Length = 40,
+                 "large-input SHA-1 must produce a 40-hex digest");
+         Assert (Version.Hash.Final_Hex (Ctx) = One_Shot,
+                 "large-input incremental SHA-1 must equal the one-shot digest");
+         Assert (Version.Hash.Sha256_Hex (Data.all)'Length = 64,
+                 "large-input SHA-256 must produce a 64-hex digest");
+      end;
+      Free (Data);
+   exception
+      when others =>
+         Free (Data);
+         raise;
+   end Large_Input_Hashing;
 
    procedure Empty_String_SHA1
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -212,6 +246,9 @@ package body Version.Hash.Tests is
         (T, Incremental_SHA256_Crosses_Block_Boundary'Access,
          "incremental SHA-256 crosses block boundary");
       Register_Routine (T, SHA256_Raw_And_Lengths'Access, "SHA-256 raw digest and id widths");
+      Register_Routine
+        (T, Large_Input_Hashing'Access,
+         "hashing a multi-MB input does not overflow (chunked streaming)");
    end Register_Tests;
 
    overriding function Name

@@ -27,6 +27,13 @@ package Version.Tar is
       Archive_Path : String;
       Link_Target  : String);
 
+   --  Emit a POSIX pax global extended header (`git archive` writes one first,
+   --  carrying `comment=<commit-id>`, which `git get-tar-commit-id` reads).
+   --  Comment is the value of the "comment" record.
+   procedure Add_Pax_Global_Header
+     (Writer  : in out Tar_Writer;
+      Comment : String);
+
    procedure Close
      (Writer : in out Tar_Writer);
 

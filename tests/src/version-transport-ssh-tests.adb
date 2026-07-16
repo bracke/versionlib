@@ -256,6 +256,23 @@ package body Version.Transport.Ssh.Tests is
          "LFS authenticate command keeps remote command as one argv item");
    end Builds_LFS_Authenticate_Command;
 
+   procedure Builds_LFS_Transfer_Command
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Remote : constant Version.Transport.Ssh.Ssh_Remote :=
+        Version.Transport.Ssh.Parse ("git@example.com:team/repo.git");
+   begin
+      Assert
+        (Version.Transport.Ssh.LFS_Transfer_Remote_Command (Remote, "upload")
+         = "git-lfs-transfer 'team/repo.git' upload",
+         "LFS transfer remote command must quote the repo path and operation");
+      Assert
+        (Version.Transport.Ssh.LFS_Transfer_Remote_Command (Remote, "download")
+         = "git-lfs-transfer 'team/repo.git' download",
+         "LFS transfer download command must be built");
+   end Builds_LFS_Transfer_Command;
+
    procedure Rejects_Invalid_Port (T : in out AUnit.Test_Cases.Test_Case'Class) is
       Remote : Version.Transport.Ssh.Ssh_Remote;
       pragma Unreferenced (T);
@@ -424,6 +441,11 @@ package body Version.Transport.Ssh.Tests is
         (T,
          Builds_LFS_Authenticate_Command'Access,
          "Transport.Ssh: builds git-lfs-authenticate command");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T,
+         Builds_LFS_Transfer_Command'Access,
+         "Transport.Ssh: builds git-lfs-transfer command");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T,

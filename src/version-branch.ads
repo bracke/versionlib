@@ -76,7 +76,8 @@ package Version.Branch is
       Detect_Copies : Boolean := False;
       Detect_Copies_Explicit : Boolean := False;
       Directory_Renames : Merge_Directory_Rename_Mode := Directory_Renames_Default;
-      Recurse_Submodules : Boolean := True;
+      --  git's submodule.recurse default is false.
+      Recurse_Submodules : Boolean := False;
       Recurse_Submodules_Explicit : Boolean := False;
       Renormalize : Boolean := False;
       Renormalize_Explicit : Boolean := False;
@@ -168,6 +169,17 @@ package Version.Branch is
      (Index_Type   => Natural,
       Element_Type => Ada.Strings.Unbounded.Unbounded_String,
       "="          => Ada.Strings.Unbounded."=");
+
+   --  git's subtree strategy: shift a side's tree so it lines up with ours.
+   --  The prefix is inferred from the two trees when it is not given (that is
+   --  what `-Xsubtree` without a value does).  Both the other side's tree and
+   --  the merge base's must be shifted the same way.
+   function Shift_Subtree_Items
+     (Items         : Version.Objects.Tree_Entry_Vectors.Vector;
+      Current_Items : Version.Objects.Tree_Entry_Vectors.Vector;
+      Target_Items  : Version.Objects.Tree_Entry_Vectors.Vector;
+      Prefix        : String := "")
+      return Version.Objects.Tree_Entry_Vectors.Vector;
 
    procedure Merge
      (Target  : String;

@@ -128,6 +128,62 @@ package body Version.Clean.Tests is
       end;
    end Remove_Candidate_Deletes;
 
+   --  Regression: `clean -d` must remove untracked directories that hold no
+   --  untracked file (git does). These contribute no entry to the untracked
+   --  file scan, so the worktree walk has to find them.
+   procedure Empty_Untracked_Dirs_Are_Candidates
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+   begin
+      Configure_Repo (Root);
+      Ada.Directories.Set_Directory (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "tracked.txt"), "t" & LF);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, ".gitignore"), "*.log" & LF);
+      Version.Git_Fixtures.Run (Root, "git add tracked.txt .gitignore");
+      Version.Write.Save ("c1");
+
+      --  A leaf empty dir, a nested empty tree (git reports the shallowest),
+      --  an ignored empty dir, and an untracked dir that does hold a file.
+      Ada.Directories.Create_Path
+        (Version.Test_Support.Join (Root, "emptydir"));
+      Ada.Directories.Create_Path
+        (Version.Test_Support.Join (Root, "nested/deep"));
+      Ada.Directories.Create_Path
+        (Version.Test_Support.Join (Root, "skip.log"));
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "hasfile/inner"), "u" & LF);
+
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Dirs : constant Version.Clean.Path_Vectors.Vector :=
+           Version.Clean.Candidates
+             (Repo, (Directories => True, Ignored => False));
+         DirsX : constant Version.Clean.Path_Vectors.Vector :=
+           Version.Clean.Candidates
+             (Repo, (Directories => True, Ignored => True));
+         Plain : constant Version.Clean.Path_Vectors.Vector :=
+           Version.Clean.Candidates (Repo, (others => False));
+      begin
+         Assert (Has (Dirs, "emptydir/"),
+                 "clean -d must list an empty untracked directory");
+         Assert (Has (Dirs, "nested/") and then not Has (Dirs, "nested/deep/"),
+                 "clean -d must collapse a nested empty tree to the shallowest");
+         Assert (Has (Dirs, "hasfile/"),
+                 "clean -d must still list a dir holding an untracked file");
+         Assert (not Has (Dirs, "skip.log/"),
+                 "clean -d without -x must omit an ignored empty directory");
+         Assert (Has (DirsX, "skip.log/"),
+                 "clean -dx must list an ignored empty directory");
+         Assert (not Has (Plain, "emptydir/"),
+                 "clean without -d must omit empty untracked directories");
+      end;
+   end Empty_Untracked_Dirs_Are_Candidates;
+
    overriding procedure Register_Tests (T : in out Test_Case) is
    begin
       Register_Routine
@@ -136,6 +192,9 @@ package body Version.Clean.Tests is
       Register_Routine
         (T, Remove_Candidate_Deletes'Access,
          "Clean: remove deletes untracked, keeps tracked and ignored");
+      Register_Routine
+        (T, Empty_Untracked_Dirs_Are_Candidates'Access,
+         "Clean: -d removes empty untracked directories (git parity)");
    end Register_Tests;
 
    overriding function Name

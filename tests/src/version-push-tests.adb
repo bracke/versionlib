@@ -1359,6 +1359,66 @@ package body Version.Push.Tests is
          raise;
    end Push_Local_Delete_Removes_Remote_Ref;
 
+   --  Regression: Delete_Ref resolves an unqualified name against the remote's
+   --  refs like git -- a short tag name deletes refs/tags/<name>, a short
+   --  branch name deletes refs/heads/<name> -- rather than assuming
+   --  refs/heads/.
+   procedure Push_Local_Delete_Resolves_Short_Name
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Remote : constant String :=
+        Version.Test_Support.Join (Root, "remote-shortdel.git");
+      Work : constant String :=
+        Version.Test_Support.Join (Root, "work-shortdel");
+      Work_File : constant String := Version.Test_Support.Join (Work, "a.txt");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+
+      function Remote_Has (Ref : String) return Boolean is
+        (Version.Refs.Ref_Exists
+           (Version.Repository.Open_Git_Dir (Remote), Ref));
+   begin
+      Ada.Directories.Create_Directory (Remote);
+      Version.Git_Fixtures.Run (Remote, "git init --bare");
+      Ada.Directories.Create_Directory (Work);
+      Version.Git_Fixtures.Run (Work, "git init");
+      Version.Git_Fixtures.Run (Work, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Work, "git config user.name Test");
+      Ada.Directories.Set_Directory (Work);
+      Version.Test_Support.Write_Text_File (Work_File, "one" & LF);
+      Version.Git_Fixtures.Run (Work, "git add a.txt");
+      Version.Write.Save ("one");
+      Version.Remotes.Add_Remote (Name => "origin", Url => Remote);
+      Version.Push.Push (Remote_Name => "origin", Branch_Name => "main");
+
+      --  Publish a tag and a second branch on the remote.
+      Version.Git_Fixtures.Run (Work, "git tag v1");
+      Version.Git_Fixtures.Run (Work, "git branch topic");
+      Version.Push.Push_Refspec
+        (Remote_Name => "origin", Source => "v1",
+         Dest_Ref => "refs/tags/v1");
+      Version.Push.Push (Remote_Name => "origin", Branch_Name => "topic");
+
+      --  Short "v1" must resolve to the tag, not refs/heads/v1.
+      Version.Push.Delete_Ref (Remote_Name => "origin", Ref_Name => "v1");
+      Assert (not Remote_Has ("refs/tags/v1"),
+              "deleting short 'v1' must remove the remote tag");
+
+      --  Short "topic" must resolve to the branch.
+      Version.Push.Delete_Ref (Remote_Name => "origin", Ref_Name => "topic");
+      Assert (not Remote_Has ("refs/heads/topic"),
+              "deleting short 'topic' must remove the remote branch");
+      Assert (Remote_Has ("refs/heads/main"),
+              "an unrelated branch must survive short-name deletes");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Push_Local_Delete_Resolves_Short_Name;
+
    procedure Push_Local_Refspec_Updates_Named_Ref
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1536,6 +1596,82 @@ package body Version.Push.Tests is
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
    end Push_Default_Uses_Configured_Refspec;
+
+   --  Regression: with no remote.push refspec, Push_Default falls back to
+   --  push.default. "current" pushes the current branch to a same-named remote
+   --  branch (creating it); "simple"/"upstream" push to the configured upstream;
+   --  "nothing" and a missing upstream (simple) error. Matches git.
+   procedure Push_Default_Honours_Push_Default_Mode
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Remote : constant String :=
+        Version.Test_Support.Join (Root, "remote-mode.git");
+      Work : constant String := Version.Test_Support.Join (Root, "work-mode");
+      Work_File : constant String := Version.Test_Support.Join (Work, "a.txt");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+
+      function Remote_Main return String is
+        (To_String (Version.Refs.Resolve_Ref
+           (Version.Repository.Open_Git_Dir (Remote), "refs/heads/main")));
+      function Local_Main return String is
+        (Version.Refs.Current_Commit_Id (Version.Repository.Open));
+   begin
+      Ada.Directories.Create_Directory (Remote);
+      Version.Git_Fixtures.Run (Remote, "git init --bare");
+      Ada.Directories.Create_Directory (Work);
+      Version.Git_Fixtures.Run (Work, "git init");
+      Version.Git_Fixtures.Run (Work, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Work, "git config user.name Test");
+      Ada.Directories.Set_Directory (Work);
+      Version.Test_Support.Write_Text_File (Work_File, "one" & LF);
+      Version.Git_Fixtures.Run (Work, "git add a.txt");
+      Version.Write.Save ("one");
+      Version.Remotes.Add_Remote (Name => "origin", Url => Remote);
+
+      --  push.default=nothing errors and pushes nothing.
+      Version.Git_Fixtures.Run (Work, "git config push.default nothing");
+      declare
+         Raised : Boolean := False;
+      begin
+         begin
+            Version.Push.Push_Default (Remote_Name => "origin");
+         exception
+            when Ada.IO_Exceptions.Data_Error =>
+               Raised := True;
+         end;
+         Assert (Raised, "push.default=nothing must error");
+         Assert
+           (not Version.Refs.Ref_Exists
+              (Version.Repository.Open_Git_Dir (Remote), "refs/heads/main"),
+            "push.default=nothing must not create the remote branch");
+      end;
+
+      --  push.default=current pushes and creates the same-named remote branch.
+      Version.Git_Fixtures.Run (Work, "git config push.default current");
+      Version.Push.Push_Default (Remote_Name => "origin");
+      Assert (Remote_Main = Local_Main,
+              "push.default=current must create/update the same-named branch");
+
+      --  push.default=simple with a matching upstream pushes the new commit.
+      Version.Git_Fixtures.Run (Work, "git config push.default simple");
+      Version.Git_Fixtures.Run (Work, "git config branch.main.remote origin");
+      Version.Git_Fixtures.Run
+        (Work, "git config branch.main.merge refs/heads/main");
+      Version.Test_Support.Write_Text_File (Work_File, "two" & LF);
+      Version.Git_Fixtures.Run (Work, "git add a.txt");
+      Version.Write.Save ("two");
+      Version.Push.Push_Default (Remote_Name => "origin");
+      Assert (Remote_Main = Local_Main,
+              "push.default=simple with upstream must push the current branch");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Push_Default_Honours_Push_Default_Mode;
 
    procedure Push_Local_Malformed_Remote_Branch_Does_Not_Copy_Objects
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -2837,7 +2973,6 @@ package body Version.Push.Tests is
       use Ada.Strings.Unbounded;
       Root : constant String :=
         Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
-      Remote  : constant String := Version.Test_Support.Join (Root, "remote.git");
       Work    : constant String := Version.Test_Support.Join (Root, "work");
       Old_Dir : constant String := Ada.Directories.Current_Directory;
 
@@ -3106,6 +3241,11 @@ package body Version.Push.Tests is
 
       Register_Routine
          (T,
+            Push_Local_Delete_Resolves_Short_Name'Access,
+            "Push: --delete resolves a short name to the remote tag or branch");
+
+      Register_Routine
+         (T,
             Push_Local_Refspec_Updates_Named_Ref'Access,
             "Push: refspec pushes source to a named remote branch and tag");
 
@@ -3118,6 +3258,11 @@ package body Version.Push.Tests is
          (T,
             Push_Default_Uses_Configured_Refspec'Access,
             "Push: no-refspec push applies remote.<name>.push config");
+
+      Register_Routine
+         (T,
+            Push_Default_Honours_Push_Default_Mode'Access,
+            "Push: no-refspec push honours push.default (current/simple/nothing)");
 
       Register_Routine
          (T,

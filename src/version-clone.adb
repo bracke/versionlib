@@ -7,6 +7,8 @@ with Ada.Strings.Unbounded;
 with Version.Branch;
 with Version.Bundle;
 with Version.Fetch;
+with Ada.Text_IO;
+
 with Version.Config;
 with Version.Files;
 with Version.Init;
@@ -43,6 +45,26 @@ package body Version.Clone is
              (Version.Repository.Common_Git_Dir (Repo), "HEAD"),
          Content => "ref: refs/heads/" & Name & Character'Val (10));
    end Write_HEAD;
+
+   --  Record the remote's default branch as a symbolic ref
+   --  refs/remotes/<Remote>/HEAD -> refs/remotes/<Remote>/<Branch>, as
+   --  `git clone` does. Lets `fetch`/`pull` order their summary the way git
+   --  does (default branch first) and `<remote>` resolve to the default.
+   procedure Write_Remote_HEAD
+     (Repo   : Version.Repository.Repository_Handle;
+      Remote : String;
+      Branch : String) is
+   begin
+      Version.Ref_Names.Require_Branch_Name (Branch);
+
+      Version.Files.Write_Binary_File_Atomic
+        (Path    =>
+           Version.Files.Join
+             (Version.Repository.Common_Git_Dir (Repo),
+              "refs/remotes/" & Remote & "/HEAD"),
+         Content =>
+           "ref: refs/remotes/" & Remote & "/" & Branch & Character'Val (10));
+   end Write_Remote_HEAD;
 
    procedure Write_Index_For_Head (Repo : Version.Repository.Repository_Handle)
    is
@@ -261,6 +283,7 @@ package body Version.Clone is
       Version.Branch.Create_Branch (Name => Branch, Commit_Id => Commit_Id);
 
       Write_HEAD (Repo, Branch);
+      Write_Remote_HEAD (Repo, "origin", Branch);
 
       Version.Reflog.Append
         (Repo    => Repo,
@@ -290,6 +313,26 @@ package body Version.Clone is
       Version.Restore.Restore_Working_Tree (Repo);
       Write_Index_For_Head (Repo);
    end Checkout_Fetched_Branch;
+
+   --  git parity for a dangling remote HEAD: the remote's HEAD names a branch
+   --  that was not fetched (e.g. a bare repo whose default branch was never
+   --  pushed). Like `git clone`, point HEAD at that (unborn) branch and record
+   --  its upstream config, but create no branch ref, write no origin/HEAD, and
+   --  check nothing out; warn instead of failing.
+   procedure Set_Unborn_Default_Branch
+     (Repo : Version.Repository.Repository_Handle; Branch : String) is
+   begin
+      Version.Ref_Names.Require_Branch_Name (Branch);
+
+      Write_HEAD (Repo, Branch);
+      Version.Config.Set_Key (Repo, "branch." & Branch & ".remote", "origin");
+      Version.Config.Set_Key
+        (Repo, "branch." & Branch & ".merge", "refs/heads/" & Branch);
+
+      Ada.Text_IO.Put_Line
+        (Ada.Text_IO.Standard_Error,
+         "warning: remote HEAD refers to nonexistent ref, unable to checkout");
+   end Set_Unborn_Default_Branch;
 
    --  Clone from a git bundle file: unpack its packfile, register the bundle
    --  as `origin`, materialize the bundle's refs as remote-tracking refs (and
@@ -539,10 +582,8 @@ package body Version.Clone is
                   Checkout_Fetched_Branch
                     (Repo => Repo, Branch => Default_Branch);
                else
-                  raise Ada.IO_Exceptions.Data_Error
-                    with
-                      "missing remote-tracking ref for default branch: "
-                      & Default_Branch;
+                  Set_Unborn_Default_Branch
+                    (Repo => Repo, Branch => Default_Branch);
                end if;
 
             elsif Version.Files.Is_Ordinary_File (Main_Ref) then

@@ -12,12 +12,14 @@ with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
 with Version.Files;
 with Version.Fetch.Internal;
 with Version.Config;
+with Version.Url_Rewrite;
 with Version.Objects; use Version.Objects;
+with Version.Refs;
+with Version.Remotes;
 with Version.Transport;
 with Version.Transport.Http;
 with Version.Transport.Local;
 with Version.Transport.Ssh;
-with Version.Upload_Pack;
 with Version.Write;
 with Version.History;
 with Version.Pack;
@@ -122,7 +124,8 @@ package body Version.Fetch is
                if To_String (Item.Section) = Section_Name
                  and then To_String (Item.Key) = "url"
                then
-                  return To_String (Item.Value);
+                  return Version.Url_Rewrite.Rewrite
+                           (Repo, To_String (Item.Value));
                end if;
             end;
          end loop;
@@ -1080,6 +1083,253 @@ package body Version.Fetch is
          raise;
    end Fetch_Ssh_Object;
 
+   ----------------------
+   -- List_Remote_Refs --
+   ----------------------
+
+   function List_Remote_Refs
+     (Remote : String)
+      return Version.Upload_Pack.Advertised_Ref_Vectors.Vector
+   is
+      function Remote_Or_Url return String is
+      begin
+         return Remote_Url (Remote);
+      exception
+         --  Not a configured remote: then it is a path or a URL.
+         when others =>
+            return Remote;
+      end Remote_Or_Url;
+
+      Url : constant String := Remote_Or_Url;
+
+      package Ref_Sets is new Ada.Containers.Ordered_Sets
+        (Element_Type => Unbounded_String);
+
+      Result : Version.Upload_Pack.Advertised_Ref_Vectors.Vector;
+
+      --  A local repository advertises nothing -- read its refs directly.
+      procedure Collect_Local (Git_Dir : String) is
+         Remote_Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open_Git_Dir (Git_Dir);
+
+         Names : Ref_Sets.Set;
+
+         procedure Note (Name : String; Id : String) is
+            pragma Unreferenced (Id);
+         begin
+            Names.Include (To_Unbounded_String (Name));
+         end Note;
+
+         procedure Walk (Dir : String; Prefix : String) is
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+         begin
+            if not Ada.Directories.Exists (Dir) then
+               return;
+            end if;
+
+            Ada.Directories.Start_Search
+              (Search, Dir, "",
+               [Ada.Directories.Ordinary_File => True,
+                Ada.Directories.Directory     => True,
+                Ada.Directories.Special_File  => False]);
+
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+
+               declare
+                  Simple : constant String :=
+                    Ada.Directories.Simple_Name (Item);
+               begin
+                  if Simple /= "." and then Simple /= ".." then
+                     if Ada.Directories.Kind (Item)
+                        = Ada.Directories.Directory
+                     then
+                        Walk (Version.Files.Join (Dir, Simple),
+                              Prefix & Simple & "/");
+                     else
+                        Note (Prefix & Simple, "");
+                     end if;
+                  end if;
+               end;
+            end loop;
+
+            Ada.Directories.End_Search (Search);
+         end Walk;
+
+         Packed : constant String :=
+           Version.Files.Join (Git_Dir, "packed-refs");
+      begin
+         Walk (Version.Files.Join (Git_Dir, "refs"), "refs/");
+
+         if Ada.Directories.Exists (Packed) then
+            declare
+               Text : constant String :=
+                 Version.Files.Read_Binary_File (Packed);
+               Pos  : Natural := Text'First;
+            begin
+               while Pos <= Text'Last loop
+                  declare
+                     Stop : Natural :=
+                       Ada.Strings.Fixed.Index (Text, "" & ASCII.LF, Pos);
+                     Line : constant String :=
+                       Text (Pos .. (if Stop = 0 then Text'Last else Stop - 1));
+                     Space : constant Natural :=
+                       Ada.Strings.Fixed.Index (Line, " ");
+                  begin
+                     if Stop = 0 then
+                        Stop := Text'Last;
+                     end if;
+
+                     Pos := Stop + 1;
+
+                     if Line'Length > 0
+                       and then Line (Line'First) not in '#' | '^'
+                       and then Space /= 0
+                     then
+                        Note (Line (Space + 1 .. Line'Last), "");
+                     end if;
+                  end;
+               end loop;
+            end;
+         end if;
+
+         --  HEAD comes first, then the refs in name order; an annotated tag is
+         --  followed by the commit it peels to.
+         declare
+            Head : constant String :=
+              Version.Refs.Current_Commit_Id (Remote_Repo);
+         begin
+            if Head'Length > 0 then
+               Result.Append
+                 (Version.Upload_Pack.Advertised_Ref'
+                    (Name => To_Unbounded_String ("HEAD"),
+                     Id   => Version.Objects.To_Object_Id (Head)));
+            end if;
+         exception
+            when others =>
+               null;
+         end;
+
+         for Name of Names loop
+            declare
+               Ref_Name : constant String := To_String (Name);
+               Id       : constant Version.Objects.Hex_Object_Id :=
+                 Version.Refs.Resolve_Ref (Remote_Repo, Ref_Name);
+            begin
+               if Version.Objects.Id_Length (Id) > 0 then
+                  Result.Append
+                    (Version.Upload_Pack.Advertised_Ref'
+                       (Name => Name, Id => Id));
+
+                  declare
+                     Obj : constant Version.Objects.Git_Object :=
+                       Version.Objects.Read_Object (Remote_Repo, Id);
+                  begin
+                     if Version.Objects.Kind (Obj)
+                        = Version.Objects.Tag_Object
+                     then
+                        Result.Append
+                          (Version.Upload_Pack.Advertised_Ref'
+                             (Name => To_Unbounded_String (Ref_Name & "^{}"),
+                              Id   => Version.Objects.Tag_Target_Id (Obj)));
+                     end if;
+                  end;
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+      end Collect_Local;
+
+   begin
+      case Version.Transport.Detect_Transport (Url) is
+         when Version.Transport.Local_Transport =>
+            Collect_Local
+              (Version.Transport.Local.Resolve_Git_Dir
+                 (Version.Transport.Strip_File_Scheme (Url)));
+            return Result;
+
+         when Version.Transport.Http_Transport =>
+            declare
+               Discovery_Raw : Collecting_Consumer;
+            begin
+               Version.Transport.Http.Discover_Upload_Pack
+                 (Url => Url, Consumer => Discovery_Raw);
+
+               return Version.Upload_Pack.Parse_Discovery
+                        (To_Stream (To_String (Discovery_Raw.Data))).Refs;
+            end;
+
+         when Version.Transport.Ssh_Transport =>
+            declare
+               Stream : Version.Transport.Ssh.Ssh_Stream;
+               Raw    : Ada.Strings.Unbounded.Unbounded_String;
+               Buffer : Ada.Streams.Stream_Element_Array (1 .. 8192);
+               Last   : Ada.Streams.Stream_Element_Offset;
+            begin
+               Version.Transport.Ssh.Open_Upload_Pack (Url, Stream);
+
+               loop
+                  Version.Transport.Ssh.Read_Some
+                    (Stream => Stream, Buffer => Buffer, Last => Last);
+                  exit when Last < Buffer'First;
+                  Append (Raw, Stream_To_String (Buffer (Buffer'First .. Last)));
+                  exit when Ada.Strings.Fixed.Index (To_String (Raw), "0000")
+                            /= 0;
+               end loop;
+
+               Version.Transport.Ssh.Close (Stream);
+
+               return Version.Upload_Pack.Parse_Advertisement
+                        (To_Stream (To_String (Raw))).Refs;
+            end;
+
+         when Version.Transport.Unsupported_Transport =>
+            raise Ada.IO_Exceptions.Data_Error
+              with Version.Unsupported.Remote_Url;
+      end case;
+   end List_Remote_Refs;
+
+   Scratch_Remote : constant String := "fetch-pack-tmp";
+
+   procedure Fetch_Objects_From (Remote : String) is
+      function Known (Name : String) return Boolean is
+      begin
+         return Version.Remotes.Remote_Exists (Name);
+      exception
+         when others =>
+            return False;
+      end Known;
+   begin
+      if Known (Remote) then
+         Fetch (Remote);
+         return;
+      end if;
+
+      --  A path or URL: register it just long enough to fetch through, then
+      --  take the remote (and its tracking refs) away again.  The objects it
+      --  brought stay, which is exactly what fetch-pack promises.
+      if Known (Scratch_Remote) then
+         Version.Remotes.Delete_Remote (Scratch_Remote);
+      end if;
+
+      Version.Remotes.Add_Remote (Scratch_Remote, Remote);
+
+      begin
+         Fetch (Scratch_Remote);
+         Version.Remotes.Delete_Remote (Scratch_Remote);
+      exception
+         when others =>
+            if Known (Scratch_Remote) then
+               Version.Remotes.Delete_Remote (Scratch_Remote);
+            end if;
+
+            raise;
+      end;
+   end Fetch_Objects_From;
+
    function Remote_Object_Format
      (Url : String)
       return Version.Hash.Hash_Algorithm is
@@ -1157,7 +1407,8 @@ package body Version.Fetch is
       Local_Git_Dir : String;
       Has_Depth     : Boolean;
       Depth         : Positive;
-      Filter_Spec   : String := "")
+      Filter_Spec   : String := "";
+      Relative      : Boolean := False)
    is
       Discovery_Raw : Collecting_Consumer;
    begin
@@ -1181,10 +1432,18 @@ package body Version.Fetch is
            and then Version.Upload_Pack.Has_Capability
                       (To_String (Discovery.Capabilities), "filter");
 
+         --  The client's current shallow boundary, echoed to the server so it
+         --  can compute the incremental history when deepening/unshallowing.
+         Existing_Shallow :
+           constant Version.Objects.Object_Id_Vectors.Vector :=
+             (if Has_Depth
+              then Version.Shallow.Read (Version.Repository.Open)
+              else Version.Objects.Object_Id_Vectors.Empty_Vector);
+
          Request : constant Ada.Streams.Stream_Element_Array :=
            (if Has_Depth
             then Version.Upload_Pack.Build_Want_Request
-                   (Want_Id, Depth, Include_Tag)
+                   (Want_Id, Depth, Include_Tag, Relative, Existing_Shallow)
             elsif Use_Filter
             then Version.Upload_Pack.Build_Want_Request
                    (Want_Id, Filter_Spec, Include_Tag)
@@ -1359,7 +1618,8 @@ package body Version.Fetch is
       Local_Git_Dir : String;
       Has_Depth     : Boolean;
       Depth         : Positive;
-      Filter_Spec   : String := "")
+      Filter_Spec   : String := "";
+      Relative      : Boolean := False)
    is
       Stream : Version.Transport.Ssh.Ssh_Stream;
       Raw_Advertisement : Ada.Strings.Unbounded.Unbounded_String;
@@ -1399,10 +1659,16 @@ package body Version.Fetch is
            and then Version.Upload_Pack.Has_Capability
                       (To_String (Discovery.Capabilities), "filter");
 
+         Existing_Shallow :
+           constant Version.Objects.Object_Id_Vectors.Vector :=
+             (if Has_Depth
+              then Version.Shallow.Read (Version.Repository.Open)
+              else Version.Objects.Object_Id_Vectors.Empty_Vector);
+
          Request : constant Ada.Streams.Stream_Element_Array :=
            (if Has_Depth
             then Version.Upload_Pack.Build_Want_Request
-                   (Want_Id, Depth, Include_Tag)
+                   (Want_Id, Depth, Include_Tag, Relative, Existing_Shallow)
             elsif Use_Filter
             then Version.Upload_Pack.Build_Want_Request
                    (Want_Id, Filter_Spec, Include_Tag)
@@ -1782,7 +2048,7 @@ package body Version.Fetch is
 
    procedure Fetch
      (Remote_Name : String; Has_Depth : Boolean; Depth : Positive;
-      Filter_Spec : String := "")
+      Filter_Spec : String := ""; Relative : Boolean := False)
    is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -1861,7 +2127,8 @@ package body Version.Fetch is
                Local_Git_Dir => Local_Git_Dir,
                Has_Depth     => Has_Depth,
                Depth         => Depth,
-               Filter_Spec   => Filter_Spec);
+               Filter_Spec   => Filter_Spec,
+               Relative      => Relative);
 
          when Version.Transport.Ssh_Transport         =>
             Fetch_Ssh
@@ -1870,7 +2137,8 @@ package body Version.Fetch is
                Local_Git_Dir => Local_Git_Dir,
                Has_Depth     => Has_Depth,
                Depth         => Depth,
-               Filter_Spec   => Filter_Spec);
+               Filter_Spec   => Filter_Spec,
+               Relative      => Relative);
 
          when Version.Transport.Unsupported_Transport =>
             raise Ada.IO_Exceptions.Data_Error
@@ -1893,5 +2161,26 @@ package body Version.Fetch is
       Version.Shallow.Validate_Depth (Depth);
       Fetch (Remote_Name, True, Depth);
    end Fetch;
+
+   procedure Fetch_Deepen (Remote_Name : String; Depth : Positive) is
+   begin
+      Version.Shallow.Validate_Depth (Depth);
+      Fetch (Remote_Name, True, Depth, Relative => True);
+   end Fetch_Deepen;
+
+   procedure Fetch_Unshallow (Remote_Name : String) is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+   begin
+      if not Version.Shallow.Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "--unshallow on a complete repository does not make sense";
+      end if;
+
+      --  Requesting the maximum depth flattens the entire history; the server
+      --  answers with "unshallow" lines for every boundary, emptying (and thus
+      --  removing) .git/shallow.
+      Fetch (Remote_Name, True, Positive'Last);
+   end Fetch_Unshallow;
 
 end Version.Fetch;

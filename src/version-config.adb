@@ -1,7 +1,13 @@
+with Ada.Calendar;
+with Ada.Calendar.Time_Zones;
+with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
+with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with Version.Files;
+with Version.Refs;
 
 package body Version.Config is
 
@@ -294,9 +300,240 @@ package body Version.Config is
          end if;
       end loop;
    end Require_Config_Section;
+   function Starts_With (S, P : String) return Boolean is
+     (S'Length >= P'Length
+      and then S (S'First .. S'First + P'Length - 1) = P);
+
+   --  Expand a leading "~/" (or bare "~") to $HOME; leave anything else as-is.
+   function Expand_Tilde (P : String) return String is
+   begin
+      if P'Length >= 1
+        and then P (P'First) = '~'
+        and then (P'Length = 1 or else P (P'First + 1) = '/')
+        and then Ada.Environment_Variables.Exists ("HOME")
+        and then Ada.Environment_Variables.Value ("HOME")'Length > 0
+      then
+         return Version.Files.Join
+           (Ada.Environment_Variables.Value ("HOME"),
+            (if P'Length = 1 then "" else P (P'First + 2 .. P'Last)));
+      else
+         return P;
+      end if;
+   end Expand_Tilde;
+
+   --  Resolve an include "path" value: "~" -> $HOME, absolute stays, otherwise
+   --  relative to the directory of the including config file (git semantics).
+   function Resolve_Include_Path
+     (Config_Path : String; Value : String) return String is
+   begin
+      if Value'Length = 0 then
+         return "";
+      elsif Value (Value'First) = '~' then
+         return Expand_Tilde (Value);
+      elsif Value (Value'First) = '/' then
+         return Value;
+      elsif Config_Path'Length = 0 then
+         return Value;
+      else
+         return Version.Files.Join
+           (Ada.Directories.Containing_Directory (Config_Path), Value);
+      end if;
+   end Resolve_Include_Path;
+
+   --  wildmatch with pathname semantics: '*'/'?' never cross '/', but '**'
+   --  does. "**/" matches zero or more leading path components; a trailing
+   --  "**" matches everything remaining.
+   function Glob_Match (Pattern, Text : String) return Boolean is
+      function M (P, T : Natural) return Boolean is
+      begin
+         if P > Pattern'Last then
+            return T > Text'Last;
+         end if;
+
+         if Pattern (P) = '*' then
+            if P + 1 <= Pattern'Last and then Pattern (P + 1) = '*' then
+               --  "**"
+               if P + 2 <= Pattern'Last and then Pattern (P + 2) = '/' then
+                  --  "**/": zero components, or consume through any '/'.
+                  if M (P + 3, T) then
+                     return True;
+                  end if;
+                  for K in T .. Text'Last loop
+                     if Text (K) = '/' and then M (P + 3, K + 1) then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               else
+                  --  trailing/other "**": match any remaining span.
+                  for K in T .. Text'Last + 1 loop
+                     if M (P + 2, K) then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               end if;
+            else
+               --  single '*': match zero or more non-'/' characters.
+               for K in T .. Text'Last + 1 loop
+                  if M (P + 1, K) then
+                     return True;
+                  end if;
+                  exit when K > Text'Last or else Text (K) = '/';
+               end loop;
+               return False;
+            end if;
+
+         elsif Pattern (P) = '?' then
+            return T <= Text'Last and then Text (T) /= '/'
+              and then M (P + 1, T + 1);
+         else
+            return T <= Text'Last and then Text (T) = Pattern (P)
+              and then M (P + 1, T + 1);
+         end if;
+      end M;
+   begin
+      return M (Pattern'First, Text'First);
+   end Glob_Match;
+
+   --  Normalise a gitdir: condition pattern per git: expand "~", make "./"
+   --  relative to the config file, prepend "**/" when unrooted, and append
+   --  "**" when it ends in '/'.
+   function Normalize_Gitdir_Pattern
+     (Raw : String; Config_Path : String) return String
+   is
+      function Add_Trailing (S : String) return String is
+        (if S'Length > 0 and then S (S'Last) = '/' then S & "**" else S);
+   begin
+      if Raw'Length = 0 then
+         return "";
+      elsif Raw (Raw'First) = '~' then
+         return Add_Trailing (Expand_Tilde (Raw));
+      elsif Starts_With (Raw, "./") then
+         if Config_Path'Length > 0 then
+            return Add_Trailing
+              (Version.Files.Join
+                 (Ada.Directories.Containing_Directory (Config_Path),
+                  Raw (Raw'First + 2 .. Raw'Last)));
+         else
+            return Add_Trailing (Raw (Raw'First + 2 .. Raw'Last));
+         end if;
+      elsif Raw (Raw'First) = '/' then
+         return Add_Trailing (Raw);
+      else
+         return Add_Trailing ("**/" & Raw);
+      end if;
+   end Normalize_Gitdir_Pattern;
+
+   function Lower_Str (S : String) return String renames Lower;
+
+   --  Evaluate whether an "[include]" / "[includeIf \"...\"]" section applies.
+   function Include_Applies
+     (Repo        : Version.Repository.Repository_Handle;
+      Section     : String;
+      Config_Path : String;
+      So_Far      : Config_Entry_Vectors.Vector) return Boolean
+   is
+      Sect : constant String := Trim (Section);
+      Low  : constant String := Lower_Str (Sect);
+   begin
+      if Low = "include" then
+         return True;
+      end if;
+
+      if not Starts_With (Low, "includeif") then
+         return False;
+      end if;
+
+      --  Extract the quoted condition, e.g. includeIf "gitdir:/x" -> gitdir:/x
+      declare
+         Q1 : Natural := 0;
+         Q2 : Natural := 0;
+      begin
+         for I in Sect'Range loop
+            if Sect (I) = '"' then
+               if Q1 = 0 then
+                  Q1 := I;
+               else
+                  Q2 := I;
+               end if;
+            end if;
+         end loop;
+
+         if Q1 = 0 or else Q2 <= Q1 + 1 then
+            return False;
+         end if;
+
+         declare
+            Cond : constant String := Sect (Q1 + 1 .. Q2 - 1);
+         begin
+            if Starts_With (Cond, "gitdir:")
+              or else Starts_With (Cond, "gitdir/i:")
+            then
+               declare
+                  Ci      : constant Boolean := Starts_With (Cond, "gitdir/i:");
+                  Raw     : constant String :=
+                    Cond (Cond'First + (if Ci then 9 else 7) .. Cond'Last);
+                  Pat     : constant String :=
+                    Normalize_Gitdir_Pattern (Raw, Config_Path);
+                  Git_Dir : constant String :=
+                    Version.Files.Normalize_Separators
+                      (Version.Repository.Git_Dir (Repo));
+               begin
+                  if Ci then
+                     return Glob_Match (Lower_Str (Pat), Lower_Str (Git_Dir));
+                  else
+                     return Glob_Match (Pat, Git_Dir);
+                  end if;
+               end;
+
+            elsif Starts_With (Cond, "onbranch:") then
+               declare
+                  Raw    : constant String :=
+                    Cond (Cond'First + 9 .. Cond'Last);
+                  Pat    : constant String :=
+                    (if Raw'Length > 0 and then Raw (Raw'Last) = '/'
+                     then Raw & "**" else Raw);
+                  Branch : constant String :=
+                    Version.Refs.Current_Branch_Name (Repo);
+               begin
+                  return Branch'Length > 0 and then Glob_Match (Pat, Branch);
+               end;
+
+            elsif Starts_With (Cond, "hasconfig:remote.*.url:") then
+               declare
+                  Pat : constant String :=
+                    Cond (Cond'First + 23 .. Cond'Last);
+               begin
+                  for E of So_Far loop
+                     declare
+                        Name : constant String :=
+                          Lower_Str (Config_Entry_Name (E));
+                     begin
+                        if Starts_With (Name, "remote.")
+                          and then Name'Length > 4
+                          and then Name (Name'Last - 3 .. Name'Last) = ".url"
+                          and then Glob_Match
+                                     (Pat, To_String (E.Value))
+                        then
+                           return True;
+                        end if;
+                     end;
+                  end loop;
+                  return False;
+               end;
+            else
+               return False;
+            end if;
+         end;
+      end;
+   end Include_Applies;
+
    procedure Append_Config_File
      (Path   : String;
-      Result : in out Config_Entry_Vectors.Vector)
+      Result : in out Config_Entry_Vectors.Vector;
+      Repo   : access constant Version.Repository.Repository_Handle := null;
+      Depth  : Natural := 0)
    is
       File : Ada.Text_IO.File_Type;
       Current_Section : Unbounded_String;
@@ -332,16 +569,42 @@ package body Version.Config is
                   end loop;
 
                   if Eq_Pos /= 0 then
-                     Result.Append
-                       (Config_Entry'
-                          (Section => Current_Section,
-                           Key     =>
-                             To_Unbounded_String
-                               (Trim (Text (Text'First .. Eq_Pos - 1))),
-                           Value   =>
-                             To_Unbounded_String
-                               (Decode_Config_Value
-                                  (Trim (Text (Eq_Pos + 1 .. Text'Last))))));
+                     declare
+                        Key : constant String :=
+                          Trim (Text (Text'First .. Eq_Pos - 1));
+                        Val : constant String :=
+                          Decode_Config_Value
+                            (Trim (Text (Eq_Pos + 1 .. Text'Last)));
+                        Sect : constant String :=
+                          Lower_Str (To_String (Current_Section));
+                     begin
+                        --  git keeps the include/includeIf directive itself as
+                        --  a readable config key ("include.path", etc.) whether
+                        --  or not it applies, so always record it.
+                        Result.Append
+                          (Config_Entry'
+                             (Section => Current_Section,
+                              Key     => To_Unbounded_String (Key),
+                              Value   => To_Unbounded_String (Val)));
+
+                        --  When reading the effective config (Repo present),
+                        --  additionally expand the included file inline at this
+                        --  point if the directive applies. Bounded to guard
+                        --  against include cycles (git's default depth limit).
+                        if Repo /= null
+                          and then Lower_Str (Key) = "path"
+                          and then (Sect = "include"
+                                    or else Starts_With (Sect, "includeif"))
+                          and then Depth < 10
+                          and then Include_Applies
+                                     (Repo.all, To_String (Current_Section),
+                                      Path, Result)
+                        then
+                           Append_Config_File
+                             (Resolve_Include_Path (Path, Val),
+                              Result, Repo, Depth + 1);
+                        end if;
+                     end;
                   end if;
                end;
             end if;
@@ -376,29 +639,89 @@ package body Version.Config is
       return False;
    end Worktree_Config_Enabled;
 
+   function Env_Value (Name : String) return String is
+     (if Ada.Environment_Variables.Exists (Name)
+      then Ada.Environment_Variables.Value (Name) else "");
+
+   --  git_env_bool-style truthiness (used for GIT_CONFIG_NOSYSTEM): set to
+   --  anything other than a false-ish word counts as enabled.
+   function Env_Flag_Set (Name : String) return Boolean is
+      V : constant String := Lower (Env_Value (Name));
+   begin
+      return Ada.Environment_Variables.Exists (Name)
+        and then V /= "0" and then V /= "false"
+        and then V /= "no" and then V /= "off";
+   end Env_Flag_Set;
+
+   --  System-scope config file: GIT_CONFIG_SYSTEM overrides the compiled-in
+   --  /etc/gitconfig; GIT_CONFIG_NOSYSTEM suppresses it entirely.
+   function System_Config_File return String is
+   begin
+      if Env_Flag_Set ("GIT_CONFIG_NOSYSTEM") then
+         return "";
+      elsif Ada.Environment_Variables.Exists ("GIT_CONFIG_SYSTEM") then
+         return Env_Value ("GIT_CONFIG_SYSTEM");
+      else
+         return "/etc/gitconfig";
+      end if;
+   end System_Config_File;
+
+   --  XDG global config (`$XDG_CONFIG_HOME/git/config`, else
+   --  `$HOME/.config/git/config`), read before ~/.gitconfig.
+   function Xdg_Global_Config_File return String is
+   begin
+      if Env_Value ("XDG_CONFIG_HOME") /= "" then
+         return
+           Version.Files.Join (Env_Value ("XDG_CONFIG_HOME"), "git/config");
+      elsif Env_Value ("HOME") /= "" then
+         return Version.Files.Join (Env_Value ("HOME"), ".config/git/config");
+      else
+         return "";
+      end if;
+   end Xdg_Global_Config_File;
+
+   function Home_Global_Config_File return String is
+     (if Env_Value ("HOME") /= ""
+      then Version.Files.Join (Env_Value ("HOME"), ".gitconfig") else "");
+
    function Read_All
      (Repo : Version.Repository.Repository_Handle)
       return Config_Entry_Vectors.Vector
    is
+      R      : aliased constant Version.Repository.Repository_Handle := Repo;
       Result : Config_Entry_Vectors.Vector;
+
+      procedure Read (Path : String) is
+      begin
+         --  An empty path means the scope is absent/suppressed (e.g. HOME
+         --  unset, or GIT_CONFIG_NOSYSTEM); skip it. (Ada.Directories rejects
+         --  "" with Name_Error, so guard before touching the filesystem.)
+         if Path /= "" then
+            Append_Config_File (Path, Result, R'Access);
+         end if;
+      end Read;
    begin
-      Append_Config_File (Config_Path (Repo), Result);
+      --  git's config read order (last value wins): system, then global
+      --  (XDG then ~/.gitconfig, or GIT_CONFIG_GLOBAL replacing both), then
+      --  the repository's local config, then the per-worktree config.
+      Read (System_Config_File);
+
+      if Ada.Environment_Variables.Exists ("GIT_CONFIG_GLOBAL") then
+         Read (Env_Value ("GIT_CONFIG_GLOBAL"));
+      else
+         Read (Xdg_Global_Config_File);
+         Read (Home_Global_Config_File);
+      end if;
+
+      Read (Config_Path (Repo));
 
       if Worktree_Config_Enabled (Result) then
-         declare
-            Worktree_Path : constant String :=
-              Version.Files.Join
-                (Version.Repository.Git_Dir (Repo), "config.worktree");
-            Layered : Config_Entry_Vectors.Vector;
-         begin
-            --  config.worktree overrides the common config: put its entries
-            --  first so first-match lookups resolve to the per-worktree value.
-            Append_Config_File (Worktree_Path, Layered);
-            for E of Result loop
-               Layered.Append (E);
-            end loop;
-            return Layered;
-         end;
+         --  config.worktree is read after the common config (git order), so
+         --  its entries append and last-match lookups resolve to the
+         --  per-worktree value.
+         Read
+           (Version.Files.Join
+              (Version.Repository.Git_Dir (Repo), "config.worktree"));
       end if;
 
       return Result;
@@ -545,13 +868,15 @@ package body Version.Config is
             Sub  : constant String :=
               Section (Quote_First + 1 .. Quote_Last - 1);
          begin
+            --  git canonicalises the section and variable names to lower case
+            --  but preserves the (case-sensitive) subsection verbatim.
             if Base'Length > 0 and then Sub'Length > 0 then
-               return Base & "." & Sub & "." & Key;
+               return Lower (Base) & "." & Sub & "." & Lower (Key);
             end if;
          end;
       end if;
 
-      return Section & "." & Key;
+      return Lower (Section) & "." & Lower (Key);
    end Config_Entry_Name;
 
    function Config_Entry_Line (Current_Entry : Config_Entry) return String is
@@ -798,9 +1123,14 @@ package body Version.Config is
    is
       Items  : constant Config_Entry_Vectors.Vector := Read_All (Repo);
       Wanted : constant String := Lower (Name);
+      Found  : Boolean := False;
+      Value  : Unbounded_String;
    begin
       Require_Config_Name (Name);
 
+      --  git resolves a single-valued lookup to the LAST occurrence in read
+      --  order (local then included/worktree entries), so keep scanning and
+      --  remember the most recent match rather than returning the first.
       if not Items.Is_Empty then
          for I in Items.First_Index .. Items.Last_Index loop
             declare
@@ -808,10 +1138,15 @@ package body Version.Config is
                  Lower (Config_Entry_Name (Items.Element (I)));
             begin
                if Item_Name = Wanted then
-                  return To_String (Items.Element (I).Value);
+                  Found := True;
+                  Value := Items.Element (I).Value;
                end if;
             end;
          end loop;
+      end if;
+
+      if Found then
+         return To_String (Value);
       end if;
 
       raise Ada.IO_Exceptions.Data_Error
@@ -888,5 +1223,192 @@ package body Version.Config is
 
       Write_All (Repo => Repo, Entries => Result);
    end Replace_Section;
+
+   ---------------------
+   -- Normalize_Date --
+   ---------------------
+
+   function Normalize_Date (Text : String) return String is
+
+      function Digits_Only (S : String) return Boolean is
+        (S'Length > 0
+         and then (for all C of S => C in '0' .. '9'));
+
+      function Zone (S : String) return String is
+      begin
+         --  "+0200", "+02:00", or nothing (git then assumes UTC).
+         if S'Length = 0 then
+            return "+0000";
+         elsif S'Length = 5 and then S (S'First) in '+' | '-' then
+            return S;
+         elsif S'Length = 6 and then S (S'First) in '+' | '-'
+           and then S (S'First + 3) = ':'
+         then
+            return S (S'First .. S'First + 2) & S (S'First + 4 .. S'Last);
+         else
+            return "";
+         end if;
+      end Zone;
+
+      Trimmed : constant String :=
+        Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both);
+   begin
+      if Trimmed'Length = 0 then
+         return "";
+      end if;
+
+      declare
+         Head  : constant String :=
+           (if Trimmed (Trimmed'First) = '@'
+            then Trimmed (Trimmed'First + 1 .. Trimmed'Last) else Trimmed);
+         Space : constant Natural :=
+           Ada.Strings.Fixed.Index (Head, " ");
+         Left  : constant String :=
+           (if Space = 0 then Head else Head (Head'First .. Space - 1));
+         Right : constant String :=
+           (if Space = 0 then ""
+            else Ada.Strings.Fixed.Trim
+                   (Head (Space + 1 .. Head'Last), Ada.Strings.Both));
+      begin
+         --  "<seconds> <+-hhmm>": already git's own spelling.
+         if Digits_Only (Left) and then Zone (Right) /= "" then
+            return Left & " " & Zone (Right);
+         end if;
+
+         --  ISO 8601: "YYYY-MM-DD HH:MM:SS +hhmm" (or with a 'T', or with the
+         --  zone glued to the seconds).
+         if Head'Length >= 19
+           and then Head (Head'First + 4) = '-'
+           and then Head (Head'First + 7) = '-'
+           and then Head (Head'First + 13) = ':'
+         then
+            declare
+               Stamp : constant String :=
+                 Head (Head'First .. Head'First + 18);
+               Rest  : constant String :=
+                 Ada.Strings.Fixed.Trim
+                   (Head (Head'First + 19 .. Head'Last), Ada.Strings.Both);
+               Off   : constant String := Zone (Rest);
+
+               Epoch : constant Ada.Calendar.Time :=
+                 Ada.Calendar.Time_Of (1970, 1, 1);
+
+               When_Utc : Ada.Calendar.Time;
+               Secs     : Integer;
+            begin
+               if Off = "" then
+                  return "";
+               end if;
+
+               When_Utc :=
+                 Ada.Calendar.Time_Of
+                   (Year    => Integer'Value (Stamp (Stamp'First
+                                              .. Stamp'First + 3)),
+                    Month   => Integer'Value (Stamp (Stamp'First + 5
+                                              .. Stamp'First + 6)),
+                    Day     => Integer'Value (Stamp (Stamp'First + 8
+                                              .. Stamp'First + 9)),
+                    Seconds =>
+                      Duration
+                        (Integer'Value
+                           (Stamp (Stamp'First + 11 .. Stamp'First + 12))
+                         * 3600
+                         + Integer'Value
+                             (Stamp (Stamp'First + 14 .. Stamp'First + 15))
+                           * 60
+                         + Integer'Value
+                             (Stamp (Stamp'First + 17 .. Stamp'First + 18))));
+
+               Secs := Integer (Ada.Calendar."-" (When_Utc, Epoch));
+
+               --  The stamp is local to Off; git stores UTC seconds.
+               Secs := Secs
+                 - (Integer'Value (Off (Off'First + 1 .. Off'First + 2)) * 3600
+                    + Integer'Value (Off (Off'First + 3 .. Off'Last)) * 60)
+                   * (if Off (Off'First) = '-' then -1 else 1);
+
+               return Ada.Strings.Fixed.Trim
+                        (Integer'Image (Secs), Ada.Strings.Both)
+                      & " " & Off;
+            exception
+               when others =>
+                  return "";
+            end;
+         end if;
+
+         return "";
+      end;
+   end Normalize_Date;
+
+   --  "+hhmm" for the local timezone, as git records it.
+   function Local_Zone return String is
+      Offset : constant Integer :=
+        Integer (Ada.Calendar.Time_Zones.UTC_Time_Offset);
+
+      Sign  : constant Character := (if Offset < 0 then '-' else '+');
+      Total : constant Natural := abs Offset;
+
+      function Pad (V : Natural) return String is
+         Image : constant String := Natural'Image (V);
+         Text  : constant String := Image (Image'First + 1 .. Image'Last);
+      begin
+         return (if Text'Length = 1 then "0" & Text else Text);
+      end Pad;
+   begin
+      return Sign & Pad (Total / 60) & Pad (Total mod 60);
+   exception
+      when others =>
+         return "+0000";
+   end Local_Zone;
+
+   function Now_Stamp return String is
+      Epoch : constant Ada.Calendar.Time := Ada.Calendar.Time_Of (1970, 1, 1);
+      Secs  : constant Integer :=
+        Integer (Ada.Calendar."-" (Ada.Calendar.Clock, Epoch));
+   begin
+      return Ada.Strings.Fixed.Trim (Integer'Image (Secs), Ada.Strings.Both)
+             & " " & Local_Zone;
+   end Now_Stamp;
+
+   function Env (Name : String) return String is
+     (if Ada.Environment_Variables.Exists (Name)
+      then Ada.Environment_Variables.Value (Name) else "");
+
+   function Signature
+     (Repo   : Version.Repository.Repository_Handle;
+      Prefix : String)
+      return String
+   is
+      User : constant Identity := User_Identity (Repo);
+
+      Name : constant String :=
+        (if Env (Prefix & "_NAME") /= "" then Env (Prefix & "_NAME")
+         else To_String (User.Name));
+
+      Email : constant String :=
+        (if Env (Prefix & "_EMAIL") /= "" then Env (Prefix & "_EMAIL")
+         else To_String (User.Email));
+
+      Stamp : constant String := Normalize_Date (Env (Prefix & "_DATE"));
+   begin
+      return Name & " <" & Email & "> "
+             & (if Stamp = "" then Now_Stamp else Stamp);
+   end Signature;
+
+   function Committer_Timestamp return String is
+      Stamp : constant String := Normalize_Date (Env ("GIT_COMMITTER_DATE"));
+   begin
+      return (if Stamp = "" then Now_Stamp else Stamp);
+   end Committer_Timestamp;
+
+   function Author_Signature
+     (Repo : Version.Repository.Repository_Handle)
+      return String
+   is (Signature (Repo, "GIT_AUTHOR"));
+
+   function Committer_Signature
+     (Repo : Version.Repository.Repository_Handle)
+      return String
+   is (Signature (Repo, "GIT_COMMITTER"));
 
 end Version.Config;

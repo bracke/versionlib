@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Streams; use Ada.Streams;
 with Ada.Strings.Fixed;
@@ -9,6 +10,9 @@ with GNAT.Sockets;
 
 with Http_Client.HTTP2;
 with Http_Client.Response_Streams;
+
+with Version.Git_Fixtures;
+with Version.Init;
 
 package body Version.Transport.Http.Tests is
 
@@ -291,6 +295,84 @@ package body Version.Transport.Http.Tests is
 
    end Fixture_Server;
 
+   --  Server that rejects the first (anonymous) request with 401 and serves
+   --  the advertisement to a retry carrying "Authorization: Basic
+   --  dXNlcjpwYXNz" (base64 of "user:pass").
+   task type Auth_Fixture_Server is
+      entry Ready (Port : out GNAT.Sockets.Port_Type);
+   end Auth_Fixture_Server;
+
+   task body Auth_Fixture_Server is
+      Server      : GNAT.Sockets.Socket_Type;
+      Client      : GNAT.Sockets.Socket_Type;
+      Address     : constant GNAT.Sockets.Sock_Addr_Type :=
+        (Family => GNAT.Sockets.Family_Inet,
+         Addr   => GNAT.Sockets.Inet_Addr ("127.0.0.1"),
+         Port   => 0);
+      Peer        : GNAT.Sockets.Sock_Addr_Type;
+      Bound       : GNAT.Sockets.Sock_Addr_Type;
+      Request     : Stream_Element_Array (1 .. 4096);
+      Request_End : Stream_Element_Offset;
+      Last_Sent   : Stream_Element_Offset;
+
+      Adv_Header : constant Stream_Element_Array := To_Stream
+        ("HTTP/1.1 200 OK" & CR & LF
+         & "Content-Type: application/x-git-upload-pack-advertisement" & CR & LF
+         & "Content-Length: "
+         & Ada.Strings.Fixed.Trim
+             (Integer'Image (Response_Body'Length), Ada.Strings.Left)
+         & CR & LF & "Connection: close" & CR & LF & CR & LF);
+      Unauthorized : constant Stream_Element_Array := To_Stream
+        ("HTTP/1.1 401 Unauthorized" & CR & LF
+         & "WWW-Authenticate: Basic realm=""git""" & CR & LF
+         & "Content-Length: 0" & CR & LF & "Connection: close" & CR & LF
+         & CR & LF);
+   begin
+      GNAT.Sockets.Create_Socket (Server);
+      GNAT.Sockets.Set_Socket_Option
+        (Socket => Server,
+         Level  => GNAT.Sockets.Socket_Level,
+         Option => (Name => GNAT.Sockets.Reuse_Address, Enabled => True));
+      GNAT.Sockets.Bind_Socket (Server, Address);
+      Bound := GNAT.Sockets.Get_Socket_Name (Server);
+      GNAT.Sockets.Listen_Socket (Server);
+      accept Ready (Port : out GNAT.Sockets.Port_Type) do
+         Port := Bound.Port;
+      end Ready;
+
+      --  First request: anonymous -> 401.
+      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+      GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
+      GNAT.Sockets.Send_Socket (Client, Unauthorized, Last_Sent);
+      GNAT.Sockets.Close_Socket (Client);
+
+      --  Retry: must carry the correct Basic authorization.
+      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+      GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
+      if Contains
+           (Request, Request_End, "Authorization: Basic dXNlcjpwYXNz")
+      then
+         GNAT.Sockets.Send_Socket (Client, Adv_Header, Last_Sent);
+         GNAT.Sockets.Send_Socket (Client, Response_Body, Last_Sent);
+      else
+         GNAT.Sockets.Send_Socket
+           (Client,
+            To_Stream ("HTTP/1.1 400 Bad Request" & CR & LF
+                       & "Content-Length: 0" & CR & LF
+                       & "Connection: close" & CR & LF & CR & LF),
+            Last_Sent);
+      end if;
+      GNAT.Sockets.Close_Socket (Client);
+      GNAT.Sockets.Close_Socket (Server);
+   exception
+      when others =>
+         begin
+            GNAT.Sockets.Close_Socket (Server);
+         exception
+            when others => null;
+         end;
+   end Auth_Fixture_Server;
+
    procedure Assert_Collected_Response
      (Consumer : Collecting_Consumer;
       Context  : String) is
@@ -437,6 +519,41 @@ package body Version.Transport.Http.Tests is
       Assert_Collected_Response (Consumer, "HTTP discovery");
    end Streams_Binary_Response_Bytes;
 
+   --  On HTTP 401 the transport runs the repo's credential.helper, retries
+   --  with HTTP Basic auth, and completes the discovery (git's auth flow).
+   procedure Discover_Authenticates_On_401
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir  : constant String := Ada.Directories.Current_Directory;
+      Server   : Auth_Fixture_Server;
+      Port     : GNAT.Sockets.Port_Type;
+      Consumer : Collecting_Consumer;
+   begin
+      Version.Init.Init (Root);
+      Version.Git_Fixtures.Run
+        (Root,
+         "git config credential.helper "
+         & "'!printf ""username=user\npassword=pass\n""'");
+      Ada.Directories.Set_Directory (Root);
+      Server.Ready (Port);
+
+      Version.Transport.Http.Discover_Upload_Pack
+        (Url      => "http://127.0.0.1:"
+                     & Ada.Strings.Fixed.Trim
+                         (Integer'Image (Integer (Port)), Ada.Strings.Left)
+                     & "/repo.git",
+         Consumer => Consumer);
+
+      Ada.Directories.Set_Directory (Old_Dir);
+      Assert_Collected_Response (Consumer, "HTTP discovery after 401 auth");
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Discover_Authenticates_On_401;
+
    procedure Receive_Pack_Discovery_Streams_Binary_Response_Bytes
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -510,6 +627,11 @@ package body Version.Transport.Http.Tests is
         (T,
          Git_Streaming_Options_Enable_Https_HTTP2'Access,
          "Transport.Http: Git streaming options prefer HTTPS HTTP/2");
+
+      Register_Routine
+        (T,
+         Discover_Authenticates_On_401'Access,
+         "Transport.Http: 401 triggers credential.helper + Basic-auth retry");
 
       Register_Routine
         (T,

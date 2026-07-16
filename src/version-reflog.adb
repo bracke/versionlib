@@ -157,16 +157,11 @@ package body Version.Reflog is
       end if;
    end Preflight_Append;
 
+   --  A reflog entry is stamped with the committer's time: what
+   --  GIT_COMMITTER_DATE says, or now in the local timezone.
    function Time_Stamp
       return String
-   is
-      Epoch : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (Year => 1970, Month => 1, Day => 1);
-      Now     : constant Ada.Calendar.Time := Ada.Calendar.Clock;
-      Seconds : constant Natural := Natural (Ada.Calendar."-" (Now, Epoch));
-   begin
-      return Version.Config.Trim (Natural'Image (Seconds)) & " +0000";
-   end Time_Stamp;
+   is (Version.Config.Committer_Timestamp);
 
    procedure Append
      (Repo    : Version.Repository.Repository_Handle;

@@ -108,19 +108,6 @@ package body Version.Remotes is
          Entries => Entries);
    end Add_Remote;
 
-   procedure Delete_Remote (Name : String) is
-      Repo : constant Version.Repository.Repository_Handle :=
-        Version.Repository.Open;
-   begin
-      if not Is_Valid_Remote_Name (Name) then
-         raise Ada.IO_Exceptions.Data_Error
-           with Invalid_Remote_Name_Diagnostic (Name);
-      end if;
-
-      Version.Config.Remove_Section
-        (Repo => Repo, Section => "remote """ & Name & """");
-
-   end Delete_Remote;
 
    procedure Set_Url (Name : String; Url : String) is
       Repo : constant Version.Repository.Repository_Handle :=
@@ -878,6 +865,27 @@ package body Version.Remotes is
          Version.Ref_Transaction.Cancel (Tx);
          raise;
    end Delete_Stale_Remote_Tracking_Refs;
+
+   procedure Delete_Remote (Name : String) is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+   begin
+      if not Is_Valid_Remote_Name (Name) then
+         raise Ada.IO_Exceptions.Data_Error
+           with Invalid_Remote_Name_Diagnostic (Name);
+      end if;
+
+      Version.Config.Remove_Section
+        (Repo => Repo, Section => "remote """ & Name & """");
+
+      --  `git remote remove` drops the remote-tracking refs along with the
+      --  configuration; leaving refs/remotes/<name>/* behind would keep the
+      --  deleted remote visible to `show-ref`, `branch -r`, and gc.
+      Delete_Stale_Remote_Tracking_Refs
+        (Repo     => Repo,
+         Name     => Name,
+         Branches => Local_Remote_Tracking_Branch_Ids (Repo, Name));
+   end Delete_Remote;
 
    function Prune_Text (Name : String) return String is
       Repo       : constant Version.Repository.Repository_Handle :=

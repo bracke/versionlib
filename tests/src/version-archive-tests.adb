@@ -18,6 +18,7 @@ with Version.Objects;
 with Version.Pathspec;
 with Version.Repository;
 with Version.Refs;
+with Version.Revisions;
 with Version.Sparse;
 with Version.Tar;
 with Version.Test_Support;
@@ -248,6 +249,7 @@ package body Version.Archive.Tests is
          "#!/bin/sh" & Character'Val (10) & "exit 0" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add run.sh");
       Version.Git_Fixtures.Run (Root, "git update-index --chmod=+x run.sh");
+      Version.Git_Fixtures.Run (Root, "chmod +x run.sh");
       Ada.Directories.Set_Directory (Root);
       Version.Write.Save ("archive executable fixture");
       Ada.Directories.Set_Directory (Old_Dir);
@@ -497,9 +499,20 @@ package body Version.Archive.Tests is
          Tar_Data : constant String := Read_Binary_File (Tar_Output);
          Zip_Data : constant String := Read_Binary_File (Zip_Output);
       begin
+         --  A commit archive still carries git's pax global header (one
+         --  512-byte header block + one record block) followed by the two
+         --  terminating zero blocks, but no file entries.
          Assert
-           (Tar_Data'Length = 1024,
-            "empty filtered TAR must contain only two terminating zero blocks");
+           (Tar_Data'Length = 2048,
+            "empty filtered TAR has the pax global header, its record block,"
+            & " and two terminating zero blocks");
+         Assert
+           (Ada.Strings.Fixed.Index (Tar_Data, "pax_global_header") > 0,
+            "a commit archive carries a pax global header even when filtered"
+            & " empty");
+         Assert
+           (Ada.Strings.Fixed.Index (Tar_Data, "README.md") = 0,
+            "empty filtered TAR must not contain repository file names");
          Assert
            (Ada.Strings.Fixed.Index (Zip_Data, "README.md") = 0,
             "empty filtered ZIP must not contain repository file names");
@@ -2152,7 +2165,10 @@ package body Version.Archive.Tests is
          raise;
    end Archive_Preserves_LFS_Pointer_File_Bytes;
 
-   procedure Archive_Export_Subst_Attributes_Are_Literal
+   --  git parity: export-subst expands `$Format:<pretty>$` in attributed blobs
+   --  to the archived commit's metadata; a nested `.gitattributes` grants the
+   --  attribute to its subtree; non-attributed files are left byte-for-byte.
+   procedure Archive_Export_Subst_Expands_Like_Git
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       Root       : constant String :=
@@ -2160,8 +2176,7 @@ package body Version.Archive.Tests is
       Old_Dir    : constant String := Ada.Directories.Current_Directory;
       Tar_Output : constant String := Join (Root, "export-subst.tar");
       Zip_Output : constant String := Join (Root, "export-subst.zip");
-      Placeholder : constant String := "commit $Format:%H$";
-      Attributes  : constant String := "*.txt export-subst";
+      Attributes : constant String := "*.txt export-subst";
    begin
       Version.Init.Init (Root);
       Version.Git_Fixtures.Run
@@ -2171,43 +2186,67 @@ package body Version.Archive.Tests is
       Version.Files.Write_Binary_File
         (Join (Root, ".gitattributes"), Attributes);
       Version.Files.Write_Binary_File
-        (Join (Root, "version.txt"), Placeholder);
-      Version.Git_Fixtures.Run (Root, "git add .gitattributes version.txt");
+        (Join (Root, "version.txt"), "commit $Format:%H$");
+      --  Not matched by *.txt, and no attribute: must stay literal.
+      Version.Files.Write_Binary_File
+        (Join (Root, "raw.dat"), "raw $Format:%H$ untouched");
+      Ada.Directories.Create_Directory (Join (Root, "sub"));
+      --  Nested .gitattributes grants export-subst to sub/*.txt.
+      Version.Files.Write_Binary_File
+        (Join (Root, "sub/.gitattributes"), "*.txt export-subst");
+      Version.Files.Write_Binary_File
+        (Join (Root, "sub/inner.txt"), "short $Format:%h$");
+      Version.Git_Fixtures.Run (Root, "git add -A");
 
       Ada.Directories.Set_Directory (Root);
-      Version.Write.Save ("archive export-subst literal");
-      Version.Archive.Create
-        (Version.Repository.Open, "HEAD", Tar_Output, Version.Archive.Tar_Format);
-      Version.Archive.Create
-        (Version.Repository.Open, "HEAD", Zip_Output, Version.Archive.Zip_Format);
-      Ada.Directories.Set_Directory (Old_Dir);
+      Version.Write.Save ("archive export-subst");
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Full : constant String :=
+           Version.Objects.To_String
+             (Version.Revisions.Resolve_Commit (Repo, "HEAD"));
+         Short : constant String := Full (Full'First .. Full'First + 6);
+      begin
+         Version.Archive.Create
+           (Repo, "HEAD", Tar_Output, Version.Archive.Tar_Format);
+         Version.Archive.Create
+           (Repo, "HEAD", Zip_Output, Version.Archive.Zip_Format);
+         Ada.Directories.Set_Directory (Old_Dir);
 
-      Version.Git_Fixtures.Run
-        (Root, "tar -xOf export-subst.tar version.txt > export-subst-tar.out");
-      Version.Git_Fixtures.Run
-        (Root, "unzip -p export-subst.zip version.txt > export-subst-zip.out");
-      Version.Git_Fixtures.Run
-        (Root, "tar -xOf export-subst.tar .gitattributes > attrs-tar.out");
-      Version.Git_Fixtures.Run
-        (Root, "unzip -p export-subst.zip .gitattributes > attrs-zip.out");
+         Version.Git_Fixtures.Run
+           (Root, "tar -xOf export-subst.tar version.txt > st-tar.out");
+         Version.Git_Fixtures.Run
+           (Root, "unzip -p export-subst.zip version.txt > st-zip.out");
+         Version.Git_Fixtures.Run
+           (Root, "tar -xOf export-subst.tar sub/inner.txt > sub-tar.out");
+         Version.Git_Fixtures.Run
+           (Root, "tar -xOf export-subst.tar raw.dat > raw-tar.out");
+         Version.Git_Fixtures.Run
+           (Root, "tar -xOf export-subst.tar .gitattributes > attrs-tar.out");
 
-      Assert
-        (Read_Binary_File (Join (Root, "export-subst-tar.out")) = Placeholder,
-         "tar archive must not expand export-subst placeholders");
-      Assert
-        (Read_Binary_File (Join (Root, "export-subst-zip.out")) = Placeholder,
-         "zip archive must not expand export-subst placeholders");
-      Assert
-        (Read_Binary_File (Join (Root, "attrs-tar.out")) = Attributes,
-         "tar archive must preserve .gitattributes as ordinary file data");
-      Assert
-        (Read_Binary_File (Join (Root, "attrs-zip.out")) = Attributes,
-         "zip archive must preserve .gitattributes as ordinary file data");
+         Assert
+           (Read_Binary_File (Join (Root, "st-tar.out")) = "commit " & Full,
+            "tar export-subst must expand %H to the commit id");
+         Assert
+           (Read_Binary_File (Join (Root, "st-zip.out")) = "commit " & Full,
+            "zip export-subst must expand %H to the commit id");
+         Assert
+           (Read_Binary_File (Join (Root, "sub-tar.out")) = "short " & Short,
+            "nested export-subst must expand %h for sub/*.txt");
+         Assert
+           (Read_Binary_File (Join (Root, "raw-tar.out"))
+              = "raw $Format:%H$ untouched",
+            "non-attributed file must not be substituted");
+         Assert
+           (Read_Binary_File (Join (Root, "attrs-tar.out")) = Attributes,
+            "tar archive must preserve .gitattributes literally");
+      end;
    exception
       when others =>
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
-   end Archive_Export_Subst_Attributes_Are_Literal;
+   end Archive_Export_Subst_Expands_Like_Git;
 
    overriding
    procedure Register_Tests (T : in out Test_Case) is
@@ -2367,8 +2406,8 @@ package body Version.Archive.Tests is
          "archive: LFS pointer file bytes preserved");
       Register_Routine
         (T,
-         Archive_Export_Subst_Attributes_Are_Literal'Access,
-         "archive: export-subst attributes are literal bytes");
+         Archive_Export_Subst_Expands_Like_Git'Access,
+         "archive: export-subst expands $Format:...$ like git");
    end Register_Tests;
 
    overriding

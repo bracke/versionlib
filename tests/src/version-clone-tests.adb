@@ -819,7 +819,6 @@ package body Version.Clone.Tests is
            "main");
 
       Old_Dir : constant String := Ada.Directories.Current_Directory;
-      Raised  : Boolean := False;
    begin
       Ada.Directories.Create_Directory (Source);
       Version.Init.Init (Source);
@@ -839,26 +838,24 @@ package body Version.Clone.Tests is
            (Path    => Head_Path,
             Content => "ref: refs/heads/missing" & Character'Val (10));
 
-         begin
-            Version.Clone.Clone (Source => Source, Target => Target);
-         exception
-            when Ada.IO_Exceptions.Data_Error =>
-               Raised := True;
-         end;
+         --  git parity: a dangling source HEAD is not a clone error; the clone
+         --  completes with an unborn HEAD and leaves the source untouched.
+         Version.Clone.Clone (Source => Source, Target => Target);
 
          Assert
-           (Raised,
-            "clone should reject missing remote default branch tracking ref");
+           (Ada.Directories.Exists (Target),
+            "dangling-HEAD clone completes and keeps its target directory");
          Assert
-           (not Ada.Directories.Exists (Target),
-            "failed clone checkout must remove the target directory it created");
+           (not Version.Files.Is_Ordinary_File
+                  (Version.Test_Support.Join (Target, "a.txt")),
+            "dangling-HEAD clone checks nothing out");
          Assert
            (Version.Files.Read_Binary_File (Main_Ref) = Main_Before,
-            "failed clone checkout must not rewrite source branch ref");
+            "clone must not rewrite the source branch ref");
          Assert
            (Version.Files.Read_Binary_File (Head_Path)
             = "ref: refs/heads/missing" & Character'Val (10),
-            "failed clone checkout must not rewrite source HEAD");
+            "clone must not rewrite the source HEAD");
       end;
 
       Ada.Directories.Set_Directory (Old_Dir);
@@ -951,10 +948,81 @@ package body Version.Clone.Tests is
          raise;
    end Clone_From_Bundle_File;
 
+   procedure Clone_Dangling_Remote_Head_Warns_No_Checkout
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      LF : constant Character := Character'Val (10);
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+      Bare_Path : constant String :=
+        Version.Test_Support.Join (Root, "dangle-source.git");
+      Work_Path : constant String :=
+        Version.Test_Support.Join (Root, "dangle-work");
+      Clone_Path : constant String :=
+        Version.Test_Support.Join (Root, "dangle-clone");
+      Work_File : constant String :=
+        Version.Test_Support.Join (Work_Path, "a.txt");
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+   begin
+      Version.Init.Init_Bare (Bare_Path);
+      Version.Init.Init (Work_Path);
+
+      --  The bare remote's HEAD names a branch that will never be pushed, so
+      --  the clone's remote HEAD dangles.
+      Version.Files.Write_Binary_File
+        (Path    => Version.Test_Support.Join (Bare_Path, "HEAD"),
+         Content => "ref: refs/heads/trunk" & LF);
+
+      Version.Git_Fixtures.Run
+        (Work_Path, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Work_Path, "git config user.name Test");
+      Ada.Directories.Set_Directory (Work_Path);
+      Version.Test_Support.Write_Text_File (Work_File, "hello" & LF);
+      Version.Git_Fixtures.Run (Work_Path, "git add a.txt");
+      Version.Write.Save ("c1");
+      Version.Git_Fixtures.Run (Work_Path, "git branch -M main");
+      Version.Remotes.Add_Remote (Name => "origin", Url => Bare_Path);
+      Version.Push.Push (Remote_Name => "origin", Branch_Name => "main");
+      Ada.Directories.Set_Directory (Old_Dir);
+
+      --  git parity: a dangling remote HEAD must not fail the clone.
+      Version.Clone.Clone (Source => Bare_Path, Target => Clone_Path);
+
+      --  HEAD points at the unborn default branch; nothing is checked out.
+      Version.Git_Fixtures.Run
+        (Clone_Path,
+         "test ""$(git symbolic-ref HEAD)"" = ""refs/heads/trunk""");
+      Assert
+        (not Version.Files.Is_Ordinary_File
+               (Version.Test_Support.Join (Clone_Path, "a.txt")),
+         "dangling-HEAD clone must not materialize a worktree");
+      --  The remote branches are still fetched...
+      Assert
+        (Version.Files.Is_Ordinary_File
+           (Version.Test_Support.Join
+              (Clone_Path, ".git/refs/remotes/origin/main")),
+         "dangling-HEAD clone still fetches remote branches");
+      --  ...but no origin/HEAD is written (its target does not exist).
+      Assert
+        (not Version.Files.Is_Ordinary_File
+               (Version.Test_Support.Join
+                  (Clone_Path, ".git/refs/remotes/origin/HEAD")),
+         "dangling-HEAD clone writes no origin/HEAD");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Clone_Dangling_Remote_Head_Warns_No_Checkout;
+
    overriding procedure Register_Tests
      (T : in out Test_Case)
    is
    begin
+      Register_Routine
+        (T, Clone_Dangling_Remote_Head_Warns_No_Checkout'Access,
+         "Clone: dangling remote HEAD warns and skips checkout (git parity)");
       Register_Routine
         (T, Clone_From_Bundle_File'Access,
          "Clone: from a git bundle file");
@@ -1018,7 +1086,7 @@ package body Version.Clone.Tests is
       Register_Routine
         (T,
          Clone_Rolls_Back_Target_After_Checkout_Failure'Access,
-         "Clone: rolls back target after checkout failure");
+         "Clone: dangling source HEAD completes without mutating the source");
 
       Register_Routine
         (T,

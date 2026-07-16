@@ -26,6 +26,7 @@ package Version.Shortlog is
       Tip  : Version.Objects.Hex_Object_Id)
       return Group_Vectors.Vector;
    --  Commits reachable from Tip, grouped by author name (groups sorted by
-   --  name); each group lists the commit subjects newest first.
+   --  name); each group lists the commit subjects oldest first (chronological),
+   --  matching git shortlog.
 
 end Version.Shortlog;

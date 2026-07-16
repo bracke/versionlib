@@ -268,7 +268,10 @@ package body Version.Working_Tree is
 
             Full : constant String := Ada.Directories.Full_Name (E);
          begin
-            if Name /= "." and then Name /= ".." then
+            --  Never report the repository pointer, whether it is a `.git`
+            --  directory (normal repo) or a `.git` gitfile (submodule/linked
+            --  worktree). git excludes it in every case.
+            if Name /= "." and then Name /= ".." and then Name /= ".git" then
                if GNAT.OS_Lib.Is_Symbolic_Link (Full) then
                   declare
                      Rel_File : constant String :=

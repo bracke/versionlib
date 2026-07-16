@@ -795,6 +795,46 @@ package body Version.Pack is
       return Current_Offset - Offset;
    end Decode_Ofs_Delta_Base_Offset;
 
+   function Read_Delta_Base
+     (Repo     : Version.Repository.Repository_Handle;
+      Location : Pack_Location) return Delta_Base_Info is
+      Data   : constant Stream_Element_Array :=
+        Read_File (To_String (Location.Pack_Path));
+      Header : constant Packed_Object_Header := Read_Header (Location);
+      Pos    : U64 := Header.Data_Offset;
+   begin
+      case Header.Kind is
+         when Packed_Ofs_Delta =>
+            return
+              (Is_Delta    => True,
+               By_Offset   => True,
+               Base_Offset =>
+                 Decode_Ofs_Delta_Base_Offset
+                   (Data           => Data,
+                    Current_Offset => Location.Offset,
+                    Pos            => Pos),
+               Base_Id     => <>);
+
+         when Packed_Ref_Delta =>
+            return
+              (Is_Delta    => True,
+               By_Offset   => False,
+               Base_Offset => 0,
+               Base_Id     =>
+                 Raw_Id_At
+                   (Data       => Data,
+                    Pos        => Header.Data_Offset,
+                    Raw_Length => Version.Hash.Raw_Length
+                                    (Version.Repository.Algorithm (Repo))));
+
+         when others =>
+            return (others => <>);
+      end case;
+   exception
+      when others =>
+         return (others => <>);
+   end Read_Delta_Base;
+
    function Read_Object_At_Location
      (Repo : Version.Repository.Repository_Handle; Location : Pack_Location)
       return Version.Objects.Git_Object
@@ -1261,7 +1301,9 @@ package body Version.Pack is
    end Find_Scanned_By_Id;
 
    procedure Index_Pack
-     (Repo : Version.Repository.Repository_Handle; Pack_Path : String)
+     (Repo         : Version.Repository.Repository_Handle;
+      Pack_Path    : String;
+      Canonicalize : Boolean := True)
    is
       Data           : constant Stream_Element_Array := Read_File (Pack_Path);
       Magic          : String (1 .. 4) := [others => Character'Val (0)];
@@ -1531,5 +1573,119 @@ package body Version.Pack is
              (Entries       => Indexed,
               Pack_Checksum => Pack_Trailing_Checksum (Data, Raw_Length),
               Algorithm     => Version.Repository.Algorithm (Repo)));
+
+      --  Finalize to git's canonical "pack-<checksum>" name so repeated
+      --  fetches into the same repository never collide on a fixed temporary
+      --  filename (which would truncate an earlier pack and lose its objects).
+      declare
+         function To_Hex (Raw : String) return String is
+            Hex : constant String := "0123456789abcdef";
+            R   : String (1 .. Raw'Length * 2);
+            J   : Natural := R'First;
+         begin
+            for C of Raw loop
+               R (J)     := Hex (Character'Pos (C) / 16 + 1);
+               R (J + 1) := Hex (Character'Pos (C) mod 16 + 1);
+               J := J + 2;
+            end loop;
+            return R;
+         end To_Hex;
+
+         Name       : constant String :=
+           "pack-" & To_Hex (Pack_Trailing_Checksum (Data, Raw_Length));
+         Dir        : constant String :=
+           Ada.Directories.Containing_Directory (Pack_Path);
+         Final_Pack : constant String :=
+           Version.Files.Join (Dir, Name & ".pack");
+         Final_Idx  : constant String :=
+           Version.Files.Join (Dir, Name & ".idx");
+      begin
+         if Canonicalize and then Final_Pack /= Pack_Path then
+            Version.Files.Atomic_Replace (Pack_Path, Final_Pack);
+            Version.Files.Atomic_Replace
+              (Index_Path_For (Pack_Path), Final_Idx);
+         end if;
+      end;
    end Index_Pack;
+   function All_Pack_Objects
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Object_Id_Vectors.Vector
+   is
+      Pack_Dir : constant String :=
+        Join
+          (Join (Version.Repository.Common_Git_Dir (Repo), "objects"), "pack");
+      Raw_Length : constant Natural :=
+        Version.Hash.Raw_Length (Version.Repository.Algorithm (Repo));
+      Result : Version.Objects.Object_Id_Vectors.Vector;
+      Search : Ada.Directories.Search_Type;
+      E      : Ada.Directories.Directory_Entry_Type;
+      Opened : Boolean := False;
+   begin
+      if not Ada.Directories.Exists (Pack_Dir) then
+         return Result;
+      end if;
+
+      Ada.Directories.Start_Search
+        (Search    => Search,
+         Directory => Pack_Dir,
+         Pattern   => "*.idx",
+         Filter    =>
+           [Ada.Directories.Ordinary_File => True,
+            Ada.Directories.Directory     => False,
+            Ada.Directories.Special_File  => False]);
+      Opened := True;
+
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, E);
+         declare
+            Data  : constant Stream_Element_Array :=
+              Read_File (Ada.Directories.Full_Name (E));
+            Magic : constant U32 := U32_BE (Data, Data'First);
+            Ver   : constant U32 := U32_BE (Data, Data'First + 4);
+         begin
+            --  Only the v2 index format (with its 8-byte header) is enumerated.
+            if Magic = 16#FF744F63# and then Ver = 2
+              and then Data'Length >= 8 + 256 * 4
+            then
+               declare
+                  Fanout_Start : constant Stream_Element_Offset :=
+                    Data'First + 8;
+                  Count : constant Natural :=
+                    Natural
+                      (U32_BE
+                         (Data,
+                          Fanout_Start + Stream_Element_Offset (255 * 4)));
+                  Names_Start : constant Stream_Element_Offset :=
+                    Fanout_Start + Stream_Element_Offset (256 * 4);
+               begin
+                  for K in 0 .. Count - 1 loop
+                     declare
+                        Base : constant Stream_Element_Offset :=
+                          Names_Start
+                          + Stream_Element_Offset (K * Raw_Length);
+                        Raw  : String (1 .. Raw_Length);
+                     begin
+                        for B in 0 .. Raw_Length - 1 loop
+                           Raw (Raw'First + B) :=
+                             Character'Val
+                               (Data (Base + Stream_Element_Offset (B)));
+                        end loop;
+                        Result.Append (Version.Objects.To_Hex (Raw));
+                     end;
+                  end loop;
+               end;
+            end if;
+         end;
+      end loop;
+
+      Ada.Directories.End_Search (Search);
+      return Result;
+   exception
+      when others =>
+         if Opened then
+            Ada.Directories.End_Search (Search);
+         end if;
+         raise;
+   end All_Pack_Objects;
+
 end Version.Pack;

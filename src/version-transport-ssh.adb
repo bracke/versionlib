@@ -265,6 +265,22 @@ package body Version.Transport.Ssh is
       return "git-lfs-authenticate " & Single_Quote (Path) & " " & Operation;
    end LFS_Authenticate_Remote_Command;
 
+   function LFS_Transfer_Remote_Command
+     (Remote    : Ssh_Remote;
+      Operation : String) return String
+   is
+      Path : constant String := To_String (Remote.Path);
+   begin
+      Validate_Path (Path);
+
+      if Operation /= "download" and then Operation /= "upload" then
+         raise Ada.IO_Exceptions.Data_Error with
+           "invalid Git LFS transfer operation";
+      end if;
+
+      return "git-lfs-transfer " & Single_Quote (Path) & " " & Operation;
+   end LFS_Transfer_Remote_Command;
+
    function Build_Service_Command
      (Remote  : Ssh_Remote;
       Service : String)
@@ -378,6 +394,34 @@ package body Version.Transport.Ssh is
       end if;
    end Argument;
 
+   --  A user-facing message for a failed SSH connection/authentication that
+   --  names the remote and hints at the likely cause (the raw status alone,
+   --  e.g. AUTHENTICATION_FAILED, is opaque).
+   function Ssh_Connect_Error
+     (Remote : String; Status : CryptoLib.Errors.Status) return String
+   is
+      Hint : constant String :=
+        (case Status is
+            when CryptoLib.Errors.Authentication_Failed =>
+              " (no usable credentials -- check the key in ~/.ssh/config"
+              & " IdentityFile or an ssh-agent, and that it is authorized)",
+            when CryptoLib.Errors.Host_Key_Unknown =>
+              " (host key not in known_hosts)",
+            when CryptoLib.Errors.Host_Key_Mismatch =>
+              " (host key changed -- possible man-in-the-middle,"
+              & " or the server was rekeyed)",
+            when CryptoLib.Errors.Connection_Failed =>
+              " (could not connect -- check the host and port)",
+            when CryptoLib.Errors.Timeout =>
+              " (connection timed out)",
+            when CryptoLib.Errors.Invalid_Host =>
+              " (invalid host)",
+            when others => "");
+   begin
+      return "cannot open SSH connection to " & Remote & ": "
+        & CryptoLib.Errors.Status'Image (Status) & Hint;
+   end Ssh_Connect_Error;
+
    --  Open a native SSH session for Remote_Text (via ssh_lib, no system `ssh`)
    --  and start Remote_Command (e.g. "git-upload-pack '<path>'") on an exec
    --  channel. Connection settings (host, port, user, identity files,
@@ -409,9 +453,8 @@ package body Version.Transport.Ssh is
 
       Status := SSH_Lib.Sessions.Open (Options, Stream.Session);
       if not CryptoLib.Errors.Is_Success (Status) then
-         raise Ada.IO_Exceptions.Use_Error with
-           "failed to open SSH session: "
-           & CryptoLib.Errors.Status'Image (Status);
+         raise Ada.IO_Exceptions.Use_Error
+           with Ssh_Connect_Error (Remote_Text, Status);
       end if;
 
       Status := SSH_Lib.Channels.Open_Exec
@@ -459,6 +502,17 @@ package body Version.Transport.Ssh is
       Open_Channel
         (Url, LFS_Authenticate_Remote_Command (Remote, Operation), Stream);
    end Open_LFS_Authenticate;
+
+   procedure Open_LFS_Transfer
+     (Url       : String;
+      Operation : String;
+      Stream    : in out Ssh_Stream)
+   is
+      Remote : constant Ssh_Remote := Parse (Url);
+   begin
+      Open_Channel
+        (Url, LFS_Transfer_Remote_Command (Remote, Operation), Stream);
+   end Open_LFS_Transfer;
 
    procedure Write
      (Stream : in out Ssh_Stream;

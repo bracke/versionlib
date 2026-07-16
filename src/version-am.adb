@@ -1,13 +1,17 @@
 with Ada.Containers.Vectors;
+with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
 with Version.Apply;
+with Version.Files;
 with Version.Objects;
 with Version.Ref_Names;
 with Version.Ref_Transaction;
 with Version.Reflog;
+with Version.Mailbox;
 with Version.Refs;
+with Version.Reset;
 with Version.Staging;
 with Version.Stage;
 with Version.Write;
@@ -63,24 +67,9 @@ package body Version.Am is
       end if;
    end Split_Spaces;
 
-   --  "From <40-hex> ..." mbox separator line.
-   function Is_From_Line (Line : String) return Boolean is
-   begin
-      if Line'Length < 46
-        or else Line (Line'First .. Line'First + 4) /= "From "
-        or else Line (Line'First + 45) /= ' '
-      then
-         return False;
-      end if;
-      for K in Line'First + 5 .. Line'First + 44 loop
-         if not Is_Hex (Line (K)) then
-            return False;
-         end if;
-      end loop;
-      return True;
-   end Is_From_Line;
+   function Is_From_Line (Line : String) return Boolean
+     renames Version.Mailbox.Is_From_Line;
 
-   --  -p1 path token after "--- "/"+++ "; "" for /dev/null.
    function Strip_P1 (Raw : String) return String is
       Stop : Natural := Raw'Last;
    begin
@@ -105,8 +94,6 @@ package body Version.Am is
       end;
    end Strip_P1;
 
-   --  Convert an RFC2822 date ("Wkd, D Mon YYYY HH:MM:SS +ZZZZ") to a Git
-   --  author date field ("<unix-ts> <tz>").
    function Reverse_Date (S : String) return String is
       Months : constant array (1 .. 12) of String (1 .. 3) :=
         ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -114,7 +101,6 @@ package body Version.Am is
       Toks : Str_Vectors.Vector;
    begin
       Split_Spaces (S, Toks);
-
       declare
          Day_Idx : Natural := 0;
       begin
@@ -142,23 +128,18 @@ package body Version.Am is
          declare
             D    : constant Long_Long_Integer :=
               Long_Long_Integer'Value (To_String (Toks.Element (Day_Idx)));
-            MonS : constant String :=
-              To_String (Toks.Element (Day_Idx + 1));
+            MonS : constant String := To_String (Toks.Element (Day_Idx + 1));
             Y    : constant Long_Long_Integer :=
               Long_Long_Integer'Value (To_String (Toks.Element (Day_Idx + 2)));
-            Tm   : constant String :=
-              To_String (Toks.Element (Day_Idx + 3));
-            Tz   : constant String :=
-              To_String (Toks.Element (Day_Idx + 4));
+            Tm   : constant String := To_String (Toks.Element (Day_Idx + 3));
+            Tz   : constant String := To_String (Toks.Element (Day_Idx + 4));
             M    : Long_Long_Integer := 1;
-
             HH : constant Long_Long_Integer :=
               Long_Long_Integer'Value (Tm (Tm'First .. Tm'First + 1));
             MM : constant Long_Long_Integer :=
               Long_Long_Integer'Value (Tm (Tm'First + 3 .. Tm'First + 4));
             SS : constant Long_Long_Integer :=
               Long_Long_Integer'Value (Tm (Tm'First + 6 .. Tm'First + 7));
-
             Sign  : constant Long_Long_Integer :=
               (if Tz'Length >= 1 and then Tz (Tz'First) = '-' then -1 else 1);
             TZH   : constant Long_Long_Integer :=
@@ -171,7 +152,6 @@ package body Version.Am is
                   M := Long_Long_Integer (K);
                end if;
             end loop;
-
             declare
                Yr  : constant Long_Long_Integer := Y - (if M <= 2 then 1 else 0);
                Era : constant Long_Long_Integer :=
@@ -214,12 +194,9 @@ package body Version.Am is
               (Repo, "HEAD", Version.Reflog.Data_Error_On_Lock);
             Version.Reflog.Preflight_Append
               (Repo, Branch_Ref, Version.Reflog.Data_Error_On_Lock);
-
             Version.Ref_Transaction.Start (Tx, Repo);
-            Version.Ref_Transaction.Add_Update
-              (Tx, Branch_Ref, Commit, Old_Id);
+            Version.Ref_Transaction.Add_Update (Tx, Branch_Ref, Commit, Old_Id);
             Version.Ref_Transaction.Commit (Tx);
-
             Version.Reflog.Append
               (Repo, "HEAD", Old_Id, To_String (Commit), Message);
             Version.Reflog.Append
@@ -235,186 +212,353 @@ package body Version.Am is
       end if;
    end Advance_Head;
 
-   procedure Apply_One
-     (Repo  : Version.Repository.Repository_Handle;
-      Lines : Str_Vectors.Vector)
-   is
-      Author_NE : Unbounded_String;
-      Date_V    : Unbounded_String;
-      Subject   : Unbounded_String;
-      Body_Text : Unbounded_String;
-      Diff      : Unbounded_String;
-      I         : Positive := Lines.First_Index;
+   ----------------------------  session state  -----------------------------
 
-      function L (N : Positive) return String is (To_String (Lines.Element (N)));
+   function State_Dir
+     (Repo : Version.Repository.Repository_Handle) return String is
+     (Version.Files.Join
+        (Version.Repository.Git_Dir (Repo), "rebase-apply"));
+
+   function In_Progress
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Version.Files.Is_Directory (State_Dir (Repo)));
+
+   function Pad4 (N : Natural) return String is
+      S : constant String :=
+        Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Left);
    begin
-      --  Skip the "From <sha>" separator if present.
-      if I <= Lines.Last_Index and then Is_From_Line (L (I)) then
-         I := I + 1;
-      end if;
+      return [1 .. Integer'Max (0, 4 - S'Length) => '0'] & S;
+   end Pad4;
 
-      --  Headers until the blank line.
-      while I <= Lines.Last_Index and then L (I) /= "" loop
-         declare
-            Line : constant String := L (I);
+   function State_Path
+     (Repo : Version.Repository.Repository_Handle; Name : String)
+      return String is
+     (Version.Files.Join (State_Dir (Repo), Name));
+
+   function Read_State
+     (Repo : Version.Repository.Repository_Handle; Name : String) return String
+   is
+   begin
+      return Version.Files.Read_Binary_File (State_Path (Repo, Name));
+   end Read_State;
+
+   function Read_Int
+     (Repo : Version.Repository.Repository_Handle; Name : String) return Natural
+   is
+   begin
+      return Natural'Value
+        (Ada.Strings.Fixed.Trim (Read_State (Repo, Name), Ada.Strings.Both));
+   end Read_Int;
+
+   procedure Write_State
+     (Repo : Version.Repository.Repository_Handle; Name, Content : String) is
+   begin
+      Version.Files.Write_Binary_File (State_Path (Repo, Name), Content);
+   end Write_State;
+
+   ------------------------------  patch pieces  ----------------------------
+
+   --  The mail parsing lives in Version.Mailbox (mailsplit/mailinfo use the
+   --  same one); this adapts it to what `am` wants: a commit author line, and
+   --  the diff with the "---" separator already stripped.
+   procedure Parse_Patch
+     (Lines       : Str_Vectors.Vector;
+      Author_Line : out Unbounded_String;
+      Subject     : out Unbounded_String;
+      Message     : out Unbounded_String;
+      Diff        : out Unbounded_String)
+   is
+      Text : Unbounded_String;
+   begin
+      for N in Lines.First_Index .. Lines.Last_Index loop
+         Append (Text, Lines.Element (N));
+         Append (Text, LF);
+      end loop;
+
+      declare
+         Mail : constant Version.Mailbox.Message :=
+           Version.Mailbox.Parse (To_String (Text));
+
+         Patch : constant String := To_String (Mail.Patch);
+         First : Natural := Patch'First;
+
+         --  The commit message stops before the mail's trailing blank lines.
+         function Trimmed_Body return String is
+            B    : constant String := To_String (Mail.Body_Text);
+            Last : Integer := B'Last;
          begin
-            if Line'Length >= 6 and then Line (Line'First .. Line'First + 5)
-                                          = "From: "
+            while Last >= B'First and then B (Last) = LF loop
+               Last := Last - 1;
+            end loop;
+
+            return B (B'First .. Last);
+         end Trimmed_Body;
+
+         Body_Text : constant String := Trimmed_Body;
+      begin
+         Author_Line :=
+           To_Unbounded_String
+             (To_String (Mail.Author) & " "
+              & Reverse_Date (To_String (Mail.Date)));
+         Subject := Mail.Subject;
+         Message :=
+           To_Unbounded_String
+             (if Body_Text'Length = 0 then To_String (Mail.Subject)
+              else To_String (Mail.Subject) & LF & LF & Body_Text);
+
+         --  Drop the "---" line itself.
+         if Patch'Length >= 4
+           and then Patch (Patch'First .. Patch'First + 3) = "---" & LF
+         then
+            First := Patch'First + 4;
+         end if;
+
+         --  A format-patch mail ends with a "-- \n<version>" signature: it is
+         --  not part of the diff.
+         declare
+            Diff_Text : constant String :=
+              (if First <= Patch'Last then Patch (First .. Patch'Last)
+               else "");
+            Stop : Natural := Diff_Text'Last;
+            Line_Start : Natural := Diff_Text'First;
+         begin
+            Stop := Diff_Text'Last;
+
+            while Line_Start <= Diff_Text'Last loop
+               declare
+                  Line_End : Natural := Line_Start;
+               begin
+                  while Line_End <= Diff_Text'Last
+                    and then Diff_Text (Line_End) /= LF
+                  loop
+                     Line_End := Line_End + 1;
+                  end loop;
+
+                  if Diff_Text (Line_Start .. Line_End - 1) = "-- " then
+                     Stop := Line_Start - 1;
+                     exit;
+                  end if;
+
+                  Line_Start := Line_End + 1;
+               end;
+            end loop;
+
+            Diff :=
+              To_Unbounded_String
+                (if Stop >= Diff_Text'First
+                 then Diff_Text (Diff_Text'First .. Stop) else "");
+         end;
+      end;
+   end Parse_Patch;
+
+   procedure Stage_Diff
+     (Repo : Version.Repository.Repository_Handle; Diff : String)
+   is
+      DLines     : Str_Vectors.Vector;
+      Last_Minus : Unbounded_String;
+   begin
+      Split_Lines (Diff, DLines);
+      for N in DLines.First_Index .. DLines.Last_Index loop
+         declare
+            DL : constant String := To_String (DLines.Element (N));
+         begin
+            if DL'Length >= 4 and then DL (DL'First .. DL'First + 3) = "--- " then
+               Last_Minus :=
+                 To_Unbounded_String (Strip_P1 (DL (DL'First + 4 .. DL'Last)));
+            elsif DL'Length >= 4
+              and then DL (DL'First .. DL'First + 3) = "+++ "
             then
-               Author_NE := To_Unbounded_String (Line (Line'First + 6 .. Line'Last));
-            elsif Line'Length >= 6 and then Line (Line'First .. Line'First + 5)
-                                             = "Date: "
-            then
-               Date_V := To_Unbounded_String (Line (Line'First + 6 .. Line'Last));
-            elsif Line'Length >= 9 and then Line (Line'First .. Line'First + 8)
-                                             = "Subject: "
-            then
-               Subject := To_Unbounded_String (Line (Line'First + 9 .. Line'Last));
+               declare
+                  New_P : constant String :=
+                    Strip_P1 (DL (DL'First + 4 .. DL'Last));
+               begin
+                  if New_P = "" then
+                     declare
+                        Entries : Version.Staging.Index_Entry_Vectors.Vector :=
+                          Version.Staging.Load (Repo);
+                     begin
+                        Version.Staging.Remove_Path
+                          (Entries, To_String (Last_Minus));
+                        Version.Staging.Write (Repo, Entries);
+                     end;
+                  else
+                     Version.Stage.Stage_Path (New_P);
+                  end if;
+               end;
             end if;
          end;
-         I := I + 1;
       end loop;
+   end Stage_Diff;
 
-      I := I + 1;  --  past the blank line
-
-      --  Body until "---".
-      while I <= Lines.Last_Index and then L (I) /= "---" loop
-         Append (Body_Text, L (I) & LF);
-         I := I + 1;
-      end loop;
-
-      if I <= Lines.Last_Index then
-         I := I + 1;  --  past "---"
+   procedure Commit_From_Index
+     (Repo        : Version.Repository.Repository_Handle;
+      Author_Line : String;
+      Subject     : String;
+      Message     : String)
+   is
+      Tree : constant Version.Objects.Hex_Object_Id :=
+        Version.Write.Write_Tree_From_Index (Repo, Version.Staging.Load (Repo));
+      Old  : constant String := Version.Refs.Current_Commit_Id (Repo);
+      Parents : Version.Objects.Object_Id_Vectors.Vector;
+   begin
+      if Old'Length = 40 or else Old'Length = 64 then
+         Parents.Append (Version.Objects.To_Object_Id (Old));
       end if;
-
-      --  Remainder is the diff, up to the mbox "-- " signature separator.
-      while I <= Lines.Last_Index and then L (I) /= "-- " loop
-         Append (Diff, L (I) & LF);
-         I := I + 1;
-      end loop;
-
-      --  Strip a leading "[PATCH ...] " tag from the subject.
       declare
-         Subj : constant String := To_String (Subject);
-         Clean : Unbounded_String := Subject;
+         New_Commit : constant Version.Objects.Hex_Object_Id :=
+           Version.Write.Write_Commit_With_Author
+             (Repo, Tree, Parents, Author_Line, Message);
       begin
-         if Subj'Length > 0 and then Subj (Subj'First) = '[' then
-            for K in Subj'Range loop
-               if Subj (K) = ']' then
-                  Clean := To_Unbounded_String
-                    ((if K + 2 <= Subj'Last then Subj (K + 2 .. Subj'Last)
-                      else ""));
-                  exit;
-               end if;
-            end loop;
-         end if;
-         Subject := Clean;
+         Advance_Head (Repo, New_Commit, Old, "am: " & Subject);
       end;
+   end Commit_From_Index;
 
-      --  Trim trailing newlines from the body.
-      declare
-         B : constant String := To_String (Body_Text);
-         Last : Integer := B'Last;
-      begin
-         while Last >= B'First and then B (Last) = LF loop
-            Last := Last - 1;
-         end loop;
-         Body_Text := To_Unbounded_String (B (B'First .. Last));
-      end;
-
-      --  Apply the diff to the working tree.
+   --  Apply patch N's diff and commit it; raises Data_Error if it fails.
+   procedure Apply_And_Commit
+     (Repo : Version.Repository.Repository_Handle; Lines : Str_Vectors.Vector)
+   is
+      Author_Line, Subject, Message, Diff : Unbounded_String;
+   begin
+      Parse_Patch (Lines, Author_Line, Subject, Message, Diff);
       Version.Apply.Apply_Patch (Repo, To_String (Diff));
+      Stage_Diff (Repo, To_String (Diff));
+      Commit_From_Index
+        (Repo, To_String (Author_Line), To_String (Subject),
+         To_String (Message));
+   end Apply_And_Commit;
 
-      --  Stage affected paths into the index (and remove deleted ones).
-      declare
-         DLines : Str_Vectors.Vector;
-         Last_Minus : Unbounded_String;
-      begin
-         Split_Lines (To_String (Diff), DLines);
-         for N in DLines.First_Index .. DLines.Last_Index loop
-            declare
-               DL : constant String := To_String (DLines.Element (N));
-            begin
-               if DL'Length >= 4 and then DL (DL'First .. DL'First + 3) = "--- "
-               then
-                  Last_Minus := To_Unbounded_String
-                    (Strip_P1 (DL (DL'First + 4 .. DL'Last)));
-               elsif DL'Length >= 4
-                 and then DL (DL'First .. DL'First + 3) = "+++ "
-               then
-                  declare
-                     New_P : constant String :=
-                       Strip_P1 (DL (DL'First + 4 .. DL'Last));
-                  begin
-                     if New_P = "" then
-                        --  Deletion: drop the old path from the index.
-                        declare
-                           Entries : Version.Staging.Index_Entry_Vectors.Vector
-                             := Version.Staging.Load (Repo);
-                        begin
-                           Version.Staging.Remove_Path
-                             (Entries, To_String (Last_Minus));
-                           Version.Staging.Write (Repo, Entries);
-                        end;
-                     else
-                        Version.Stage.Stage_Path (New_P);
-                     end if;
-                  end;
-               end if;
-            end;
-         end loop;
-      end;
-
-      --  Commit with the patch's authorship.
-      declare
-         Tree : constant Version.Objects.Hex_Object_Id :=
-           Version.Write.Write_Tree_From_Index
-             (Repo, Version.Staging.Load (Repo));
-         Old  : constant String := Version.Refs.Current_Commit_Id (Repo);
-         Parents : Version.Objects.Object_Id_Vectors.Vector;
-         Author_Line : constant String :=
-           To_String (Author_NE) & " " & Reverse_Date (To_String (Date_V));
-         Message : constant String :=
-           (if Length (Body_Text) = 0 then To_String (Subject)
-            else To_String (Subject) & LF & LF & To_String (Body_Text));
-      begin
-         if Old'Length = 40 or else Old'Length = 64 then
-            Parents.Append (Version.Objects.To_Object_Id (Old));
-         end if;
-
+   --  Apply patches [next .. last]; on a failure leave the session and raise
+   --  Am_Conflict, otherwise remove the session state.
+   procedure Run_Queue (Repo : Version.Repository.Repository_Handle) is
+   begin
+      loop
          declare
-            New_Commit : constant Version.Objects.Hex_Object_Id :=
-              Version.Write.Write_Commit_With_Author
-                (Repo, Tree, Parents, Author_Line, Message);
+            N    : constant Natural := Read_Int (Repo, "next");
+            Last : constant Natural := Read_Int (Repo, "last");
          begin
-            Advance_Head (Repo, New_Commit, Old, "am: " & To_String (Subject));
+            exit when N > Last;
+            declare
+               Patch : constant String := Read_State (Repo, Pad4 (N));
+               Lines : Str_Vectors.Vector;
+            begin
+               Split_Lines (Patch, Lines);
+               begin
+                  Apply_And_Commit (Repo, Lines);
+               exception
+                  when Ada.IO_Exceptions.Data_Error =>
+                     raise Am_Conflict
+                       with "Patch failed at " & Pad4 (N);
+               end;
+            end;
+            Write_State
+              (Repo, "next",
+               Ada.Strings.Fixed.Trim (Natural'Image (N + 1), Ada.Strings.Left));
          end;
-      end;
-   end Apply_One;
+      end loop;
+      Version.Files.Delete_Directory_Tree_If_Exists (State_Dir (Repo));
+   end Run_Queue;
+
+   ------------------------------  public API  ------------------------------
 
    procedure Apply_Mailbox
      (Repo    : Version.Repository.Repository_Handle;
       Mailbox : String)
    is
       Lines   : Str_Vectors.Vector;
-      Current : Str_Vectors.Vector;
+      Current : Unbounded_String;
+      Count   : Natural := 0;
 
       procedure Flush is
       begin
-         if not Current.Is_Empty then
-            Apply_One (Repo, Current);
-            Current.Clear;
+         if Length (Current) > 0 then
+            Count := Count + 1;
+            Write_State (Repo, Pad4 (Count), To_String (Current));
+            Current := Null_Unbounded_String;
          end if;
       end Flush;
    begin
+      if In_Progress (Repo) then
+         raise Ada.IO_Exceptions.Use_Error
+           with "am: a session is already in progress"
+                & " (--continue / --skip / --abort)";
+      end if;
+
+      Version.Files.Create_Directory_If_Missing (State_Dir (Repo));
       Split_Lines (Mailbox, Lines);
       for N in Lines.First_Index .. Lines.Last_Index loop
-         if Is_From_Line (To_String (Lines.Element (N))) then
+         if Is_From_Line (To_String (Lines.Element (N))) and then Length (Current) > 0
+         then
             Flush;
          end if;
-         Current.Append (Lines.Element (N));
+         Append (Current, Lines.Element (N));
+         Append (Current, LF);
       end loop;
       Flush;
+
+      if Count = 0 then
+         Version.Files.Delete_Directory_Tree_If_Exists (State_Dir (Repo));
+         return;
+      end if;
+
+      Write_State (Repo, "orig-head", Version.Refs.Current_Commit_Id (Repo));
+      Write_State (Repo, "last",
+                   Ada.Strings.Fixed.Trim (Natural'Image (Count),
+                                           Ada.Strings.Left));
+      Write_State (Repo, "next", "1");
+      Run_Queue (Repo);
    end Apply_Mailbox;
+
+   procedure Continue (Repo : Version.Repository.Repository_Handle) is
+   begin
+      if not In_Progress (Repo) then
+         raise Ada.IO_Exceptions.Use_Error
+           with "am: no session in progress";
+      end if;
+      declare
+         N     : constant Natural := Read_Int (Repo, "next");
+         Lines : Str_Vectors.Vector;
+         Author_Line, Subject, Message, Diff : Unbounded_String;
+      begin
+         Split_Lines (Read_State (Repo, Pad4 (N)), Lines);
+         Parse_Patch (Lines, Author_Line, Subject, Message, Diff);
+         Commit_From_Index
+           (Repo, To_String (Author_Line), To_String (Subject),
+            To_String (Message));
+         Write_State
+           (Repo, "next",
+            Ada.Strings.Fixed.Trim (Natural'Image (N + 1), Ada.Strings.Left));
+      end;
+      Run_Queue (Repo);
+   end Continue;
+
+   procedure Skip (Repo : Version.Repository.Repository_Handle) is
+   begin
+      if not In_Progress (Repo) then
+         raise Ada.IO_Exceptions.Use_Error
+           with "am: no session in progress";
+      end if;
+      Version.Reset.Reset_To_Commit (Repo, Version.Reset.Hard, "HEAD");
+      declare
+         N : constant Natural := Read_Int (Repo, "next");
+      begin
+         Write_State
+           (Repo, "next",
+            Ada.Strings.Fixed.Trim (Natural'Image (N + 1), Ada.Strings.Left));
+      end;
+      Run_Queue (Repo);
+   end Skip;
+
+   procedure Abort_Am (Repo : Version.Repository.Repository_Handle) is
+   begin
+      if not In_Progress (Repo) then
+         raise Ada.IO_Exceptions.Use_Error
+           with "am: no session in progress";
+      end if;
+      Version.Reset.Reset_To_Commit
+        (Repo, Version.Reset.Hard,
+         Ada.Strings.Fixed.Trim (Read_State (Repo, "orig-head"),
+                                 Ada.Strings.Both));
+      Version.Files.Delete_Directory_Tree_If_Exists (State_Dir (Repo));
+   end Abort_Am;
 
 end Version.Am;

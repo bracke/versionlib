@@ -11,6 +11,7 @@ with Version.Object_Cache;
 with Version.Merge;
 with Version.Merge_State;
 with Version.Packed_Refs;
+with Version.Reftable;
 with Version.Refs;
 with Version.Shallow_Cache;
 with Version.Transport.Local;
@@ -100,7 +101,11 @@ package body Version.Reachability is
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Opened    : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Base_Dir) then
+      --  Skip a missing path, or a non-directory (git's reftable backend
+      --  leaves refs/heads etc. as stub files, not directories).
+      if not Ada.Directories.Exists (Base_Dir)
+        or else not Version.Files.Is_Directory (Base_Dir)
+      then
          return;
       end if;
 
@@ -255,7 +260,11 @@ package body Version.Reachability is
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Opened    : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Base_Dir) then
+      --  Skip a missing path, or a non-directory (git's reftable backend
+      --  leaves refs/heads etc. as stub files, not directories).
+      if not Ada.Directories.Exists (Base_Dir)
+        or else not Version.Files.Is_Directory (Base_Dir)
+      then
          return;
       end if;
 
@@ -520,32 +529,59 @@ package body Version.Reachability is
 
       Append_Worktree_State_Roots (Version.Repository.Git_Dir (Repo), Result);
       Append_Linked_Worktree_HEADs (Repo, Result);
-      Append_Refs_In_Directory
-        (Join (Version.Repository.Common_Git_Dir (Repo), "refs/heads"),
-         "refs/heads",
-         Result);
-      Append_Refs_In_Directory
-        (Join (Version.Repository.Common_Git_Dir (Repo), "refs/tags"),
-         "refs/tags",
-         Result);
-      Append_Refs_In_Directory
-        (Join (Version.Repository.Common_Git_Dir (Repo), "refs/remotes"),
-         "refs/remotes",
-         Result);
 
-      if not Packed.Is_Empty then
-         for I in Packed.First_Index .. Packed.Last_Index loop
-            declare
-               Name : constant String := To_String (Packed.Element (I).Name);
-            begin
-               if Starts_With (Name, "refs/heads/")
-                 or else Starts_With (Name, "refs/tags/")
-                 or else Starts_With (Name, "refs/remotes/")
-               then
-                  Append_Unique (Result, Packed.Element (I).Id);
-               end if;
-            end;
-         end loop;
+      if Version.Reftable.Is_Reftable (Repo) then
+         --  In reftable mode the loose refs/heads etc. are stub files (git
+         --  writes "this repository uses the reftable format"); enumerate the
+         --  branch/tag/remote roots from the reftable stack instead.
+         declare
+            use type Version.Reftable.Ref_Value_Kind;
+            Live : constant Version.Reftable.Ref_Record_Vectors.Vector :=
+              Version.Reftable.Live_Refs (Repo);
+         begin
+            for R of Live loop
+               declare
+                  Name : constant String := To_String (R.Name);
+               begin
+                  if (R.Kind = Version.Reftable.Ref_Direct
+                      or else R.Kind = Version.Reftable.Ref_Peeled)
+                    and then (Starts_With (Name, "refs/heads/")
+                              or else Starts_With (Name, "refs/tags/")
+                              or else Starts_With (Name, "refs/remotes/"))
+                  then
+                     Append_Unique (Result, R.Id);
+                  end if;
+               end;
+            end loop;
+         end;
+      else
+         Append_Refs_In_Directory
+           (Join (Version.Repository.Common_Git_Dir (Repo), "refs/heads"),
+            "refs/heads",
+            Result);
+         Append_Refs_In_Directory
+           (Join (Version.Repository.Common_Git_Dir (Repo), "refs/tags"),
+            "refs/tags",
+            Result);
+         Append_Refs_In_Directory
+           (Join (Version.Repository.Common_Git_Dir (Repo), "refs/remotes"),
+            "refs/remotes",
+            Result);
+
+         if not Packed.Is_Empty then
+            for I in Packed.First_Index .. Packed.Last_Index loop
+               declare
+                  Name : constant String := To_String (Packed.Element (I).Name);
+               begin
+                  if Starts_With (Name, "refs/heads/")
+                    or else Starts_With (Name, "refs/tags/")
+                    or else Starts_With (Name, "refs/remotes/")
+                  then
+                     Append_Unique (Result, Packed.Element (I).Id);
+                  end if;
+               end;
+            end loop;
+         end if;
       end if;
 
       if Version.Merge_State.State_Exists (Repo) then
