@@ -8,8 +8,11 @@ with Version.Hash;
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded;
 
+with GNAT.OS_Lib;
+
 with Version.Files;
 with Version.Ignore;
+with Version.Platform;
 with Version.Staging;
 with Version.Working_Tree;
 with Version.Object_Cache;
@@ -326,10 +329,21 @@ package body Version.Diff is
             Append_Line
               (Result, "index " & Abbrev (Old_Id) & ".." & Abbrev (Short_Zero));
          else
-            Append_Line
-              (Result,
-               "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id)
-               & " " & New_Mode);
+            --  A mode change alongside content is announced with old/new mode
+            --  lines, and then the index line drops its trailing mode (git
+            --  shows the mode only once); an unchanged mode stays on index.
+            if Old_Mode /= New_Mode then
+               Append_Line (Result, "old mode " & Old_Mode);
+               Append_Line (Result, "new mode " & New_Mode);
+               Append_Line
+                 (Result,
+                  "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id));
+            else
+               Append_Line
+                 (Result,
+                  "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id)
+                  & " " & New_Mode);
+            end if;
          end if;
       end if;
       Append_Line
@@ -443,7 +457,24 @@ package body Version.Diff is
       Context     : Natural) return String is
    begin
       if Old_Present and then New_Present and then Old_Id = New_Id then
-         return "";
+         --  Identical content: a pure mode change still shows a git header
+         --  ("old mode"/"new mode" and nothing else); no change at all is
+         --  empty.
+         declare
+            Eff_Old : constant String :=
+              (if Old_Mode'Length > 0 then Old_Mode else "100644");
+            Eff_New : constant String :=
+              (if New_Mode'Length > 0 then New_Mode else Eff_Old);
+            R : Unbounded_String;
+         begin
+            if Eff_Old = Eff_New then
+               return "";
+            end if;
+            Append_Line (R, "diff --git a/" & Path & " b/" & Path);
+            Append_Line (R, "old mode " & Eff_Old);
+            Append_Line (R, "new mode " & Eff_New);
+            return To_String (R);
+         end;
       end if;
 
       declare
@@ -650,12 +681,40 @@ package body Version.Diff is
       return Result;
    end From_Tree;
 
+   --  The mode git would record for the working file at Path right now:
+   --  symlink -> 120000, an executable regular file -> 100755, else 100644.
+   --  Mirrors Version.Status.Working_Index_Mode so a chmod (a mode-only
+   --  change) is visible to diff, not silently masked by the index mode.
+   function Working_Disk_Mode
+     (Repo : Version.Repository.Repository_Handle;
+      Path : String) return String
+   is
+      Full : constant String :=
+        Version.Files.To_Native_Path
+          (Version.Files.Join (Version.Repository.Root_Path (Repo), Path));
+   begin
+      if GNAT.OS_Lib.Is_Symbolic_Link (Full) then
+         return "120000";
+      elsif Version.Platform.Supports_Executable_Bit
+        and then GNAT.OS_Lib.Is_Executable_File (Full)
+      then
+         return "100755";
+      else
+         return "100644";
+      end if;
+   exception
+      when others =>
+         return "100644";
+   end Working_Disk_Mode;
+
    function From_Working_For_Index
      (Working : Version.Working_Tree.Working_File_Vectors.Vector;
       Index   : Version.Staging.Index_Entry_Vectors.Vector)
       return Side_Entry_Vectors.Vector
    is
       Result      : Side_Entry_Vectors.Vector;
+      Repo        : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
       Working_Map : constant Side_Entry_Maps.Map :=
         To_Map (From_Working (Working));
    begin
@@ -669,10 +728,18 @@ package body Version.Diff is
                if Side_Entry_Maps.Has_Element (Cursor) then
                   declare
                      Entry_Copy : Side_Entry := Side_Entry_Maps.Element (Cursor);
+                     Idx_Mode   : constant String :=
+                       To_String (Index.Element (I).Mode);
                   begin
-                     --  Working_File carries no mode; adopt the index entry's
-                     --  mode so the "index <o>..<n> <mode>" line is accurate.
-                     Entry_Copy.Mode := Index.Element (I).Mode;
+                     --  Working_File carries no mode. A gitlink keeps the
+                     --  index's 160000; any other path takes the mode it has
+                     --  on disk now, so a chmod shows as a mode change and the
+                     --  "index <o>..<n> <mode>" line stays accurate otherwise.
+                     Entry_Copy.Mode :=
+                       (if Idx_Mode = "160000"
+                        then Index.Element (I).Mode
+                        else To_Unbounded_String
+                               (Working_Disk_Mode (Repo, Path)));
                      Result.Append (Entry_Copy);
                   end;
                end if;

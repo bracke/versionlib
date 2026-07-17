@@ -123,6 +123,13 @@ package body Version.Grep is
                            Start   : Positive := Content'First;
                            Line_No : Positive := 1;
 
+                           --  git's buffer_is_binary: a NUL in the first 8000
+                           --  bytes marks the file binary.
+                           Is_Bin  : constant Boolean :=
+                             (for some K in Content'First ..
+                                Integer'Min (Content'Last, Content'First + 7999)
+                              => Content (K) = Character'Val (0));
+
                            procedure Emit (Line : String) is
                            begin
                               if Hit (Line) then
@@ -130,7 +137,8 @@ package body Version.Grep is
                                    (Match'
                                       (Path    => To_Unbounded_String (Path),
                                        Line_No => Line_No,
-                                       Text    => To_Unbounded_String (Line)));
+                                       Text    => To_Unbounded_String (Line),
+                                       Binary  => Is_Bin));
                               end if;
                               Line_No := Line_No + 1;
                            end Emit;

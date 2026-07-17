@@ -15,6 +15,11 @@ package Version.Grep is
       Path    : Ada.Strings.Unbounded.Unbounded_String;
       Line_No : Positive;
       Text    : Ada.Strings.Unbounded.Unbounded_String;
+      --  True when the matched file is binary (a NUL byte in its first 8000
+      --  bytes). git suppresses the line text for such a file in its default
+      --  output, printing "Binary file <path> matches" once, but still counts
+      --  and lists it (-c/-l) using the individual line matches.
+      Binary  : Boolean := False;
    end record;
 
    package Match_Vectors is new Ada.Containers.Vectors
