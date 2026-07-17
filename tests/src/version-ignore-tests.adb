@@ -1593,6 +1593,25 @@ package body Version.Ignore.Tests is
          Ada.Directories.Set_Directory (Old_Dir);
       end Set_Core_Excludes_File;
 
+      --  Write core.excludesFile verbatim into the repository config. The
+      --  quoted/escaped forms below test the config *reader* (dequoting and
+      --  \b/\q escape handling), so they need the exact bytes in the file.
+      --  Going through Set_Key would now re-escape them, since its writer
+      --  quotes values git's way -- correct, but it defeats a value that
+      --  already carries its own quotes. This reproduces the byte-for-byte
+      --  file a passthrough write produced.
+      procedure Set_Core_Excludes_File_Raw (Raw : String) is
+         Config_File : constant String :=
+           Version.Test_Support.Join
+             (Version.Test_Support.Join (Root, ".git"), "config");
+      begin
+         Version.Test_Support.Write_Text_File
+           (Config_File,
+            "[core]" & Character'Val (10)
+            & Character'Val (9) & "excludesFile = " & Raw
+            & Character'Val (10));
+      end Set_Core_Excludes_File_Raw;
+
       procedure Check_Ignored (Path : String; Message : String) is
       begin
          Ada.Directories.Set_Directory (Root);
@@ -1778,12 +1797,13 @@ package body Version.Ignore.Tests is
          end;
       end if;
 
-      Set_Core_Excludes_File (Character'Val (34) & Quoted_Path & Character'Val (34));
+      Set_Core_Excludes_File_Raw
+        (Character'Val (34) & Quoted_Path & Character'Val (34));
       Check_Ignored
         ("quoted-only.tmp",
          "quoted core.excludesFile path with spaces should be loaded");
 
-      Set_Core_Excludes_File
+      Set_Core_Excludes_File_Raw
         (Character'Val (34)
          & Backspace_Config_Path
          & Character'Val (34));
@@ -1791,7 +1811,7 @@ package body Version.Ignore.Tests is
         ("backspace-only.tmp",
          "quoted core.excludesFile path with \b escape should be loaded");
 
-      Set_Core_Excludes_File
+      Set_Core_Excludes_File_Raw
         (Character'Val (34)
          & "bad" & "\qescapeignore"
          & Character'Val (34));

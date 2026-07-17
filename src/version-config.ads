@@ -7,6 +7,11 @@ package Version.Config is
 
    use Ada.Strings.Unbounded;
 
+   --  Raised by the single-value Unset_* operations when the key resolves to
+   --  more than one value; git refuses such an unset (exit 5) and leaves the
+   --  file untouched rather than dropping every value.
+   Ambiguous_Key : exception;
+
    type Identity is record
       Name  : Unbounded_String;
       Email : Unbounded_String;

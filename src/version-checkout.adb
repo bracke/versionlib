@@ -105,9 +105,15 @@ package body Version.Checkout is
          Content => Content);
    end Restore_Head_File;
 
-   procedure Checkout_Commit (Commit_Id : Version.Objects.Hex_Object_Id) is
+   procedure Checkout_Commit
+     (Commit_Id : Version.Objects.Hex_Object_Id;
+      Branch    : String := "")
+   is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
+
+      Old_Head : constant Version.Refs.Head_Info :=
+        Version.Refs.Read_Head (Repo);
 
       Old_Text : constant String := Version.Refs.Current_Commit_Id (Repo);
 
@@ -115,6 +121,13 @@ package body Version.Checkout is
         (if Old_Text'Length = 0
          then "0000000000000000000000000000000000000000"
          else Old_Text);
+
+      --  The reflog "from" name: the departed branch when HEAD was attached,
+      --  or the full commit id when it was detached (git's "moving from X").
+      Old_Name : constant String :=
+        (if Version.Refs.Is_Attached (Old_Head)
+         then Version.Refs.Branch_Name (Old_Head)
+         else Old_Id);
 
       Objects       : Version.Object_Cache.Object_Cache;
       Trees         : Version.Tree_Cache.Tree_Cache;
@@ -151,7 +164,13 @@ package body Version.Checkout is
            Version.Files.Read_Binary_File (Head_Path (Repo));
          Head_Moved       : Boolean := False;
       begin
-         Version.Refs.Write_Detached_HEAD (Repo => Repo, Commit_Id => Commit_Id);
+         if Branch = "" then
+            Version.Refs.Write_Detached_HEAD
+              (Repo => Repo, Commit_Id => Commit_Id);
+         else
+            Version.Refs.Write_Symbolic_HEAD
+              (Repo => Repo, Target => "refs/heads/" & Branch);
+         end if;
          Head_Moved := True;
 
          Version.Restore.Restore_Working_Tree_For_Commit
@@ -170,7 +189,10 @@ package body Version.Checkout is
             Ref     => "HEAD",
             Old_Id  => Old_Id,
             New_Id  => To_String (Commit_Id),
-            Message => "checkout: moving to " & Short_Id (To_String (Commit_Id)));
+            Message =>
+              (if Branch = ""
+               then "checkout: moving to " & Short_Id (To_String (Commit_Id))
+               else "checkout: moving from " & Old_Name & " to " & Branch));
 
          Version.Hooks.Run_Post_Checkout
            (Repo   => Repo,

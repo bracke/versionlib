@@ -68,39 +68,99 @@ package body Version.Config is
 
    --  Decode git-config value escapes (\n \t \b, backslash-escapes, quotes)
    --  and strip unquoted inline comments, matching git's config reader.
+   --  Unquoted trailing whitespace is dropped and unquoted interior runs are
+   --  preserved only when a value char follows (git's pending-space rule), so
+   --  whitespace protected by double quotes survives a write/read round-trip.
    function Decode_Config_Value (Raw : String) return String is
       Result   : String (1 .. Raw'Length);
       Len      : Natural := 0;
       In_Quote : Boolean := False;
+      Pending  : Natural := 0;
       I        : Natural := Raw'First;
+
+      procedure Emit (C : Character) is
+      begin
+         --  Flush any deferred unquoted whitespace now that a value char
+         --  follows it; trailing unquoted whitespace is never flushed.
+         while Pending > 0 loop
+            Len := Len + 1;
+            Result (Len) := ' ';
+            Pending := Pending - 1;
+         end loop;
+         Len := Len + 1;
+         Result (Len) := C;
+      end Emit;
    begin
       while I <= Raw'Last loop
          declare
             C : constant Character := Raw (I);
          begin
-            if C = '\' and then I < Raw'Last then
-               Len := Len + 1;
-               case Raw (I + 1) is
-                  when 'n' => Result (Len) := Character'Val (10);
-                  when 't' => Result (Len) := Character'Val (9);
-                  when 'b' => Result (Len) := Character'Val (8);
-                  when others => Result (Len) := Raw (I + 1);
-               end case;
-               I := I + 2;
-            elsif C = '"' then
+            if C = '"' then
                In_Quote := not In_Quote;
                I := I + 1;
+            elsif C = '\' and then I < Raw'Last then
+               case Raw (I + 1) is
+                  when 'n' => Emit (Character'Val (10));
+                  when 't' => Emit (Character'Val (9));
+                  when 'b' => Emit (Character'Val (8));
+                  when others => Emit (Raw (I + 1));
+               end case;
+               I := I + 2;
             elsif (not In_Quote) and then (C = '#' or else C = ';') then
                exit;
+            elsif (not In_Quote)
+              and then (C = ' ' or else C = Character'Val (9))
+            then
+               Pending := Pending + 1;
+               I := I + 1;
             else
-               Len := Len + 1;
-               Result (Len) := C;
+               Emit (C);
                I := I + 1;
             end if;
          end;
       end loop;
-      return Trim (Result (1 .. Len));
+      return Result (1 .. Len);
    end Decode_Config_Value;
+
+   --  Serialize a value the way git's quote_value does: always escape \, ",
+   --  tab and newline; wrap the whole value in double quotes when it has a
+   --  leading or trailing space or contains a comment introducer (# or ;).
+   function Quote_Config_Value (Value : String) return String is
+      Buf   : Unbounded_String;
+      Quote : Boolean :=
+        Value'Length > 0
+          and then (Value (Value'First) = ' '
+                    or else Value (Value'Last) = ' ');
+   begin
+      for C of Value loop
+         if C = '#' or else C = ';' then
+            Quote := True;
+         end if;
+      end loop;
+
+      for C of Value loop
+         case C is
+            when '"' =>
+               Append (Buf, '\');
+               Append (Buf, '"');
+            when '\' =>
+               Append (Buf, '\');
+               Append (Buf, '\');
+            when Character'Val (9) =>
+               Append (Buf, "\t");
+            when Character'Val (10) =>
+               Append (Buf, "\n");
+            when others =>
+               Append (Buf, C);
+         end case;
+      end loop;
+
+      if Quote then
+         return '"' & To_String (Buf) & '"';
+      else
+         return To_String (Buf);
+      end if;
+   end Quote_Config_Value;
 
    function Lower (Value : String) return String is
       Result : String := Value;
@@ -766,7 +826,7 @@ package body Version.Config is
                   Character'Val (9)
                   & To_String (Item.Key)
                   & " = "
-                  & To_String (Item.Value));
+                  & Quote_Config_Value (To_String (Item.Value)));
             end;
          end loop;
       end if;
@@ -1029,7 +1089,7 @@ package body Version.Config is
       Items  : constant Config_Entry_Vectors.Vector := Read_File_Entries (Path);
       Result : Config_Entry_Vectors.Vector;
       Wanted : constant String := Lower (Name);
-      Found  : Boolean := False;
+      Matches : Natural := 0;
    begin
       Require_Config_Name (Name);
 
@@ -1040,7 +1100,7 @@ package body Version.Config is
                Item_Name : constant String := Lower (Config_Entry_Name (Item));
             begin
                if Item_Name = Wanted then
-                  Found := True;
+                  Matches := Matches + 1;
                else
                   Result.Append (Item);
                end if;
@@ -1048,9 +1108,13 @@ package body Version.Config is
          end loop;
       end if;
 
-      if not Found then
+      if Matches = 0 then
          raise Ada.IO_Exceptions.Data_Error
            with "config key does not exist: " & Name;
+      elsif Matches > 1 then
+         --  Ambiguous: git refuses a single-value unset of a multivar and
+         --  leaves every value in place. Do not write Result.
+         raise Ambiguous_Key with Name & " has multiple values";
       end if;
 
       Write_Entries_To (Path, Result);
