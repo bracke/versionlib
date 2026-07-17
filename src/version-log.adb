@@ -1,4 +1,8 @@
+with Ada.Containers.Indefinite_Hashed_Sets;
+with Ada.Containers.Ordered_Sets;
+with Ada.Containers.Vectors;
 with Ada.IO_Exceptions;
+with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
 
 with Version.Objects; use Version.Objects;
@@ -309,6 +313,31 @@ package body Version.Log is
       end if;
 
       Append_Line (Result, "commit " & To_String (Commit_Id));
+      --  git prints "Merge: <p1> <p2> ..." (abbreviated parent ids) right
+      --  after the commit line for any commit with two or more parents.
+      declare
+         Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+           Version.Objects.Commit_Parent_Ids (Obj);
+      begin
+         if Natural (Parents.Length) >= 2 then
+            declare
+               Line : Unbounded_String := To_Unbounded_String ("Merge:");
+            begin
+               for P of Parents loop
+                  declare
+                     Full_P : constant String := Version.Objects.To_String (P);
+                     Abbrev : constant Natural :=
+                       Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
+                  begin
+                     Append
+                       (Line,
+                        " " & Full_P (Full_P'First .. Full_P'First + Abbrev - 1));
+                  end;
+               end loop;
+               Append_Line (Result, To_String (Line));
+            end;
+         end if;
+      end;
       if Show_Signature then
          declare
             VR       : Version.Verify.Verify_Result;
@@ -345,6 +374,128 @@ package body Version.Log is
            Full_Message => Full_Message);
    end Format_Commit;
 
+   --  git's default `log` is a full reachability walk over ALL parents in
+   --  commit-date order (a priority queue keyed on the committer timestamp),
+   --  not a linear follow of the first parent. Walking only the first parent
+   --  silently drops every commit reachable solely through a merge's later
+   --  parents. Collect_History reproduces git's order: pop the most recent
+   --  unseen commit, then enqueue its parents (deduplicated).
+
+   function Commit_Date_Value (Commit_Text : String) return Long_Long_Integer is
+      --  The committer line is "Name <email> <epoch> <±HHMM>"; the epoch is
+      --  the second-to-last whitespace-separated token.
+      Line     : constant String := Line_Value (Commit_Text, "committer ");
+      Last_Sp  : Natural := 0;
+      Prev_Sp  : Natural := 0;
+   begin
+      if Line'Length = 0 then
+         return 0;
+      end if;
+      for I in reverse Line'Range loop
+         if Line (I) = ' ' then
+            if Last_Sp = 0 then
+               Last_Sp := I;
+            else
+               Prev_Sp := I;
+               exit;
+            end if;
+         end if;
+      end loop;
+      if Prev_Sp = 0 or else Last_Sp <= Prev_Sp then
+         return 0;
+      end if;
+      return Long_Long_Integer'Value (Line (Prev_Sp + 1 .. Last_Sp - 1));
+   exception
+      when others =>
+         return 0;
+   end Commit_Date_Value;
+
+   type Walk_Item is record
+      Date : Long_Long_Integer := 0;
+      Seq  : Natural := 0;
+      Id   : Unbounded_String;
+   end record;
+
+   function Item_Less (Left, Right : Walk_Item) return Boolean is
+     (Left.Date > Right.Date
+      or else (Left.Date = Right.Date and then Left.Seq < Right.Seq));
+   --  Order the frontier by descending commit date; ties keep insertion
+   --  order (Seq is unique, so no two items compare equal).
+
+   package Frontier_Sets is new Ada.Containers.Ordered_Sets
+     (Element_Type => Walk_Item, "<" => Item_Less);
+
+   package Id_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Elements =>
+        "=");
+
+   package Id_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Unbounded_String);
+
+   function Collect_History
+     (Repo      : Version.Repository.Repository_Handle;
+      Cache     : in out Version.Object_Cache.Object_Cache;
+      Start_Id  : Version.Objects.Hex_Object_Id;
+      Max_Count : Natural) return Id_Vectors.Vector
+   is
+      Shallow  : Version.Shallow_Cache.Shallow_Cache;
+      Frontier : Frontier_Sets.Set;
+      Visited  : Id_Sets.Set;
+      Result   : Id_Vectors.Vector;
+      Seq      : Natural := 0;
+
+      procedure Enqueue (Id_Text : String) is
+      begin
+         if not Version.Objects.Is_Valid_Hex_Object_Id (Id_Text)
+           or else Visited.Contains (Id_Text)
+         then
+            return;
+         end if;
+         Visited.Insert (Id_Text);
+         declare
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object
+                (Repo => Repo, Cache => Cache,
+                 Id   => Version.Objects.To_Object_Id (Id_Text));
+         begin
+            if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
+               return;
+            end if;
+            Seq := Seq + 1;
+            Frontier.Insert
+              ((Date => Commit_Date_Value (Version.Objects.Content (Obj)),
+                Seq  => Seq,
+                Id   => To_Unbounded_String (Id_Text)));
+         end;
+      end Enqueue;
+   begin
+      Enqueue (To_String (Start_Id));
+      while not Frontier.Is_Empty loop
+         exit when Max_Count > 0 and then Natural (Result.Length) = Max_Count;
+         declare
+            Top : constant Walk_Item := Frontier.First_Element;
+            Top_Id : constant Version.Objects.Hex_Object_Id :=
+              Version.Objects.To_Object_Id (To_String (Top.Id));
+         begin
+            Frontier.Delete_First;
+            Result.Append (Top.Id);
+            if not Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Top_Id)
+            then
+               declare
+                  Obj : constant Version.Objects.Git_Object :=
+                    Version.Object_Cache.Read_Object
+                      (Repo => Repo, Cache => Cache, Id => Top_Id);
+               begin
+                  for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+                     Enqueue (Version.Objects.To_String (P));
+                  end loop;
+               end;
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Collect_History;
+
    function Log_From_Commit
      (Repo           : Version.Repository.Repository_Handle;
       Commit_Id      : Version.Objects.Hex_Object_Id;
@@ -354,85 +505,63 @@ package body Version.Log is
       Patch          : Boolean := False;
       Context        : Natural := 3) return String
    is
-      Current : Unbounded_String := To_Unbounded_String (To_String (Commit_Id));
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
-      Shallow : Version.Shallow_Cache.Shallow_Cache;
       First   : Boolean := True;
-      Shown   : Natural := 0;
+      History : constant Id_Vectors.Vector :=
+        Collect_History (Repo, Objects, Commit_Id, Max_Count);
    begin
-      while Length (Current) > 0 loop
-         exit when Max_Count > 0 and then Shown = Max_Count;
+      for Entry_Id of History loop
          declare
-            Id_Text : constant String := To_String (Current);
+            Current_Id : constant Version.Objects.Hex_Object_Id :=
+              Version.Objects.To_Object_Id (To_String (Entry_Id));
+            Obj        : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object
+                (Repo => Repo, Cache => Objects, Id => Current_Id);
          begin
-            if not Version.Objects.Is_Valid_Hex_Object_Id (Id_Text) then
-               raise Ada.IO_Exceptions.Data_Error
-                 with "corrupt repository: invalid commit id";
+            if not First then
+               Append_Line (Result, "");
             end if;
-
-            declare
-               Current_Id : constant Version.Objects.Hex_Object_Id :=
-                 Version.Objects.To_Object_Id (Id_Text);
-               Obj        : constant Version.Objects.Git_Object :=
-                 Version.Object_Cache.Read_Object
-                   (Repo => Repo, Cache => Objects, Id => Current_Id);
-            begin
-               if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object
-               then
-                  raise Ada.IO_Exceptions.Data_Error
-                    with "object is not a commit: " & To_String (Current_Id);
-               end if;
-
-               if not First then
+            First := False;
+            Append
+              (Result,
+               Format_Commit_With_Cache
+                 (Repo           => Repo,
+                  Cache          => Objects,
+                  Commit_Id      => Current_Id,
+                  Show_Signature => Show_Signature));
+            if (Stat or else Patch)
+              and then Natural (Version.Objects.Commit_Parent_Ids (Obj).Length)
+                       < 2
+            then
+               --  git's --stat/-p: a blank line, then the diffstat or the
+               --  patch against the first parent (or the empty tree for a
+               --  root commit). Merge commits (two or more parents) produce
+               --  no diff by default -- git needs -m/-c/--cc for that.
+               declare
+                  Parent : constant String :=
+                    Version.Objects.Commit_Parent_Id (Obj);
+                  Opts : constant Version.Diff.Diff_Options :=
+                    (Stat          => Stat,
+                     Context_Lines => Context,
+                     others        => <>);
+               begin
                   Append_Line (Result, "");
-               end if;
-               First := False;
-               Shown := Shown + 1;
-               Append
-                 (Result,
-                  Format_Commit_With_Cache
-                    (Repo           => Repo,
-                     Cache          => Objects,
-                     Commit_Id      => Current_Id,
-                     Show_Signature => Show_Signature));
-               if Stat or else Patch then
-                  --  git's --stat/-p: a blank line, then the diffstat or the
-                  --  patch against the first parent (or the empty tree for a
-                  --  root commit).
-                  declare
-                     Parent : constant String :=
-                       Version.Objects.Commit_Parent_Id (Obj);
-                     Opts : constant Version.Diff.Diff_Options :=
-                       (Stat          => Stat,
-                        Context_Lines => Context,
-                        others        => <>);
-                  begin
-                     Append_Line (Result, "");
-                     if Parent'Length > 0 then
-                        Append
-                          (Result,
-                           Version.Diff.Diff_Commits
-                             (Repo,
-                              Version.Objects.To_Object_Id (Parent),
-                              Current_Id, Opts));
-                     else
-                        Append
-                          (Result,
-                           Version.Diff.Diff_Root_Commit
-                             (Repo, Current_Id, Opts));
-                     end if;
-                  end;
-               end if;
-               if Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Current_Id)
-               then
-                  Current := Null_Unbounded_String;
-               else
-                  Current :=
-                    To_Unbounded_String
-                      (Version.Objects.Commit_Parent_Id (Obj));
-               end if;
-            end;
+                  if Parent'Length > 0 then
+                     Append
+                       (Result,
+                        Version.Diff.Diff_Commits
+                          (Repo,
+                           Version.Objects.To_Object_Id (Parent),
+                           Current_Id, Opts));
+                  else
+                     Append
+                       (Result,
+                        Version.Diff.Diff_Root_Commit
+                          (Repo, Current_Id, Opts));
+                  end if;
+               end;
+            end if;
          end;
       end loop;
 
@@ -444,50 +573,20 @@ package body Version.Log is
       Commit_Id : Version.Objects.Hex_Object_Id;
       Max_Count : Natural := 0) return String
    is
-      Current : Unbounded_String := To_Unbounded_String (To_String (Commit_Id));
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
-      Shallow : Version.Shallow_Cache.Shallow_Cache;
-      Shown   : Natural := 0;
+      History : constant Id_Vectors.Vector :=
+        Collect_History (Repo, Objects, Commit_Id, Max_Count);
    begin
-      while Length (Current) > 0 loop
-         exit when Max_Count > 0 and then Shown = Max_Count;
+      for Entry_Id of History loop
          declare
-            Id_Text : constant String := To_String (Current);
+            Current_Id : constant Version.Objects.Hex_Object_Id :=
+              Version.Objects.To_Object_Id (To_String (Entry_Id));
          begin
-            if not Version.Objects.Is_Valid_Hex_Object_Id (Id_Text) then
-               raise Ada.IO_Exceptions.Data_Error
-                 with "corrupt repository: invalid commit id";
-            end if;
-
-            declare
-               Current_Id : constant Version.Objects.Hex_Object_Id :=
-                 Version.Objects.To_Object_Id (Id_Text);
-               Obj        : constant Version.Objects.Git_Object :=
-                 Version.Object_Cache.Read_Object
-                   (Repo => Repo, Cache => Objects, Id => Current_Id);
-            begin
-               if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object
-               then
-                  raise Ada.IO_Exceptions.Data_Error
-                    with "object is not a commit: " & To_String (Current_Id);
-               end if;
-
-               Shown := Shown + 1;
-               Append_Line
-                 (Result,
-                  Format_Commit_Oneline_With_Cache
-                    (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
-
-               if Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Current_Id)
-               then
-                  Current := Null_Unbounded_String;
-               else
-                  Current :=
-                    To_Unbounded_String
-                      (Version.Objects.Commit_Parent_Id (Obj));
-               end if;
-            end;
+            Append_Line
+              (Result,
+               Format_Commit_Oneline_With_Cache
+                 (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
          end;
       end loop;
 
@@ -550,45 +649,25 @@ package body Version.Log is
       Max_Count : Natural := 0) return String
    is
       LF      : constant Character := Character'Val (10);
-      Current : Unbounded_String := To_Unbounded_String (To_String (Commit_Id));
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
-      Shallow : Version.Shallow_Cache.Shallow_Cache;
       First   : Boolean := True;
-      Shown   : Natural := 0;
+      History : constant Id_Vectors.Vector :=
+        Collect_History (Repo, Objects, Commit_Id, Max_Count);
    begin
-      while Length (Current) > 0 loop
-         exit when Max_Count > 0 and then Shown = Max_Count;
+      for Entry_Id of History loop
          declare
-            Id_Text    : constant String := To_String (Current);
             Current_Id : constant Version.Objects.Hex_Object_Id :=
-              Version.Objects.To_Object_Id (Id_Text);
-            Obj        : constant Version.Objects.Git_Object :=
-              Version.Object_Cache.Read_Object
-                (Repo => Repo, Cache => Objects, Id => Current_Id);
+              Version.Objects.To_Object_Id (To_String (Entry_Id));
          begin
-            if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
-               raise Ada.IO_Exceptions.Data_Error
-                 with "object is not a commit: " & Id_Text;
-            end if;
-
             if not First and then not Terminate_Records then
                Append (Result, LF);
             end if;
             First := False;
-            Shown := Shown + 1;
             Append (Result, Version.Pretty_Format.Expand
                               (Repo, Current_Id, Format));
             if Terminate_Records then
                Append (Result, LF);
-            end if;
-
-            if Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Current_Id)
-            then
-               Current := Null_Unbounded_String;
-            else
-               Current := To_Unbounded_String
-                 (Version.Objects.Commit_Parent_Id (Obj));
             end if;
          end;
       end loop;

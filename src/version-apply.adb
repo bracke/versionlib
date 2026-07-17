@@ -7,6 +7,7 @@ with Interfaces;
 with Zlib;
 
 with Version.Files;
+with Version.Hash;
 with Version.Objects;
 with Version.Path_Safety;
 with Version.Staging;
@@ -689,6 +690,54 @@ package body Version.Apply is
             end if;
          end;
       end loop;
+
+      --  git's --index precondition: every patched file's working-tree
+      --  content must already match what is staged, otherwise `git apply
+      --  --index` refuses ("<path>: does not match index", exit 1) and
+      --  changes nothing. --cached only touches the index, so it is exempt.
+      --  This runs before --check returns, as git reports it under --check too.
+      if Options.Update_Index and then not Options.Cached then
+         declare
+            Staged : constant Version.Staging.Index_Entry_Vectors.Vector :=
+              Version.Staging.Load (Repo);
+         begin
+            for R of Results loop
+               declare
+                  Src : constant String :=
+                    (if R.Is_Rename then To_String (R.Old_Path)
+                     else To_String (R.Path));
+                  Pos : constant Natural :=
+                    Version.Staging.Find_Entry (Staged, Src);
+               begin
+                  --  Find_Entry returns Natural'Last when the path is not
+                  --  staged (a creation), which needs no index match.
+                  if Pos in Staged.First_Index .. Staged.Last_Index then
+                     declare
+                        Full : constant String := Version.Files.Join (Root, Src);
+                        Exists : constant Boolean :=
+                          Version.Files.Is_Ordinary_File (Full);
+                        Work : constant String :=
+                          (if Exists
+                           then Version.Files.Read_Binary_File (Full) else "");
+                        Work_Id : constant String :=
+                          Version.Hash.Object_Hash_Hex
+                            (Version.Repository.Algorithm (Repo),
+                             "blob" & Natural'Image (Work'Length)
+                             & Character'Val (0) & Work);
+                     begin
+                        if not Exists
+                          or else not Version.Objects."="
+                                        (Staged.Element (Pos).Id, Work_Id)
+                        then
+                           raise Ada.IO_Exceptions.Data_Error
+                             with Src & ": does not match index";
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+         end;
+      end if;
 
       if Options.Check then
          return;

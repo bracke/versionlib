@@ -10,6 +10,9 @@ package Version.Clean is
    type Clean_Options is record
       Directories : Boolean := False;  --  -d : include untracked directories
       Ignored     : Boolean := False;  --  -x : also remove ignored files
+      Force       : Natural := 0;      --  number of -f flags given; a nested
+                                       --  git repository is only removed when
+                                       --  force is doubled (-ff), as in git.
    end record;
 
    package Path_Vectors is new Ada.Containers.Vectors

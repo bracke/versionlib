@@ -71,13 +71,13 @@ package body Version.Clean.Tests is
            Version.Repository.Open;
 
          Plain : constant Version.Clean.Path_Vectors.Vector :=
-           Version.Clean.Candidates (Repo, (others => False));
+           Version.Clean.Candidates (Repo, (Force => 0, others => False));
          Dirs  : constant Version.Clean.Path_Vectors.Vector :=
            Version.Clean.Candidates
-             (Repo, (Directories => True, Ignored => False));
+             (Repo, (Directories => True, Ignored => False, Force => 0));
          Dirs_Ignored : constant Version.Clean.Path_Vectors.Vector :=
            Version.Clean.Candidates
-             (Repo, (Directories => True, Ignored => True));
+             (Repo, (Directories => True, Ignored => True, Force => 0));
       begin
          --  Default: only the top-level untracked file.
          Assert (Has (Plain, "untrackedfile"),
@@ -114,7 +114,7 @@ package body Version.Clean.Tests is
            Version.Repository.Open;
          Cands : constant Version.Clean.Path_Vectors.Vector :=
            Version.Clean.Candidates
-             (Repo, (Directories => True, Ignored => False));
+             (Repo, (Directories => True, Ignored => False, Force => 0));
       begin
          for C of Cands loop
             Version.Clean.Remove_Candidate (Repo, To_String (C));
@@ -162,12 +162,12 @@ package body Version.Clean.Tests is
            Version.Repository.Open;
          Dirs : constant Version.Clean.Path_Vectors.Vector :=
            Version.Clean.Candidates
-             (Repo, (Directories => True, Ignored => False));
+             (Repo, (Directories => True, Ignored => False, Force => 0));
          DirsX : constant Version.Clean.Path_Vectors.Vector :=
            Version.Clean.Candidates
-             (Repo, (Directories => True, Ignored => True));
+             (Repo, (Directories => True, Ignored => True, Force => 0));
          Plain : constant Version.Clean.Path_Vectors.Vector :=
-           Version.Clean.Candidates (Repo, (others => False));
+           Version.Clean.Candidates (Repo, (Force => 0, others => False));
       begin
          Assert (Has (Dirs, "emptydir/"),
                  "clean -d must list an empty untracked directory");

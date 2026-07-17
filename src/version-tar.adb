@@ -277,7 +277,7 @@ package body Version.Tar is
       Put_Field (Header, 109, 8, Octal (0, 8));
       Put_Field (Header, 117, 8, Octal (0, 8));
       Put_Field (Header, 125, 12, Octal (Size, 12));
-      Put_Field (Header, 137, 12, Octal (0, 12));
+      Put_Field (Header, 137, 12, Octal (Writer.Mtime, 12));
       Header (149 .. 156) := [others => ' '];
       Header (157) := Typeflag;
       if Typeflag = '2' then
@@ -285,6 +285,12 @@ package body Version.Tar is
       end if;
       Put_Field (Header, 258, 6, "ustar");
       Put_Field (Header, 264, 2, "00");
+      --  git stamps every entry with owner/group "root" (uid/gid 0) and
+      --  writes the devmajor/devminor fields as octal zero (not left NUL).
+      Put_Field (Header, 266, 32, "root");
+      Put_Field (Header, 298, 32, "root");
+      Put_Field (Header, 330, 8, Octal (0, 8));
+      Put_Field (Header, 338, 8, Octal (0, 8));
       if Length (Prefix) > 0 then
          Put_Field (Header, 346, 155, To_String (Prefix));
       end if;
@@ -293,20 +299,17 @@ package body Version.Tar is
          Sum := Sum + Character'Pos (C);
       end loop;
 
-      declare
-         Check : constant String := Octal (Sum, 7);
-      begin
-         Header (149 .. 154) := Check (1 .. 6);
-         Header (155) := Character'Val (0);
-         Header (156) := ' ';
-      end;
+      --  git writes the checksum as a 7-digit zero-padded octal followed by a
+      --  NUL (matching the other numeric fields), not "6 digits + NUL + space".
+      Put_Field (Header, 149, 8, Octal (Sum, 8));
 
       Write_String (Writer.File, Header);
    end Write_Header;
 
    procedure Create
      (Writer      : in out Tar_Writer;
-      Output_Path : String)
+      Output_Path : String;
+      Mtime       : Natural := 0)
    is
    begin
       if Writer.Open then
@@ -319,6 +322,7 @@ package body Version.Tar is
          Ada.Streams.Stream_IO.Out_File,
          Version.Files.To_Native_Path (Output_Path));
       Writer.Open := True;
+      Writer.Mtime := Mtime;
       Writer.Names.Clear;
    end Create;
 
@@ -344,7 +348,9 @@ package body Version.Tar is
         (Writer       => Writer,
          Archive_Path => Archive_Path,
          Size         => Content'Length,
-         Mode         => (if Executable then 8#755# else 8#644#),
+         --  git's tar mode: (0666 or 0777 for exec) & ~tar.umask (default
+         --  0002) -> 0664 for a plain file, 0775 for an executable.
+         Mode         => (if Executable then 8#775# else 8#664#),
          Typeflag     => '0');
       Write_String (Writer.File, Content);
       if Pad > 0 then
@@ -410,7 +416,8 @@ package body Version.Tar is
         (Writer       => Writer,
          Archive_Path => Archive_Path,
          Size         => 0,
-         Mode         => 8#755#,
+         --  git: (0777) & ~tar.umask (0002) -> 0775 for a directory.
+         Mode         => 8#775#,
          Typeflag     => '5');
    end Add_Directory;
 
@@ -431,6 +438,8 @@ package body Version.Tar is
         (Writer       => Writer,
          Archive_Path => Archive_Path,
          Size         => 0,
+         --  git writes symlinks with mode 0777 (tar.umask is not applied to
+         --  a symlink, unlike files and directories).
          Mode         => 8#777#,
          Typeflag     => '2',
          Link_Target  => Link_Target);
@@ -439,10 +448,28 @@ package body Version.Tar is
    procedure Close
      (Writer : in out Tar_Writer)
    is
+      --  git pads the archive to a full 20-block (512 * 20 = 10240) record,
+      --  matching GNU tar's default blocking factor, after the two trailing
+      --  zero blocks. Everything is written in 512-byte blocks, so the offset
+      --  is always a multiple of 512; pad up to the next 10240 boundary.
+      Record_Size : constant Long_Long_Integer := 10_240;
    begin
       if Writer.Open then
          Write_String (Writer.File, Zero_Block);
          Write_String (Writer.File, Zero_Block);
+         declare
+            Pos       : constant Long_Long_Integer :=
+              Long_Long_Integer (Ada.Streams.Stream_IO.Size (Writer.File));
+            Remainder : constant Natural :=
+              Natural (Pos mod Record_Size);
+         begin
+            if Remainder /= 0 then
+               Write_String
+                 (Writer.File,
+                  String'(1 .. Natural (Record_Size) - Remainder
+                          => Character'Val (0)));
+            end if;
+         end;
          Ada.Streams.Stream_IO.Close (Writer.File);
          Writer.Open := False;
          Writer.Names.Clear;

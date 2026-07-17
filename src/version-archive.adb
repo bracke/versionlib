@@ -21,6 +21,28 @@ package body Version.Archive is
    package String_Sets is new Ada.Containers.Ordered_Sets
      (Element_Type => Unbounded_String);
 
+   --  git archive emits entries in a single recursive tree-order stream: a
+   --  directory entry appears immediately before its contents, interleaved
+   --  with sibling files -- not all directories first. Merging directory and
+   --  file entries into one list keyed by the archive path (directories keyed
+   --  with a trailing '/', which is how git sorts a tree) reproduces it.
+   type Emit_Kind is (Emit_Directory, Emit_Content);
+   type Emit_Item is record
+      Kind     : Emit_Kind := Emit_Content;
+      Sort_Key : Unbounded_String;
+      Dir_Path : Unbounded_String;   --  Emit_Directory: the "dir/" path
+      Entry_Ix : Natural := 0;       --  Emit_Content: Selected_Entries index
+   end record;
+
+   package Emit_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Emit_Item);
+
+   function Emit_Less (Left, Right : Emit_Item) return Boolean is
+     (Left.Sort_Key < Right.Sort_Key);
+
+   package Emit_Sorting is new Emit_Vectors.Generic_Sorting
+     ("<" => Emit_Less);
+
    function Unsupported_Output_Format_Text (Output : String) return String is
    begin
       return "unsupported archive output format: " & Output
@@ -674,6 +696,62 @@ package body Version.Archive is
       end if;
    end Archive_Blob_Content;
 
+   --  git archive stamps every tar entry with the archived commit's committer
+   --  time. Return that epoch (the second-to-last whitespace token of the
+   --  "committer " line), or 0 when the revision is a bare tree.
+   function Committer_Epoch
+     (Repository : Version.Repository.Repository_Handle;
+      Commit_Id  : Version.Objects.Hex_Object_Id) return Natural
+   is
+      Obj     : constant Version.Objects.Git_Object :=
+        Version.Objects.Read_Object (Repository, Commit_Id);
+      Content : constant String := Version.Objects.Content (Obj);
+      Pos     : Natural := Content'First;
+   begin
+      while Pos <= Content'Last loop
+         declare
+            Stop : Natural := Pos;
+         begin
+            while Stop <= Content'Last
+              and then Content (Stop) /= Character'Val (10)
+            loop
+               Stop := Stop + 1;
+            end loop;
+            declare
+               Line : constant String := Content (Pos .. Stop - 1);
+            begin
+               if Line'Length > 10
+                 and then Line (Line'First .. Line'First + 9) = "committer "
+               then
+                  declare
+                     Last_Sp : Natural := 0;
+                     Prev_Sp : Natural := 0;
+                  begin
+                     for I in reverse Line'Range loop
+                        if Line (I) = ' ' then
+                           if Last_Sp = 0 then
+                              Last_Sp := I;
+                           else
+                              Prev_Sp := I;
+                              exit;
+                           end if;
+                        end if;
+                     end loop;
+                     if Prev_Sp /= 0 and then Last_Sp > Prev_Sp then
+                        return Natural'Value (Line (Prev_Sp + 1 .. Last_Sp - 1));
+                     end if;
+                  end;
+               end if;
+            end;
+            Pos := Stop + 1;
+         end;
+      end loop;
+      return 0;
+   exception
+      when others =>
+         return 0;
+   end Committer_Epoch;
+
    procedure Create
      (Repository : Version.Repository.Repository_Handle;
       Revision   : String;
@@ -719,6 +797,7 @@ package body Version.Archive is
       Entries          : Version.Objects.Tree_Entry_Vectors.Vector;
       Selected_Entries : Version.Objects.Tree_Entry_Vectors.Vector;
       Dirs             : String_Sets.Set;
+      Emission         : Emit_Vectors.Vector;
       Object_Cache : Version.Object_Cache.Object_Cache;
       Tree_Cache   : Version.Tree_Cache.Tree_Cache;
       Archive_Prefix : constant String := Normalize_Prefix (Prefix);
@@ -765,45 +844,91 @@ package body Version.Archive is
          end loop;
       end if;
 
+      --  Merge directories and files into a single git-tree-ordered stream:
+      --  each directory keyed with a trailing '/' (so it sorts immediately
+      --  before its contents), each file keyed by its archive path.
+      for Dir of Dirs loop
+         declare
+            D   : constant String := To_String (Dir);
+            Key : constant String :=
+              (if D'Length > 0 and then D (D'Last) = '/' then D else D & "/");
+            --  git emits the whole --prefix as a single directory entry; the
+            --  prefix's own intermediate components (e.g. "x/" for prefix
+            --  "x/y/") are not separate entries. Skip those proper ancestors.
+            Ancestor_Of_Prefix : constant Boolean :=
+              Archive_Prefix'Length > 0
+              and then Key'Length < Archive_Prefix'Length
+              and then Archive_Prefix
+                         (Archive_Prefix'First
+                          .. Archive_Prefix'First + Key'Length - 1) = Key;
+         begin
+            if not Ancestor_Of_Prefix then
+               Emission.Append
+                 (Emit_Item'
+                    (Kind     => Emit_Directory,
+                     Sort_Key => To_Unbounded_String (Key),
+                     Dir_Path => To_Unbounded_String (Key),
+                     Entry_Ix => 0));
+            end if;
+         end;
+      end loop;
+      for I in Selected_Entries.First_Index .. Selected_Entries.Last_Index loop
+         Emission.Append
+           (Emit_Item'
+              (Kind     => Emit_Content,
+               Sort_Key =>
+                 To_Unbounded_String
+                   (With_Prefix
+                      (Archive_Prefix,
+                       To_String (Selected_Entries.Element (I).Path))),
+               Dir_Path => Null_Unbounded_String,
+               Entry_Ix => I));
+      end loop;
+      Emit_Sorting.Sort (Emission);
+
       case Format is
          when Tar_Format | Tar_Gz_Format =>
             declare
-               Writer : Version.Tar.Tar_Writer;
+               Writer     : Version.Tar.Tar_Writer;
+               Commit     : Version.Objects.Hex_Object_Id;
+               Has_Commit : Boolean := True;
+               Mtime      : Natural := 0;
             begin
-               Version.Tar.Create (Writer, Work_Output);
+               --  Resolve the commit first: its committer time stamps every
+               --  tar entry, and its id goes in the pax global header.
+               begin
+                  Commit :=
+                    Version.Revisions.Resolve_Commit (Repository, Revision);
+               exception
+                  when others =>
+                     Has_Commit := False;
+               end;
+               if Has_Commit then
+                  Mtime := Committer_Epoch (Repository, Commit);
+               end if;
+
+               Version.Tar.Create (Writer, Work_Output, Mtime);
 
                --  git archive prepends a pax global header carrying the
                --  commit id when the revision is a commit-ish (not a bare
                --  tree); `get-tar-commit-id` reads it back.
-               declare
-                  Commit     : Version.Objects.Hex_Object_Id;
-                  Has_Commit : Boolean := True;
-               begin
-                  begin
-                     Commit :=
-                       Version.Revisions.Resolve_Commit (Repository, Revision);
-                  exception
-                     when others =>
-                        Has_Commit := False;
-                  end;
-                  if Has_Commit then
-                     Version.Tar.Add_Pax_Global_Header
-                       (Writer, Version.Objects.To_String (Commit));
-                  end if;
-               end;
-
-               if not Dirs.Is_Empty then
-                  for Dir of Dirs loop
-                     Version.Tar.Add_Directory (Writer, To_String (Dir));
-                  end loop;
+               if Has_Commit then
+                  Version.Tar.Add_Pax_Global_Header
+                    (Writer, Version.Objects.To_String (Commit));
                end if;
 
-               if not Selected_Entries.Is_Empty then
-                  for I in Selected_Entries.First_Index .. Selected_Entries.Last_Index loop
+               for Item of Emission loop
+                  if Item.Kind = Emit_Directory then
+                     Version.Tar.Add_Directory
+                       (Writer, To_String (Item.Dir_Path));
+                  else
                      declare
-                        Current_Entry : constant Version.Objects.Tree_Entry := Selected_Entries.Element (I);
-                        Path         : constant String := To_String (Current_Entry.Path);
-                        Archive_Path : constant String := With_Prefix (Archive_Prefix, Path);
+                        Current_Entry : constant Version.Objects.Tree_Entry :=
+                          Selected_Entries.Element (Item.Entry_Ix);
+                        Path         : constant String :=
+                          To_String (Current_Entry.Path);
+                        Archive_Path : constant String :=
+                          With_Prefix (Archive_Prefix, Path);
                      begin
                         if Current_Entry.Kind = Version.Objects.Tree_Gitlink then
                               Version.Tar.Add_File
@@ -839,8 +964,8 @@ package body Version.Archive is
                               end;
                         end if;
                      end;
-                  end loop;
-               end if;
+                  end if;
+               end loop;
 
                Version.Tar.Close (Writer);
                if Format = Tar_Gz_Format then
@@ -869,18 +994,18 @@ package body Version.Archive is
             begin
                Version.Zip.Create (Writer, Work_Output);
 
-               if not Dirs.Is_Empty then
-                  for Dir of Dirs loop
-                     Version.Zip.Add_Directory (Writer, To_String (Dir));
-                  end loop;
-               end if;
-
-               if not Selected_Entries.Is_Empty then
-                  for I in Selected_Entries.First_Index .. Selected_Entries.Last_Index loop
+               for Item of Emission loop
+                  if Item.Kind = Emit_Directory then
+                     Version.Zip.Add_Directory
+                       (Writer, To_String (Item.Dir_Path));
+                  else
                      declare
-                        Current_Entry : constant Version.Objects.Tree_Entry := Selected_Entries.Element (I);
-                        Path         : constant String := To_String (Current_Entry.Path);
-                        Archive_Path : constant String := With_Prefix (Archive_Prefix, Path);
+                        Current_Entry : constant Version.Objects.Tree_Entry :=
+                          Selected_Entries.Element (Item.Entry_Ix);
+                        Path         : constant String :=
+                          To_String (Current_Entry.Path);
+                        Archive_Path : constant String :=
+                          With_Prefix (Archive_Prefix, Path);
                      begin
                         if Current_Entry.Kind = Version.Objects.Tree_Gitlink then
                               Version.Zip.Add_File
@@ -916,8 +1041,8 @@ package body Version.Archive is
                               end;
                         end if;
                      end;
-                  end loop;
-               end if;
+                  end if;
+               end loop;
 
                Version.Zip.Close (Writer);
                Version.Files.Atomic_Replace (Work_Output, Output);

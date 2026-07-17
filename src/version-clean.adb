@@ -21,6 +21,20 @@ package body Version.Clean is
       Tracked : constant Version.Staging.Index_Entry_Vectors.Vector :=
         Version.Staging.Load (Repo);
       Result  : Path_Vectors.Vector;
+      Repo_Root : constant String := Version.Repository.Root_Path (Repo);
+
+      --  git treats a directory holding a `.git` as a nested repository and
+      --  refuses to remove it under `-d`/`-f`; it takes a doubled force (-ff).
+      function Is_Nested_Repo (Dir_Unit : String) return Boolean is
+         Rel : constant String :=
+           (if Dir_Unit'Length > 0 and then Dir_Unit (Dir_Unit'Last) = '/'
+            then Dir_Unit (Dir_Unit'First .. Dir_Unit'Last - 1)
+            else Dir_Unit);
+      begin
+         return Ada.Directories.Exists
+           (Version.Files.Join
+              (Version.Files.Join (Repo_Root, Rel), ".git"));
+      end Is_Nested_Repo;
 
       --  A directory holds tracked content if some index entry lies under it.
       function Dir_Has_Tracked (Dir : String) return Boolean is
@@ -85,6 +99,13 @@ package body Version.Clean is
          end loop;
 
          if Is_Dir and then not Options.Directories then
+            return;
+         end if;
+
+         --  A nested git repository survives `clean -fd`; only -ff removes it.
+         if Is_Dir and then Options.Force < 2
+           and then Is_Nested_Repo (To_String (Unit))
+         then
             return;
          end if;
 

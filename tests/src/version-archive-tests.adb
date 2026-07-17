@@ -501,11 +501,12 @@ package body Version.Archive.Tests is
       begin
          --  A commit archive still carries git's pax global header (one
          --  512-byte header block + one record block) followed by the two
-         --  terminating zero blocks, but no file entries.
+         --  terminating zero blocks and no file entries, the whole padded up
+         --  to git's 20-block (10240-byte) record.
          Assert
-           (Tar_Data'Length = 2048,
+           (Tar_Data'Length = 10240,
             "empty filtered TAR has the pax global header, its record block,"
-            & " and two terminating zero blocks");
+            & " two terminating zero blocks, padded to a 10240-byte record");
          Assert
            (Ada.Strings.Fixed.Index (Tar_Data, "pax_global_header") > 0,
             "a commit archive carries a pax global header even when filtered"
@@ -584,8 +585,9 @@ package body Version.Archive.Tests is
            (Ada.Strings.Fixed.Index (Data, "run.sh") > 0,
             "tar must contain executable file path");
          Assert
-           (Ada.Strings.Fixed.Index (Data, "0000755") > 0,
-            "tar must preserve executable mode metadata");
+           (Ada.Strings.Fixed.Index (Data, "0000775") > 0,
+            "tar must preserve executable mode metadata "
+            & "(git's tar.umask 0002: 0777 -> 0775)");
       end;
    exception
       when others =>

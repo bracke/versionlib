@@ -10,7 +10,10 @@ package Version.Tar is
 
    procedure Create
      (Writer      : in out Tar_Writer;
-      Output_Path : String);
+      Output_Path : String;
+      Mtime       : Natural := 0);
+   --  Mtime is the modification time stamped into every entry's header
+   --  (git archive uses the archived commit's committer time; 0 otherwise).
 
    procedure Add_File
      (Writer       : in out Tar_Writer;
@@ -46,6 +49,7 @@ private
    type Tar_Writer is limited record
       File  : Ada.Streams.Stream_IO.File_Type;
       Open  : Boolean := False;
+      Mtime : Natural := 0;
       Names : Name_Vectors.Vector;
    end record;
 
