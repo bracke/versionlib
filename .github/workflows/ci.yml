@@ -17,6 +17,9 @@ jobs:
       - name: Check out httpclient sibling
         uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
+      - name: Check out project_tools sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
       - name: Check out zlib sibling
         uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
@@ -59,6 +62,9 @@ jobs:
       - name: Check out httpclient sibling
         uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
+      - name: Check out project_tools sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
       - name: Check out zlib sibling
         uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
