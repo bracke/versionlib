@@ -10,31 +10,84 @@ jobs:
     name: versionlib POSIX
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Alire
-        uses: alire-project/setup-alire@v2
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y git tar
+      - name: Check out versionlib
+        uses: actions/checkout@v4
+        with:
+          path: versionlib
+      - name: Check out httpclient sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
+      - name: Check out zlib sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
+      - name: Check out cryptolib sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
+      - name: Check out regexp sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
+      - name: Check out i18n sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
+      - name: Check out sshlib sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
+      - name: Check out hostkit sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v5
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - name: Build versionlib verification tooling
-        run: cd tools && alr build
+        working-directory: versionlib/tools
+        run: alr --non-interactive build
       - name: Run versionlib release preflight
-        # Builds the library, builds and runs the AUnit suite, and runs
-        # versionlib's own ref-write-policy, version-metadata, test-scope, and
-        # documentation/manifest checks.
+        working-directory: versionlib
         run: ./tools/bin/check_release_ready
 
   windows:
     name: versionlib Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Alire
-        uses: alire-project/setup-alire@v2
+      - name: Check out versionlib
+        uses: actions/checkout@v4
+        with:
+          path: versionlib
+      - name: Check out httpclient sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
+      - name: Check out zlib sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
+      - name: Check out cryptolib sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
+      - name: Check out regexp sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
+      - name: Check out i18n sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
+      - name: Check out sshlib sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
+      - name: Check out hostkit sibling
+        uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v5
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
       - name: Build library
+        working-directory: versionlib
         shell: bash
-        run: alr build
+        run: alr --non-interactive build
       - name: Build and run the AUnit suite
+        working-directory: versionlib
         shell: bash
         run: |
-          (cd tests && alr exec -- gprbuild -P versionlib_tests.gpr)
+          (cd tests && alr --non-interactive build)
           if [ -f ./tests/bin/tests.exe ]; then ./tests/bin/tests.exe; else ./tests/bin/tests; fi
