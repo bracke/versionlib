@@ -1657,17 +1657,29 @@ package body Version.Diff is
                   --  matches the index (a staged change), and a zero id when
                   --  it differs from the index (an unstaged modification).
                   declare
+                     --  The new side is the working file's mode, not the
+                     --  index mode -- so an unstaged chmod is reported. A
+                     --  gitlink keeps its 160000.
+                     W_Mode : constant String :=
+                       (if not W_Present then "000000"
+                        elsif Tracked and then Idx_Mode (Path) = "160000"
+                        then Idx_Mode (Path)
+                        else Pad6 (Working_Disk_Mode (Repo, Path)));
+                     --  git prints the index sha only when the working file is
+                     --  fully up to date with the index (content AND mode); an
+                     --  unstaged content or mode change prints a zero id.
                      Sha2 : constant String :=
                        (if W_Present and then Tracked
                           and then To_String (W_Id) = Idx_Sha (Path)
+                          and then W_Mode = Idx_Mode (Path)
                         then Idx_Sha (Path) else Zeros);
                   begin
                      if In_Tree and then W_Present then
                         if To_String (W_Id) /= Tree_Sha (Path)
-                          or else Idx_Mode (Path) /= Tree_Mode (Path)
+                          or else W_Mode /= Tree_Mode (Path)
                         then
                            Emit
-                             (Tree_Mode (Path), Idx_Mode (Path),
+                             (Tree_Mode (Path), W_Mode,
                               Tree_Sha (Path), Sha2, "M", Path);
                         end if;
                      elsif In_Tree then
@@ -1677,7 +1689,7 @@ package body Version.Diff is
                            "D", Path);
                      elsif Tracked and then W_Present then
                         Emit
-                          ("000000", Idx_Mode (Path), Zeros, Sha2, "A", Path);
+                          ("000000", W_Mode, Zeros, Sha2, "A", Path);
                      end if;
                   end;
                end;
@@ -1697,9 +1709,10 @@ package body Version.Diff is
       Zeros : constant String (1 .. Version.Hash.Hex_Length (Algo)) :=
         [others => '0'];
 
-      Mode_Map : Raw_Maps.Map;
-      Sha_Map  : Raw_Maps.Map;
-      Del_Map  : Raw_Maps.Map;   --  path -> "1" when working file is gone
+      Mode_Map     : Raw_Maps.Map;   --  index (old) mode
+      New_Mode_Map : Raw_Maps.Map;   --  working (new) mode
+      Sha_Map      : Raw_Maps.Map;
+      Del_Map      : Raw_Maps.Map;   --  path -> "1" when working file is gone
 
       package Path_Sets is new
         Ada.Containers.Indefinite_Ordered_Sets (String);
@@ -1711,18 +1724,28 @@ package body Version.Diff is
             declare
                Path : constant String := To_String (E.Path);
                ISha : constant String := Version.Objects.To_String (E.Id);
+               IMode : constant String := Pad6 (To_String (E.Mode));
             begin
                begin
-                  if Working_Blob_Id (Repo, Working_Content (Repo, Path))
-                    /= ISha
-                  then
-                     Mode_Map.Include (Path, Pad6 (To_String (E.Mode)));
-                     Sha_Map.Include (Path, ISha);
-                     Paths.Include (Path);
-                  end if;
+                  declare
+                     WSha : constant String :=
+                       Working_Blob_Id (Repo, Working_Content (Repo, Path));
+                     --  A chmod is a change even with identical content; a
+                     --  gitlink keeps its index mode (no worktree file mode).
+                     WMode : constant String :=
+                       (if To_String (E.Mode) = "160000" then IMode
+                        else Pad6 (Working_Disk_Mode (Repo, Path)));
+                  begin
+                     if WSha /= ISha or else WMode /= IMode then
+                        Mode_Map.Include (Path, IMode);
+                        New_Mode_Map.Include (Path, WMode);
+                        Sha_Map.Include (Path, ISha);
+                        Paths.Include (Path);
+                     end if;
+                  end;
                exception
                   when others =>
-                     Mode_Map.Include (Path, Pad6 (To_String (E.Mode)));
+                     Mode_Map.Include (Path, IMode);
                      Sha_Map.Include (Path, ISha);
                      Del_Map.Include (Path, "1");
                      Paths.Include (Path);
@@ -1741,7 +1764,7 @@ package body Version.Diff is
          else
             Append
               (Result,
-               ":" & Mode_Map (Path) & " " & Mode_Map (Path) & " "
+               ":" & Mode_Map (Path) & " " & New_Mode_Map (Path) & " "
                & Sha_Map (Path) & " " & Zeros & " M" & Character'Val (9)
                & Path & Character'Val (10));
          end if;
