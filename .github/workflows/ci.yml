@@ -47,6 +47,9 @@ jobs:
       - name: Build versionlib verification tooling
         working-directory: versionlib/tools
         run: alr --non-interactive build
+      - name: Generate tests-crate config
+        working-directory: versionlib/tests
+        run: alr --non-interactive build
       - name: Run versionlib release preflight
         working-directory: versionlib
         run: ./tools/bin/check_release_ready
