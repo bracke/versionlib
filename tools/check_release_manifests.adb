@@ -17,7 +17,7 @@ begin
       return;
    end if;
 
-   Validation.Require_Workspace_Pin ("alire.toml", "httpclient", "../HttpClient");
+   Validation.Require_Workspace_Pin ("alire.toml", "httpclient", "../httpclient");
    Validation.Require_Workspace_Pin ("alire.toml", "zlib", "../zlib");
    Validation.Require_Workspace_Pin ("alire.toml", "i18n", "../i18n");
    Validation.Require_Workspace_Pin ("alire.toml", "ssh_lib", "../sshlib");
