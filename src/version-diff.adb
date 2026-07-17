@@ -1278,6 +1278,60 @@ package body Version.Diff is
       return Diff_Staged (Repo, Pathspecs, Options);
    end Diff_Cached;
 
+   function Diff_Tree_Vs_Working
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id;
+      Options : Diff_Options := (others => <>)) return String
+   is
+      Index   : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+      Ignore  : Version.Ignore.Ignore_Rules := Version.Ignore.Load (Repo);
+      Working : constant Version.Working_Tree.Working_File_Vectors.Vector :=
+        Version.Working_Tree.Scan
+          (Repo => Repo, Ignore_Rules => Ignore, Tracked_Paths => Index);
+      Objects : Version.Object_Cache.Object_Cache;
+      Trees   : Version.Tree_Cache.Tree_Cache;
+   begin
+      return
+        Diff_Sides
+          (Repo        => Repo,
+           Objects     => Objects,
+           Old_Side    =>
+             From_Tree
+               (Version.Tree_Cache.Flatten_Tree
+                  (Repo => Repo, Cache => Trees, Tree_Id => Tree_Id)),
+           New_Side    => From_Working_For_Index (Working, Index),
+           New_Working => True,
+           Context     => Options.Context_Lines,
+           Stat        => Options.Stat, Summary => Options.Summary,
+           Name_Only   => Options.Name_Only,
+           Name_Status => Options.Name_Status);
+   end Diff_Tree_Vs_Working;
+
+   function Diff_Tree_Vs_Index
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id;
+      Options : Diff_Options := (others => <>)) return String
+   is
+      Objects : Version.Object_Cache.Object_Cache;
+      Trees   : Version.Tree_Cache.Tree_Cache;
+   begin
+      return
+        Diff_Sides
+          (Repo        => Repo,
+           Objects     => Objects,
+           Old_Side    =>
+             From_Tree
+               (Version.Tree_Cache.Flatten_Tree
+                  (Repo => Repo, Cache => Trees, Tree_Id => Tree_Id)),
+           New_Side    => From_Index (Version.Staging.Load (Repo)),
+           New_Working => False,
+           Context     => Options.Context_Lines,
+           Stat        => Options.Stat, Summary => Options.Summary,
+           Name_Only   => Options.Name_Only,
+           Name_Status => Options.Name_Status);
+   end Diff_Tree_Vs_Index;
+
    function Diff_Commits
      (Repo    : Version.Repository.Repository_Handle;
       Old_Id  : Version.Objects.Hex_Object_Id;

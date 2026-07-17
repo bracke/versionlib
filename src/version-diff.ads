@@ -52,6 +52,23 @@ package Version.Diff is
       Options    : Diff_Options := (others => <>))
       return String;
 
+   --  Unified diff between an arbitrary tree and the working tree
+   --  (git diff <commit>, git diff-index -p <tree>): the tree is the old
+   --  side, the working tree the new side, restricted to tracked paths.
+   function Diff_Tree_Vs_Working
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id;
+      Options : Diff_Options := (others => <>))
+      return String;
+
+   --  Unified diff between an arbitrary tree and the index
+   --  (git diff-index -p --cached <tree>).
+   function Diff_Tree_Vs_Index
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id;
+      Options : Diff_Options := (others => <>))
+      return String;
+
    function Diff_Commits
      (Repo    : Version.Repository.Repository_Handle;
       Old_Id  : Version.Objects.Hex_Object_Id;
