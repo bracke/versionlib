@@ -898,10 +898,15 @@ package body Version.Revisions is
                        Decimal_Value (Rev (Start .. Stop - 1));
                   begin
                      if Parent_Index = 0 then
-                        raise Ada.IO_Exceptions.Data_Error with "invalid parent index";
+                        --  <rev>^0 peels to the commit itself (equivalent to
+                        --  ^{commit}), not to a parent -- git dereferences a
+                        --  tag/annotated object down to its commit.
+                        Current := Apply_Brace_Suffix
+                          (Repo, Objects, Current, "commit");
+                     else
+                        Current := Parent_Commit
+                          (Repo, Objects, Current, Positive (Parent_Index));
                      end if;
-
-                     Current := Parent_Commit (Repo, Objects, Current, Positive (Parent_Index));
                      Pos := Stop;
                   end;
                end;
