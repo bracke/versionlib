@@ -78,15 +78,14 @@ package body Version.Init is
    is
       Git_Dir : constant String :=
         Version.Files.Join (Path, ".git");
+      --  git's `init` is idempotent: re-running it reinitialises an existing
+      --  repository (ensuring the directory structure) without overwriting an
+      --  existing HEAD or config.
+      Existed : constant Boolean := Version.Files.Is_Directory (Git_Dir);
    begin
       if Path'Length = 0 then
          raise Ada.IO_Exceptions.Data_Error with
            "init path must not be empty";
-      end if;
-
-      if Version.Files.Is_Directory (Git_Dir) then
-         raise Ada.IO_Exceptions.Data_Error with
-           "repository already exists: " & Git_Dir;
       end if;
 
       Ensure_Directory (Path);
@@ -99,16 +98,24 @@ package body Version.Init is
       Ensure_Directory (Version.Files.Join (Git_Dir, "refs/tags"));
       Ensure_Directory (Version.Files.Join (Git_Dir, "hooks"));
 
-      Version.Files.Write_Binary_File_Atomic
-        (Path    => Version.Files.Join (Git_Dir, "HEAD"),
-         Content => Head_Content (Ref_Storage));
+      if not Version.Files.Is_Ordinary_File
+               (Version.Files.Join (Git_Dir, "HEAD"))
+      then
+         Version.Files.Write_Binary_File_Atomic
+           (Path    => Version.Files.Join (Git_Dir, "HEAD"),
+            Content => Head_Content (Ref_Storage));
+      end if;
 
-      Version.Files.Write_Binary_File_Atomic
-        (Path    => Version.Files.Join (Git_Dir, "config"),
-         Content =>
-           Config_Content (False, Object_Format, Ref_Storage));
+      if not Version.Files.Is_Ordinary_File
+               (Version.Files.Join (Git_Dir, "config"))
+      then
+         Version.Files.Write_Binary_File_Atomic
+           (Path    => Version.Files.Join (Git_Dir, "config"),
+            Content =>
+              Config_Content (False, Object_Format, Ref_Storage));
+      end if;
 
-      if Ref_Storage = Reftable then
+      if Ref_Storage = Reftable and then not Existed then
          Setup_Reftable (Git_Dir, Object_Format);
       end if;
    end Init;
@@ -118,15 +125,14 @@ package body Version.Init is
       Object_Format : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
       Ref_Storage   : Ref_Storage_Kind := Files)
    is
+      --  git's bare `init` is idempotent too: it reinitialises rather than
+      --  failing, and preserves an existing HEAD/config.
+      Existed : constant Boolean :=
+        Version.Files.Is_Directory (Version.Files.Join (Path, "objects"));
    begin
       if Path'Length = 0 then
          raise Ada.IO_Exceptions.Data_Error with
          "bare init path must not be empty";
-      end if;
-
-      if Version.Files.Is_Directory (Version.Files.Join (Path, "objects")) then
-         raise Ada.IO_Exceptions.Data_Error with
-         "bare repository already exists: " & Path;
       end if;
 
       Ensure_Directory (Path);
@@ -137,15 +143,23 @@ package body Version.Init is
       Ensure_Directory (Version.Files.Join (Path, "refs/tags"));
       Ensure_Directory (Version.Files.Join (Path, "hooks"));
 
-      Version.Files.Write_Binary_File_Atomic
-      (Path    => Version.Files.Join (Path, "HEAD"),
-         Content => Head_Content (Ref_Storage));
+      if not Version.Files.Is_Ordinary_File
+               (Version.Files.Join (Path, "HEAD"))
+      then
+         Version.Files.Write_Binary_File_Atomic
+           (Path    => Version.Files.Join (Path, "HEAD"),
+            Content => Head_Content (Ref_Storage));
+      end if;
 
-      Version.Files.Write_Binary_File_Atomic
-      (Path    => Version.Files.Join (Path, "config"),
-         Content => Config_Content (True, Object_Format, Ref_Storage));
+      if not Version.Files.Is_Ordinary_File
+               (Version.Files.Join (Path, "config"))
+      then
+         Version.Files.Write_Binary_File_Atomic
+           (Path    => Version.Files.Join (Path, "config"),
+            Content => Config_Content (True, Object_Format, Ref_Storage));
+      end if;
 
-      if Ref_Storage = Reftable then
+      if Ref_Storage = Reftable and then not Existed then
          Setup_Reftable (Path, Object_Format);
       end if;
    end Init_Bare;

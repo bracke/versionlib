@@ -1,6 +1,7 @@
 - Fix: `Version.Diff.Raw_Diff_Files` and the working-tree branch of `Raw_Diff_Index` now compute the new side's mode from `Working_Disk_Mode` and report a mode-only change; `Raw_Diff_Index` prints a zero working-side id unless the file matches the index in both content and mode.
 - Fix: `Version.Diff` emits `old mode`/`new mode` lines for a file-mode change (pure or with content), and the working-tree side now adopts the file's on-disk mode (new `Working_Disk_Mode`, mirroring `Version.Status.Working_Index_Mode`) instead of the index mode, so a chmod is visible in `diff`/`show`/`log -p` rather than silently masked.
 - Fix: `Version.Grep.Match` gains a `Binary` flag; a binary file's matches are marked so the CLI prints `Binary file <path> matches` once (default output) while `-c`/`-l` still use the per-line matches, as git does.
+- Fix: `Version.Init.Init`/`Init_Bare` are idempotent -- they reinitialise an existing repository (ensuring the directory tree, preserving an existing HEAD/config) instead of raising, matching git's re-init behaviour.
 - Fix: `Version.Describe` computes tag distance with its own all-parents `<tag>..<commit>` walk instead of `Version.Rebase.Commits_To_Replay`, so `describe` no longer raises `rebase of merge commits not supported` on merge histories.
 - Fix: `Version.Init` omits `core.logallrefupdates` from a bare repository's config (git parity).
 - Fix: `Version.Notes.Add` writes git's `Notes added by 'git notes add'` commit message so the notes-ref object id matches git.
