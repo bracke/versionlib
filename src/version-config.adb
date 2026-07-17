@@ -1109,8 +1109,7 @@ package body Version.Config is
       end if;
 
       if Matches = 0 then
-         raise Ada.IO_Exceptions.Data_Error
-           with "config key does not exist: " & Name;
+         raise Key_Absent with "config key does not exist: " & Name;
       elsif Matches > 1 then
          --  Ambiguous: git refuses a single-value unset of a multivar and
          --  leaves every value in place. Do not write Result.

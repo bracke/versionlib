@@ -12,6 +12,10 @@ package Version.Config is
    --  file untouched rather than dropping every value.
    Ambiguous_Key : exception;
 
+   --  Raised by Unset_* when the key is not present at all; git treats this
+   --  as exit 5 with no diagnostic (nothing to unset).
+   Key_Absent : exception;
+
    type Identity is record
       Name  : Unbounded_String;
       Email : Unbounded_String;

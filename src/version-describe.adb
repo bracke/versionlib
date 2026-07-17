@@ -1,9 +1,10 @@
+with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
 
 with Version.History;
-with Version.Rebase;
 with Version.Refs;
 with Version.Revisions;
 with Version.Tags;
@@ -14,6 +15,67 @@ package body Version.Describe is
    use Ada.Strings.Unbounded;
 
    LF : constant Character := Character'Val (10);
+
+   package Id_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (Element_Type        => String,
+      Hash                => Ada.Strings.Hash,
+      Equivalent_Elements => "=");
+
+   --  git describe's distance: the number of commits `git log <tag>..<commit>`
+   --  would show -- every commit reachable from Commit but not from Tag. A
+   --  full all-parents walk, so merge commits count correctly (the old code
+   --  reused rebase's linear replay, which rejects merges outright).
+   function Distance
+     (Repo : Version.Repository.Repository_Handle;
+      Tag_Commit, Commit : Version.Objects.Hex_Object_Id)
+      return Natural
+   is
+      Excluded : Id_Sets.Set;   --  Tag_Commit and all its ancestors
+      Counted  : Id_Sets.Set;   --  Commit's ancestors that are not excluded
+      Stack    : Version.History.Commit_Id_Vectors.Vector;
+
+      procedure Push (Id : Version.Objects.Hex_Object_Id) is
+      begin
+         Stack.Append (Id);
+      end Push;
+   begin
+      Push (Tag_Commit);
+      while not Stack.Is_Empty loop
+         declare
+            C   : constant Version.Objects.Hex_Object_Id :=
+              Stack.Last_Element;
+            Hex : constant String := To_String (C);
+         begin
+            Stack.Delete_Last;
+            if not Excluded.Contains (Hex) then
+               Excluded.Include (Hex);
+               for P of Version.History.Parent_Commits (Repo, C) loop
+                  Push (P);
+               end loop;
+            end if;
+         end;
+      end loop;
+
+      Push (Commit);
+      while not Stack.Is_Empty loop
+         declare
+            C   : constant Version.Objects.Hex_Object_Id :=
+              Stack.Last_Element;
+            Hex : constant String := To_String (C);
+         begin
+            Stack.Delete_Last;
+            if not Excluded.Contains (Hex) and then not Counted.Contains (Hex)
+            then
+               Counted.Include (Hex);
+               for P of Version.History.Parent_Commits (Repo, C) loop
+                  Push (P);
+               end loop;
+            end if;
+         end;
+      end loop;
+
+      return Natural (Counted.Length);
+   end Distance;
 
    function Describe
      (Repo     : Version.Repository.Repository_Handle;
@@ -68,9 +130,7 @@ package body Version.Describe is
                   declare
                      Dist : constant Natural :=
                        (if Exact then 0
-                        else Natural
-                               (Version.Rebase.Commits_To_Replay
-                                  (Repo, Commit, Tag_Commit).Length));
+                        else Distance (Repo, Tag_Commit, Commit));
                   begin
                      --  Nearest tag wins; at equal distance git prefers an
                      --  annotated tag over a lightweight one.

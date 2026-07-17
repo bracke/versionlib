@@ -34,12 +34,14 @@ package body Version.Init is
       Needs_V1    : constant Boolean := Is_Sha256 or else Is_Reftable;
       Version_Line : constant String := (if Needs_V1 then "1" else "0");
       Bare_Line   : constant String := (if Bare then "true" else "false");
+      --  git omits core.logallrefupdates in a bare repository (the reflog
+      --  default is off there); a non-bare repo gets it set to true.
       Base : constant String :=
         "[core]" & LF
         & HT & "repositoryformatversion = " & Version_Line & LF
         & HT & "filemode = " & Version.Platform.Core_Filemode_Default & LF
         & HT & "bare = " & Bare_Line & LF
-        & HT & "logallrefupdates = true" & LF;
+        & (if Bare then "" else HT & "logallrefupdates = true" & LF);
       Extensions : constant String :=
         (if Is_Sha256 then HT & "objectformat = sha256" & LF else "")
         & (if Is_Reftable then HT & "refstorage = reftable" & LF else "");

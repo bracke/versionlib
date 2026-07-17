@@ -517,7 +517,7 @@ package body Version.Config.Tests is
             Version.Config.Unset_Key (Repo, "remote.origin.url");
             Assert (False, "unsetting a missing config key must fail");
          exception
-            when Ada.IO_Exceptions.Data_Error =>
+            when Version.Config.Key_Absent =>
                null;
          end;
       end;

@@ -96,7 +96,7 @@ package body Version.Notes is
            Version.Write.Write_Tree_From_Index (Repo, Entries);
          New_Commit : constant Version.Objects.Hex_Object_Id :=
            Version.Write.Write_Commit_With_Parents
-             (Repo, Tree, Parents, "Notes added by 'version notes add'");
+             (Repo, Tree, Parents, "Notes added by 'git notes add'");
          Tx : Version.Ref_Transaction.Transaction;
       begin
          Version.Ref_Transaction.Start (Tx, Repo);
