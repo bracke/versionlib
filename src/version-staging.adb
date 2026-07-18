@@ -10,12 +10,11 @@ with Version.Hash;
 with Version.Path_Safety;
 with Version.Files;
 with Version.Platform;
+with Version.Timestamps;
 
 package body Version.Staging is
 
    use Ada.Streams;
-
-   function "-" (Left, Right : Ada.Calendar.Time) return Duration renames Ada.Calendar."-";
 
    function Join (Left, Right : String) return String renames Version.Files.Join;
 
@@ -507,13 +506,8 @@ package body Version.Staging is
    (T : Ada.Calendar.Time)
       return Natural
    is
-      Epoch : constant Ada.Calendar.Time :=
-      Ada.Calendar.Time_Of
-         (Year  => 1970,
-         Month => 1,
-         Day   => 1);
    begin
-      return Natural (T - Epoch);
+      return Natural (Version.Timestamps.To_Unix (T));
    end Unix_Time;
    function File_Size_Natural
    (Path : String)

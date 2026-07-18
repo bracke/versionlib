@@ -1,4 +1,3 @@
-with Ada.Calendar;
 with Ada.Directories;
 with Ada.IO_Exceptions;
 with Version.Config;
@@ -8,17 +7,15 @@ with Version.Objects;
 with Version.Ref_Names;
 with Version.Reftable;
 with Version.Reftable.Writer;
+with Version.Timestamps;
 
 package body Version.Reflog is
 
    use Ada.Strings.Unbounded;
 
    function Now_Seconds return Long_Long_Integer is
-      Epoch : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (Year => 1970, Month => 1, Day => 1);
    begin
-      return Long_Long_Integer
-        (Ada.Calendar."-" (Ada.Calendar.Clock, Epoch));
+      return Version.Timestamps.Unix_Now;
    end Now_Seconds;
 
    function Path

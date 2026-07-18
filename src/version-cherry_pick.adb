@@ -1,4 +1,3 @@
-with Ada.Calendar;
 with Ada.Containers; use Ada.Containers;
 with Ada.Directories; use Ada.Directories;
 with Ada.IO_Exceptions;
@@ -28,6 +27,7 @@ with Version.Status;
 with Version.Tree_Cache;
 with Version.Working_Tree;
 with Version.Write;
+with Version.Timestamps;
 
 package body Version.Cherry_Pick is
 
@@ -265,12 +265,8 @@ package body Version.Cherry_Pick is
    end Author_Line;
 
    function Unix_Time_Image return String is
-      Epoch : constant Ada.Calendar.Time :=
-        Ada.Calendar.Time_Of (Year => 1970, Month => 1, Day => 1);
-      Now : constant Ada.Calendar.Time := Ada.Calendar.Clock;
-      Seconds : constant Natural := Natural (Ada.Calendar."-" (Now, Epoch));
    begin
-      return Natural_Image (Seconds);
+      return Natural_Image (Natural (Version.Timestamps.Unix_Now));
    end Unix_Time_Image;
 
    function Object_Id_For

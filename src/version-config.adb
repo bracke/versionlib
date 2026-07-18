@@ -8,6 +8,8 @@ with Ada.Text_IO;
 
 with Version.Files;
 with Version.Refs;
+with Version.Timestamps;
+with Ada.Calendar.Formatting;
 
 package body Version.Config is
 
@@ -1353,8 +1355,10 @@ package body Version.Config is
                    (Head (Head'First + 19 .. Head'Last), Ada.Strings.Both);
                Off   : constant String := Zone (Rest);
 
+               --  UTC epoch: the parsed instant below is already UTC.
                Epoch : constant Ada.Calendar.Time :=
-                 Ada.Calendar.Time_Of (1970, 1, 1);
+                 Ada.Calendar.Formatting.Time_Of
+                   (1970, 1, 1, 0, 0, 0, 0.0, False, 0);
 
                When_Utc : Ada.Calendar.Time;
                Secs     : Integer;
@@ -1425,9 +1429,7 @@ package body Version.Config is
    end Local_Zone;
 
    function Now_Stamp return String is
-      Epoch : constant Ada.Calendar.Time := Ada.Calendar.Time_Of (1970, 1, 1);
-      Secs  : constant Integer :=
-        Integer (Ada.Calendar."-" (Ada.Calendar.Clock, Epoch));
+      Secs : constant Integer := Integer (Version.Timestamps.Unix_Now);
    begin
       return Ada.Strings.Fixed.Trim (Integer'Image (Secs), Ada.Strings.Both)
              & " " & Local_Zone;

@@ -1,4 +1,3 @@
-with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
@@ -12,6 +11,7 @@ with Version.Ref_Format;
 with Version.Refs;
 with Version.Revisions;
 with Version.Verify;
+with Version.Timestamps;
 
 package body Version.Pretty_Format is
 
@@ -468,13 +468,10 @@ package body Version.Pretty_Format is
       return Img (Integer (Id.Epoch));
    end Date_Unix;
 
-   --  Current time as a Unix timestamp (mirrors the codebase's convention of
-   --  Clock - 1970 epoch; correct on a UTC system, as used for these dates).
+   --  Current time as a Unix timestamp.
    function Now_Unix return Long_Long_Integer is
-      Epoch : constant Ada.Calendar.Time := Ada.Calendar.Time_Of (1970, 1, 1);
    begin
-      return Long_Long_Integer
-        (Ada.Calendar."-" (Ada.Calendar.Clock, Epoch));
+      return Version.Timestamps.Unix_Now;
    end Now_Unix;
 
    --  "N unit(s) ago" with English pluralisation (LANG=C).
