@@ -3116,24 +3116,12 @@ package body Version.Branch is
                  (Repo => Repo, Squash => True, Run_Hooks => Effective_Options.Run_Hooks);
                Apply_Merge_Autostash (Repo);
                return;
-            elsif Effective_Options.No_Commit then
-               Version.Merge_State.Write_Orig_Head
-                 (Repo => Repo, Current_Id => Current_Id);
-               Version.Restore.Restore_Working_Tree_For_Commit
-                 (Repo => Repo, Commit_Id => Target_Id);
-               Version.Restore.Write_Index_For_Commit
-                 (Repo => Repo, Commit_Id => Target_Id);
-               Write_Clean_Paused_Merge_State
-                 (Repo       => Repo,
-                  Current_Id => Current_Id,
-                  Target_Id  => Target_Id,
-                  Base_Id    => Current_Id,
-                  Target     => Target,
-                  Message    => Message,
-                  Mode       => Mode);
-               Apply_Merge_Autostash (Repo);
-               return;
             elsif Effective_Options.Fast_Forward /= Fast_Forward_Disabled then
+               --  git cannot stop a fast-forward with --no-commit: there is
+               --  no merge commit to withhold, so the branch simply moves.
+               --  Only --no-ff turns this into a real merge, and that case
+               --  falls through to the general path below, which honours
+               --  --no-commit itself.
                Fast_Forward_Current_Branch_To_Commit
                  (Repo       => Repo,
                   Current_Id => Current_Id,
