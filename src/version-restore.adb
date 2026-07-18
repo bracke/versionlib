@@ -457,8 +457,9 @@ package body Version.Restore is
             if To_String (Item.Mode) = "100755"
               and then Version.Platform.Supports_Executable_Bit
             then
-               GNAT.OS_Lib.Set_Executable
-                 (Version.Files.To_Native_Path (Absolute_Path));
+               --  Not GNAT.OS_Lib.Set_Executable: that sets only the owner
+               --  bit, giving 744 where git gives 0777 & ~umask.
+               Version.Files.Set_Executable (Absolute_Path, True);
             end if;
          end if;
       end;

@@ -3,6 +3,7 @@ with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
 with Ada.IO_Exceptions;
 with Ada.Unchecked_Deallocation;
+with Interfaces; use type Interfaces.Unsigned_32;
 with Interfaces.C;
 with Version.Platform; use Version.Platform;
 with Version.Files.Rollback;
@@ -249,9 +250,25 @@ package body Version.Files is
         (Name : Interfaces.C.char_array; Mode : Interfaces.C.int)
          return Interfaces.C.int
         with Import, Convention => C, External_Name => "chmod";
-      Mode   : constant Interfaces.C.int := (if Executable then 8#755# else 8#644#);
+      function C_Umask (Mask : Interfaces.C.int) return Interfaces.C.int
+        with Import, Convention => C, External_Name => "umask";
+
+      --  git creates a checked-out file with 0777 (executable) or 0666
+      --  (not) and lets the process umask reduce it, so an executable comes
+      --  out 755 under umask 022 and 775 under 002. A fixed 0755/0644 would
+      --  ignore the umask, and only setting the owner bit -- which
+      --  GNAT.OS_Lib.Set_Executable does -- yields 744.
+      Saved  : constant Interfaces.C.int := C_Umask (0);
+      Ignored : constant Interfaces.C.int := C_Umask (Saved);
+      Base   : constant Interfaces.Unsigned_32 :=
+        (if Executable then 8#777# else 8#666#);
+      Umask  : constant Interfaces.Unsigned_32 :=
+        Interfaces.Unsigned_32 (Saved) and 8#777#;
+      Mode   : constant Interfaces.C.int :=
+        Interfaces.C.int (Base and not Umask);
       Result : Interfaces.C.int;
    begin
+      pragma Unreferenced (Ignored);
       if Version.Platform.Supports_Executable_Bit then
          Result :=
            C_Chmod (Interfaces.C.To_C (To_Native_Path (Path)), Mode);

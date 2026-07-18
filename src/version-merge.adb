@@ -1990,7 +1990,7 @@ package body Version.Merge is
    is
    begin
       if Mode = "100755" and then Version.Platform.Supports_Executable_Bit then
-         GNAT.OS_Lib.Set_Executable (Version.Files.To_Native_Path (Path));
+         Version.Files.Set_Executable (Path, True);
       end if;
    end Apply_Worktree_File_Mode;
 
