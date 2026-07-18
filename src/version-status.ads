@@ -84,7 +84,11 @@ package Version.Status is
 
    function Porcelain_Status_Text
      (Result          : Status_Result;
-      Include_Ignored : Boolean := False) return String;
+      Include_Ignored : Boolean := False;
+      Display_Prefix  : String := "") return String;
+   --  Display_Prefix re-expresses each path for a reader standing in that
+   --  directory. It must stay empty for `--porcelain` itself, whose paths are
+   --  worktree-relative by contract; `--short` passes the real prefix.
    function Short_Status_Text
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String;

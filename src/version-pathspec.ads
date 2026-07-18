@@ -47,13 +47,27 @@ package Version.Pathspec is
      (Index_Type   => Natural,
       Element_Type => Pathspec_Item);
 
+   Outside_Repository : exception;
+   --  A pathspec that resolves above the worktree root. git treats this as a
+   --  die() -- "is outside repository", exit 128 -- rather than an ordinary
+   --  command failure, so it is raised distinctly from the other pathspec
+   --  diagnostics.
+
    function Parse
-     (Text : String)
+     (Text   : String;
+      Prefix : String := "")
       return Pathspec_Item;
 
    procedure Append_Parse
      (Result : in out Pathspec_Vectors.Vector;
-      Text   : String);
+      Text   : String;
+      Prefix : String := "");
+   --  Prefix is the directory the command was run in, relative to the
+   --  worktree root and slash-terminated (Version.Repository.Prefix). The
+   --  pathspec is resolved against it -- so "." names that directory and
+   --  ".." reaches above it -- unless it carries `:(top)`/`:/`, which reads
+   --  it against the root instead. A pathspec that resolves onto the root
+   --  itself selects every path.
 
    function Parse_All
      (Items : Ada.Strings.Unbounded.Unbounded_String)

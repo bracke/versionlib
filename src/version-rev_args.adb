@@ -43,10 +43,10 @@ package body Version.Rev_Args is
       return Boolean
    is
    begin
-      --  git accepts an operand as a path when it names something on disk;
-      --  anything else is a revision that failed to resolve.
-      return Ada.Directories.Exists
-        (Version.Files.Join (Version.Repository.Root_Path (Repo), Text));
+      --  git accepts an operand as a path when it names something on disk,
+      --  resolved from the directory the command ran in -- not from the
+      --  worktree root, which would miss a path named from a subdirectory.
+      return Ada.Directories.Exists (Text);
    exception
       when others =>
          return False;

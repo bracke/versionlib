@@ -230,16 +230,55 @@ package body Version.Pathspec.Tests is
       Assert_Rejected
         (":(from-file:paths.txt)a.txt",
          Version.Pathspec.Unknown_Magic_Diagnostic ("from-file:paths.txt"));
-      Assert_Rejected
-        ("../x", Version.Pathspec.Traversal_Component_Diagnostic ("../x"));
-      Assert_Rejected
-        ("a/../x", Version.Pathspec.Traversal_Component_Diagnostic ("a/../x"));
-      Assert_Rejected
-        ("./x", Version.Pathspec.Current_Directory_Component_Diagnostic ("./x"));
+      --  git resolves "." and ".." inside a pathspec rather than rejecting
+      --  them, so these now collapse the way `git status ./x` does. Only a
+      --  spec that climbs above the worktree root is refused, and that is a
+      --  die() rather than an ordinary rejection.
+      declare
+         Dot : constant Version.Pathspec.Pathspec_Item :=
+           Version.Pathspec.Parse ("./x");
+         Up  : constant Version.Pathspec.Pathspec_Item :=
+           Version.Pathspec.Parse ("a/../x");
+      begin
+         Assert
+           (Version.Pathspec.Matches (Dot, "x"),
+            "./x must resolve to x");
+         Assert
+           (Version.Pathspec.Matches (Up, "x"),
+            "a/../x must resolve to x");
+
+         --  git collapses a doubled separator rather than rejecting it.
+         declare
+            Doubled : constant Version.Pathspec.Pathspec_Item :=
+              Version.Pathspec.Parse ("a//b");
+         begin
+            Assert
+              (Version.Pathspec.Matches (Doubled, "a/b"),
+               "a//b must resolve to a/b");
+         end;
+      end;
+
+      declare
+         Climbed : Boolean := False;
+      begin
+         begin
+            declare
+               Ignored : constant Version.Pathspec.Pathspec_Item :=
+                 Version.Pathspec.Parse ("../x");
+            begin
+               pragma Unreferenced (Ignored);
+            end;
+         exception
+            when Version.Pathspec.Outside_Repository =>
+               Climbed := True;
+         end;
+
+         Assert
+           (Climbed,
+            "../x must be refused as outside the repository");
+      end;
       Assert_Rejected
         (".git/config", Version.Pathspec.Git_Dir_Component_Diagnostic (".git/config"));
-      Assert_Rejected
-        ("a//b", Version.Pathspec.Empty_Component_Diagnostic ("a//b"));
       Assert_Rejected
         (":(literal", Version.Pathspec.Malformed_Magic_Diagnostic (":(literal"));
       Assert_Rejected

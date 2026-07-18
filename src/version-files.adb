@@ -12,6 +12,67 @@ with Version.Filesystem_Guard;
 
 package body Version.Files is
 
+   function Relative_To_Prefix
+     (Path   : String;
+      Prefix : String)
+      return String
+   is
+      function Segment_Count (Text : String) return Natural is
+         N : Natural := 0;
+      begin
+         for C of Text loop
+            if C = '/' then
+               N := N + 1;
+            end if;
+         end loop;
+
+         return N;
+      end Segment_Count;
+
+      Shared : Natural := 0;   --  characters of Prefix that Path also has
+      Cursor : Natural := Path'First;
+   begin
+      if Prefix = "" or else Path = "" then
+         return Path;
+      end if;
+
+      --  Walk whole segments of the prefix that the path also starts with.
+      while Shared < Prefix'Length loop
+         declare
+            Stop : Natural := Prefix'First + Shared;
+         begin
+            while Stop <= Prefix'Last and then Prefix (Stop) /= '/' loop
+               Stop := Stop + 1;
+            end loop;
+
+            declare
+               Segment : constant String :=
+                 Prefix (Prefix'First + Shared .. Stop);
+            begin
+               exit when Cursor + Segment'Length - 1 > Path'Last
+                 or else Path (Cursor .. Cursor + Segment'Length - 1)
+                         /= Segment;
+
+               Cursor := Cursor + Segment'Length;
+               Shared := Shared + Segment'Length;
+            end;
+         end;
+      end loop;
+
+      declare
+         --  One "../" for each prefix segment the path did not share.
+         Ups   : constant Natural :=
+           Segment_Count (Prefix (Prefix'First + Shared .. Prefix'Last));
+         Climb : String (1 .. Ups * 3);
+      begin
+         for I in 1 .. Ups loop
+            Climb (I * 3 - 2 .. I * 3) := "../";
+         end loop;
+
+         return Climb & Path (Cursor .. Path'Last);
+      end;
+   end Relative_To_Prefix;
+
    function Normalize_Separators (Path : String) return String is
       Result : String := Path;
    begin

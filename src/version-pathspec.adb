@@ -324,8 +324,82 @@ package body Version.Pathspec is
       end loop;
    end Parse_Magic_List;
 
+   function Resolve_Against_Prefix
+     (Prefix  : String;
+      Payload : String)
+      return String
+   is
+      --  git resolves a pathspec against the directory the command ran in,
+      --  so "." means that directory and ".." reaches above it. Fold the
+      --  prefix and the payload together and collapse those segments here,
+      --  before validation rejects them as components.
+      Combined : constant String :=
+        (if Prefix = "" then Payload else Prefix & Payload);
+
+      Segments : array (1 .. Combined'Length + 1) of Unbounded_String;
+      Count    : Natural := 0;
+      Start    : Positive := Combined'First;
+      Trailing : constant Boolean :=
+        Combined'Length > 0 and then Combined (Combined'Last) = '/';
+      Result   : Unbounded_String;
+   begin
+      if Combined'Length = 0 then
+         return "";
+      end if;
+
+      --  An absolute pathspec is not relative to anything, and collapsing its
+      --  segments here would quietly turn "/tmp/a" into "tmp/a". Hand it back
+      --  untouched so the absolute-path check still sees it.
+      if Payload'Length > 0 and then Payload (Payload'First) = '/' then
+         return Payload;
+      end if;
+
+      for I in Combined'First .. Combined'Last + 1 loop
+         if I > Combined'Last or else Combined (I) = '/' then
+            declare
+               Segment : constant String := Combined (Start .. I - 1);
+            begin
+               if Segment = "" or else Segment = "." then
+                  null;
+               elsif Segment = ".." then
+                  if Count = 0 then
+                     --  Above the worktree root; git dies rather than
+                     --  failing, so this is distinguishable at the CLI.
+                     raise Outside_Repository with
+                       Payload & " is outside repository";
+                  end if;
+
+                  Count := Count - 1;
+               else
+                  Count := Count + 1;
+                  Segments (Count) := To_Unbounded_String (Segment);
+               end if;
+            end;
+
+            Start := I + 1;
+         end if;
+      end loop;
+
+      for I in 1 .. Count loop
+         if I > 1 then
+            Append (Result, "/");
+         end if;
+
+         Append (Result, Segments (I));
+      end loop;
+
+      --  A pathspec written as a directory keeps its trailing slash, which is
+      --  what makes it match the subtree rather than an exact path.
+      if Trailing and then Count > 0 then
+         Append (Result, "/");
+      end if;
+
+      return To_String (Result);
+   end Resolve_Against_Prefix;
+
    function Parse
-     (Text : String)
+     (Text   : String;
+      Prefix : String := "")
       return Pathspec_Item
    is
       Mode          : Match_Mode := Literal_Mode;
@@ -384,10 +458,33 @@ package body Version.Pathspec is
       end if;
 
       declare
-         Payload             : constant String := Text (Body_First .. Body_Last);
-         Directory_Prefix : constant Boolean := Payload (Payload'Last) = '/';
-         Pattern          : constant String := Payload;
+         Raw : constant String := Text (Body_First .. Body_Last);
+
+         --  `:(top)` opts out of the prefix: the pathspec is read against the
+         --  worktree root however deep the command was run.
+         Pattern : constant String :=
+           (if Top_Anchored then Raw
+            else Resolve_Against_Prefix (Prefix, Raw));
+
+         Directory_Prefix : constant Boolean :=
+           Pattern'Length > 0 and then Pattern (Pattern'Last) = '/';
       begin
+         if Pattern'Length = 0 then
+            --  The pathspec resolved onto the worktree root itself, which is
+            --  git's `.` run at the top level: it selects everything.
+            return Pathspec_Item'
+              (Pattern          => Null_Unbounded_String,
+               Mode             => Literal_Mode,
+               Excluded         => Excluded,
+               Top_Anchored     => Top_Anchored,
+               Icase            => Icase,
+               Directory_Prefix => False,
+               Has_Slash        => False,
+               Attribute_Mode   => Attribute_Mode,
+               Attribute_Name   => Attribute_Name,
+               Attribute_Value  => Attribute_Value);
+         end if;
+
          Validate_Pathspec_Pattern (Text, Pattern);
 
          if (not Explicit_Mode) and then Contains_Glob_Meta (Pattern) then
@@ -410,10 +507,11 @@ package body Version.Pathspec is
 
    procedure Append_Parse
      (Result : in out Pathspec_Vectors.Vector;
-      Text   : String)
+      Text   : String;
+      Prefix : String := "")
    is
    begin
-      Result.Append (Parse (Text));
+      Result.Append (Parse (Text, Prefix));
    end Append_Parse;
 
    function Parse_All
@@ -766,6 +864,11 @@ package body Version.Pathspec is
    begin
       if Path'Length = 0 then
          return False;
+      end if;
+
+      if Pattern'Length = 0 then
+         --  A pathspec naming the worktree root selects every path.
+         return True;
       end if;
 
       declare

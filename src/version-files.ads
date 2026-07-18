@@ -5,6 +5,17 @@ package Version.Files is
       Right : String)
       return String;
 
+   function Relative_To_Prefix
+     (Path   : String;
+      Prefix : String)
+      return String;
+   --  Re-express a worktree-relative Path for display from the directory
+   --  Prefix names (itself worktree-relative and slash-terminated), the way
+   --  git shows paths to a human: a path inside the directory loses the
+   --  prefix, one outside it gains the "../" steps needed to reach it. An
+   --  empty Prefix returns Path unchanged. Machine-readable output must not
+   --  use this -- git keeps `--porcelain` worktree-relative on purpose.
+
    function Normalize_Separators
      (Path : String)
       return String;

@@ -141,9 +141,13 @@ package body Version.Status is
    --  path, then untracked, then ignored. Clean status prints nothing.
    function Porcelain_Status_Text
      (Result          : Status_Result;
-      Include_Ignored : Boolean := False) return String
+      Include_Ignored : Boolean := False;
+      Display_Prefix  : String := "") return String
    is
       LF : constant Character := Ada.Characters.Latin_1.LF;
+
+      function Shown_Path (Path : String) return String is
+        (Version.Files.Relative_To_Prefix (Path, Display_Prefix));
 
       type XY is record
          X : Character := ' ';
@@ -193,7 +197,7 @@ package body Version.Status is
             S.Include (To_String (List.Element (I).Path));
          end loop;
          for P of S loop
-            Append (Text, Code & " " & P & LF);
+            Append (Text, Code & " " & Shown_Path (P) & LF);
          end loop;
       end Emit_Sorted;
    begin
@@ -247,7 +251,7 @@ package body Version.Status is
             Shown : constant String :=
               (if Length (XY_Maps.Element (C).Display) > 0
                then To_String (XY_Maps.Element (C).Display)
-               else XY_Maps.Key (C));
+               else Shown_Path (XY_Maps.Key (C)));
          begin
             Append
               (Text,
@@ -267,7 +271,16 @@ package body Version.Status is
       Include_Ignored : Boolean := False) return String
    is
    begin
-      return Porcelain_Status_Text (Result, Include_Ignored);
+      --  Same records as --porcelain, but shown from the directory the
+      --  command ran in: --porcelain is the scriptable contract and stays
+      --  worktree-relative, --short is for a human.
+      return Porcelain_Status_Text
+        (Result, Include_Ignored,
+         Display_Prefix =>
+           Version.Repository.Prefix (Version.Repository.Open));
+   exception
+      when others =>
+         return Porcelain_Status_Text (Result, Include_Ignored);
    end Short_Status_Text;
 
    function Natural_Image (Value : Natural) return String;
@@ -1630,21 +1643,31 @@ package body Version.Status is
 
    procedure Print_Long_Entries
      (List     : File_Change_Vectors.Vector;
-      Unmerged : Boolean) is
+      Unmerged : Boolean;
+      Prefix   : String) is
    begin
       for Change of List loop
          Ada.Text_IO.Put_Line
            (Long_Status_Line
-              (Change.Kind, Long_Entry_Path (Change), Unmerged));
+              (Change.Kind,
+               Version.Files.Relative_To_Prefix
+                 (Long_Entry_Path (Change), Prefix),
+               Unmerged));
       end loop;
    end Print_Long_Entries;
 
-   procedure Print_Long_Paths (List : File_Change_Vectors.Vector) is
+   procedure Print_Long_Paths
+     (List   : File_Change_Vectors.Vector;
+      Prefix : String)
+   is
       Tab : constant Character := Ada.Characters.Latin_1.HT;
    begin
       --  Untracked and ignored entries carry no label, only the path.
       for Change of List loop
-         Ada.Text_IO.Put_Line (Tab & To_String (Change.Path));
+         Ada.Text_IO.Put_Line
+           (Tab
+            & Version.Files.Relative_To_Prefix
+                (To_String (Change.Path), Prefix));
       end loop;
    end Print_Long_Paths;
 
@@ -1676,6 +1699,10 @@ package body Version.Status is
       --  the add/rm spelling.
       Has_Deleted : constant Boolean :=
         (for some Change of Result.Changes => Change.Kind = Deleted_File);
+
+      --  The long format is for a human, so its paths are shown from the
+      --  directory the command ran in.
+      Prefix : constant String := Version.Repository.Prefix (Repo);
    begin
       Print_Head_Line (Repo);
 
@@ -1713,7 +1740,7 @@ package body Version.Status is
               ("  (use ""git restore --staged <file>..."" to unstage)");
          end if;
 
-         Print_Long_Entries (Result.Staged, Unmerged => False);
+         Print_Long_Entries (Result.Staged, Unmerged => False, Prefix => Prefix);
          Ada.Text_IO.New_Line;
       end if;
 
@@ -1721,7 +1748,8 @@ package body Version.Status is
          Ada.Text_IO.Put_Line ("Unmerged paths:");
          Ada.Text_IO.Put_Line
            ("  (use ""git add <file>..."" to mark resolution)");
-         Print_Long_Entries (Result.Conflicted, Unmerged => True);
+         Print_Long_Entries
+           (Result.Conflicted, Unmerged => True, Prefix => Prefix);
          Ada.Text_IO.New_Line;
       end if;
 
@@ -1741,7 +1769,7 @@ package body Version.Status is
          Ada.Text_IO.Put_Line
            ("  (use ""git restore <file>..."" to discard changes in working "
             & "directory)");
-         Print_Long_Entries (Result.Changes, Unmerged => False);
+         Print_Long_Entries (Result.Changes, Unmerged => False, Prefix => Prefix);
          Ada.Text_IO.New_Line;
       end if;
 
@@ -1750,7 +1778,7 @@ package body Version.Status is
          Ada.Text_IO.Put_Line
            ("  (use ""git add <file>..."" to include in what will be "
             & "committed)");
-         Print_Long_Paths (Result.Untracked);
+         Print_Long_Paths (Result.Untracked, Prefix);
          Ada.Text_IO.New_Line;
       end if;
 
@@ -1759,7 +1787,7 @@ package body Version.Status is
          Ada.Text_IO.Put_Line
            ("  (use ""git add -f <file>..."" to include in what will be "
             & "committed)");
-         Print_Long_Paths (Result.Ignored);
+         Print_Long_Paths (Result.Ignored, Prefix);
          Ada.Text_IO.New_Line;
       end if;
 

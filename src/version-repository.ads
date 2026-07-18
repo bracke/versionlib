@@ -15,6 +15,15 @@ package Version.Repository is
      (Repo : Repository_Handle)
       return String;
 
+   function Prefix
+     (Repo : Repository_Handle)
+      return String;
+   --  git's "prefix": the current directory expressed relative to the
+   --  worktree root, slash-terminated ("sub/"), or "" when the current
+   --  directory is the root or lies outside it. Pathspecs are resolved
+   --  against it, and the commands that display paths for a human show them
+   --  relative to it.
+
    function Git_Dir
      (Repo : Repository_Handle)
       return String;

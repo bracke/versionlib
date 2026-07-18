@@ -271,6 +271,43 @@ package body Version.Repository is
       return Ada.Strings.Unbounded.To_String (Repo.Root_Path_Value);
    end Root_Path;
 
+   function Prefix (Repo : Repository_Handle) return String is
+      Root : constant String :=
+        Version.Files.Normalize_Separators (Root_Path (Repo));
+      Here : constant String :=
+        Version.Files.Normalize_Separators (Version.Files.Current_Directory);
+
+      Root_Last : Natural := Root'Last;
+   begin
+      --  Ignore any trailing slash on the root so the boundary test below is
+      --  about a real path separator, not punctuation.
+      while Root_Last > Root'First and then Root (Root_Last) = '/' loop
+         Root_Last := Root_Last - 1;
+      end loop;
+
+      declare
+         Trimmed : constant String := Root (Root'First .. Root_Last);
+      begin
+         if Here = Trimmed then
+            return "";
+         end if;
+
+         --  A directory is only under the root when the match ends on a
+         --  separator: a sibling like "/repo-backup" shares the prefix
+         --  "/repo" without being inside it.
+         if Here'Length > Trimmed'Length
+           and then Here (Here'First .. Here'First + Trimmed'Length - 1)
+                    = Trimmed
+           and then Here (Here'First + Trimmed'Length) = '/'
+         then
+            return
+              Here (Here'First + Trimmed'Length + 1 .. Here'Last) & "/";
+         end if;
+      end;
+
+      return "";
+   end Prefix;
+
    function Git_Dir
      (Repo : Repository_Handle)
       return String is
