@@ -28,6 +28,22 @@ package body Version.Maintenance.Tests is
 
    function Join (Left, Right : String) return String renames Version.Test_Support.Join;
 
+   --  True when the object can still be read, whether it is loose or has
+   --  been packed away by gc.
+   function Object_Readable
+     (Repo : Version.Repository.Repository_Handle;
+      Id   : Version.Objects.Hex_Object_Id) return Boolean
+   is
+      Obj : Version.Objects.Git_Object;
+      pragma Unreferenced (Obj);
+   begin
+      Obj := Version.Objects.Read_Object (Repo, Id);
+      return True;
+   exception
+      when others =>
+         return False;
+   end Object_Readable;
+
    function Object_File_Path
      (Root : String;
       Id   : Version.Objects.Hex_Object_Id)
@@ -1002,8 +1018,11 @@ package body Version.Maintenance.Tests is
          Assert
            (Ada.Directories.Exists (Remote_Lock),
             "gc should preserve stale remote ref lockfile");
+         --  gc packs reachable objects and removes the now-redundant loose
+         --  copies, as git's repack -d does, so the loose file is expected to
+         --  be gone. What must hold is that the object is still readable.
          Assert
-           (Ada.Directories.Exists (Object_Path) = Object_Existed,
+           (Object_Readable (Repo, Head_Id),
             "gc should not mutate reachable object storage around lockfiles");
       end Exercise;
    begin
@@ -1054,8 +1073,11 @@ package body Version.Maintenance.Tests is
          Assert
            (Ada.Directories.Exists (Remote_Log_Lock),
             "gc should preserve stale remote reflog lockfile");
+         --  gc packs reachable objects and removes the now-redundant loose
+         --  copies, as git's repack -d does, so the loose file is expected to
+         --  be gone. What must hold is that the object is still readable.
          Assert
-           (Ada.Directories.Exists (Object_Path) = Object_Existed,
+           (Object_Readable (Repo, Head_Id),
             "gc should not mutate reachable object storage around reflog lockfiles");
       end Exercise;
    begin

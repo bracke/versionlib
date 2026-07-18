@@ -277,6 +277,38 @@ package body Version.Maintenance is
       Verify_Temporary_Pack;
       Publish_Temporary_Pack;
 
+      --  git's repack -d: once the objects are safely in the new pack, the
+      --  loose copies are redundant and are removed. Without this the
+      --  repository never shrinks -- `count-objects` kept reporting every
+      --  object as both loose and packed, with prune-packable equal to the
+      --  whole object count. Only objects verified present in the pack above
+      --  are removed.
+      declare
+         Published : Version.Pack_Index_Cache.Cache;
+      begin
+         Version.Pack_Index_Cache.Load_Index
+           (Item       => Published,
+            Index_Path => Idx_Path,
+            Pack_Path  => Pack_Path,
+            Algorithm  => Version.Repository.Algorithm (Repo));
+
+         if not Reachable.Is_Empty then
+            for I in Reachable.First_Index .. Reachable.Last_Index loop
+               if Version.Pack_Index_Cache.Contains
+                    (Published, Reachable.Element (I))
+               then
+                  Version.Files.Delete_File_If_Exists
+                    (Version.Objects.Loose_Object_Path
+                       (Repo, Reachable.Element (I)));
+               end if;
+            end loop;
+         end if;
+      exception
+         --  A failure to prune leaves a correct, if larger, repository.
+         when others =>
+            null;
+      end;
+
       Result.Object_Count := Natural (Reachable.Length);
       return Result;
    exception
