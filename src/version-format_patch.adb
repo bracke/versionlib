@@ -127,11 +127,16 @@ package body Version.Format_Patch is
       Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
         Version.Objects.Commit_Parent_Ids (Obj);
 
+      --  format-patch implies git's --binary, so a binary change travels as
+      --  an appliable patch rather than a "differ" line.
+      Bin_Opts : constant Version.Diff.Diff_Options :=
+        (Binary_Patch => True, others => <>);
+
       Diff : constant String :=
         (if Parents.Is_Empty
-         then Version.Diff.Diff_Root_Commit (Repo, Commit_Id)
+         then Version.Diff.Diff_Root_Commit (Repo, Commit_Id, Bin_Opts)
          else Version.Diff.Diff_Commits
-                (Repo, Parents.First_Element, Commit_Id));
+                (Repo, Parents.First_Element, Commit_Id, Bin_Opts));
 
       --  git format-patch puts a diffstat + summary block between the "---"
       --  line and the patch body (the same content as `git diff --stat

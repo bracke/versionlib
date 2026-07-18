@@ -19,8 +19,11 @@ with Version.Object_Cache;
 with Version.Ref_Cache;
 with Version.Sparse;
 with Version.Rename_Detect;
+with Version.Compression;
+with Interfaces; use type Interfaces.Unsigned_32;
 with Version.Config;
 with Ada.Characters.Handling;
+with Ada.Environment_Variables;
 with Version.Tree_Cache;
 
 package body Version.Diff is
@@ -472,6 +475,81 @@ package body Version.Diff is
       return To_String (Result);
    end Unified_File_Diff;
 
+   --  git's base85 alphabet (base85.c).
+   Base85_Alphabet : constant String :=
+     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+     & "abcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+
+   --  git's emit_binary_diff_body(): the deflated blob, base85 encoded in
+   --  lines of at most 52 bytes, each prefixed by a length character.
+   function Base85_Lines (Data : String) return String is
+      LF     : constant Character := Character'Val (10);
+      Result : Unbounded_String;
+      Pos    : Natural := Data'First;
+   begin
+      while Pos <= Data'Last loop
+         declare
+            Bytes : constant Natural :=
+              Natural'Min (52, Data'Last - Pos + 1);
+            Line  : Unbounded_String;
+            I     : Natural := Pos;
+         begin
+            --  Length prefix: 'A'..'Z' for 1..26 bytes, 'a'..'z' beyond.
+            Append
+              (Line,
+               (if Bytes <= 26
+                then Character'Val (Character'Pos ('A') + Bytes - 1)
+                else Character'Val (Character'Pos ('a') + Bytes - 27)));
+
+            --  Five base85 digits per (up to) four big-endian bytes.
+            while I <= Pos + Bytes - 1 loop
+               declare
+                  Acc   : Interfaces.Unsigned_32 := 0;
+                  Shift : Integer := 24;
+                  Group : String (1 .. 5);
+               begin
+                  while Shift >= 0 loop
+                     if I <= Pos + Bytes - 1 then
+                        Acc := Acc or Interfaces.Shift_Left
+                          (Interfaces.Unsigned_32
+                             (Character'Pos (Data (I))), Shift);
+                        I := I + 1;
+                     end if;
+                     exit when I > Pos + Bytes - 1 and then Shift <= 24;
+                     Shift := Shift - 8;
+                  end loop;
+
+                  for K in reverse Group'Range loop
+                     Group (K) :=
+                       Base85_Alphabet
+                         (Base85_Alphabet'First
+                          + Natural (Acc mod 85));
+                     Acc := Acc / 85;
+                  end loop;
+                  Append (Line, Group);
+               end;
+            end loop;
+
+            Append (Result, To_String (Line) & LF);
+            Pos := Pos + Bytes;
+         end;
+      end loop;
+
+      return To_String (Result);
+   end Base85_Lines;
+
+   --  One direction of git's `GIT binary patch`: we always emit the "literal"
+   --  form (git also considers a delta and keeps whichever is smaller; both
+   --  are valid input to `git apply`). The deflated bytes are not expected to
+   --  match git's -- a zlib stream is not canonical, only its content is.
+   function Binary_Patch_Body (Content : String) return String is
+      LF : constant Character := Character'Val (10);
+   begin
+      return "literal " & Count_Image (Content'Length) & LF
+        & Base85_Lines (Version.Compression.Deflate_Zlib (Content))
+        & LF;
+   end Binary_Patch_Body;
+
    function One_File_Diff
      (Repo        : Version.Repository.Repository_Handle;
       Cache       : in out Version.Object_Cache.Object_Cache;
@@ -485,7 +563,8 @@ package body Version.Diff is
       New_Working : Boolean;
       Context     : Natural;
       Old_Path     : String := "";
-      Rename_Score : Natural := 0) return String
+      Rename_Score : Natural := 0;
+      Binary_Patch : Boolean := False) return String
    is
       Head_A : constant String :=
         (if Old_Path'Length > 0 then Old_Path else Path);
@@ -542,43 +621,60 @@ package body Version.Diff is
             declare
                R : Unbounded_String;
             begin
-               Append_Line (R, "diff --git a/" & Head_A & " b/" & Path);
-               if Old_Path'Length > 0 then
-                  Append_Line
-                    (R,
-                     "similarity index "
-                     & Count_Image
-                         (Version.Rename_Detect.Similarity_Index
-                            (Rename_Score))
-                     & "%");
-                  Append_Line (R, "rename from " & Old_Path);
-                  Append_Line (R, "rename to " & Path);
-                  Append_Line
-                    (R,
-                     "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id)
-                     & (if Eff_Old_Mode = Eff_New_Mode
-                        then " " & Eff_New_Mode else ""));
-               elsif not Old_Present then
-                  Append_Line (R, "new file mode " & Eff_New_Mode);
-                  Append_Line
-                    (R, "index " & Abbrev (Short_Zero) & ".." & Abbrev (New_Id));
-               elsif not New_Present then
-                  Append_Line (R, "deleted file mode " & Eff_Old_Mode);
-                  Append_Line
-                    (R, "index " & Abbrev (Old_Id) & ".." & Abbrev (Short_Zero));
+               --  git prints the unabbreviated index with --binary: the
+               --  patch has to name the blobs exactly.
+               declare
+                  function Ix (Id : Version.Objects.Hex_Object_Id)
+                    return String
+                  is (if Binary_Patch then Version.Objects.To_String (Id)
+                      else Abbrev (Id));
+               begin
+                  Append_Line (R, "diff --git a/" & Head_A & " b/" & Path);
+                  if Old_Path'Length > 0 then
+                     Append_Line
+                       (R,
+                        "similarity index "
+                        & Count_Image
+                            (Version.Rename_Detect.Similarity_Index
+                               (Rename_Score))
+                        & "%");
+                     Append_Line (R, "rename from " & Old_Path);
+                     Append_Line (R, "rename to " & Path);
+                     Append_Line
+                       (R,
+                        "index " & Ix (Old_Id) & ".." & Ix (New_Id)
+                        & (if Eff_Old_Mode = Eff_New_Mode
+                           then " " & Eff_New_Mode else ""));
+                  elsif not Old_Present then
+                     Append_Line (R, "new file mode " & Eff_New_Mode);
+                     Append_Line
+                       (R, "index " & Ix (Short_Zero) & ".." & Ix (New_Id));
+                  elsif not New_Present then
+                     Append_Line (R, "deleted file mode " & Eff_Old_Mode);
+                     Append_Line
+                       (R, "index " & Ix (Old_Id) & ".." & Ix (Short_Zero));
+                  else
+                     Append_Line
+                       (R,
+                        "index " & Ix (Old_Id) & ".." & Ix (New_Id)
+                        & " " & Eff_New_Mode);
+                  end if;
+               end;
+               if Binary_Patch then
+                  --  git's `--binary` (implied by format-patch): the full
+                  --  index, then the forward and reverse literal blocks.
+                  Append_Line (R, "GIT binary patch");
+                  Append (R, Binary_Patch_Body (New_Text));
+                  Append (R, Binary_Patch_Body (Old_Text));
                else
                   Append_Line
                     (R,
-                     "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id)
-                     & " " & Eff_New_Mode);
+                     "Binary files "
+                     & (if Old_Present then "a/" & Head_A else "/dev/null")
+                     & " and "
+                     & (if New_Present then "b/" & Path else "/dev/null")
+                     & " differ");
                end if;
-               Append_Line
-                 (R,
-                  "Binary files "
-                  & (if Old_Present then "a/" & Head_A else "/dev/null")
-                  & " and "
-                  & (if New_Present then "b/" & Path else "/dev/null")
-                  & " differ");
                return To_String (R);
             end;
          end if;
@@ -1067,6 +1163,38 @@ package body Version.Diff is
       Total_Ins : Natural := 0;
       Total_Del : Natural := 0;
       LF        : constant Character := Character'Val (10);
+
+      Max_Change : Natural := 0;
+      Bin_W      : Natural := 0;
+      Graph_W    : Integer := 0;
+      Width      : Integer;
+
+      --  git's term_columns(): $COLUMNS when it parses as a positive number,
+      --  otherwise 80 (the ioctl only applies when stdout is a terminal, and
+      --  every byte-compared run is piped).
+      function Term_Columns return Integer is
+         Text : constant String :=
+           (if Ada.Environment_Variables.Exists ("COLUMNS")
+            then Ada.Environment_Variables.Value ("COLUMNS") else "");
+      begin
+         if Text'Length > 0 then
+            declare
+               N : constant Integer := Integer'Value (Text);
+            begin
+               if N > 0 then
+                  return N;
+               end if;
+            end;
+         end if;
+         return 80;
+      exception
+         when Constraint_Error =>
+            return 80;
+      end Term_Columns;
+
+      --  git's scale_linear(): at least one mark whenever there is a change.
+      function Scale_Linear (It, W, Max : Natural) return Natural is
+        (if It = 0 then 0 else 1 + (It * (W - 1)) / Max);
    begin
       if Files.Is_Empty then
          return "";
@@ -1077,41 +1205,124 @@ package body Version.Diff is
             F : constant Stat_Entry := Files.Element (I);
          begin
             Name_W := Natural'Max (Name_W, Stat_Name (F)'Length);
-            if not F.Binary then
-               Count_W :=
-                 Natural'Max (Count_W, Count_Image (F.Ins + F.Del)'Length);
+            if F.Binary then
+               --  "Bin XXX -> YYY bytes" is not scaled, but it does set the
+               --  width the graph column has to accommodate.
+               Bin_W :=
+                 Natural'Max
+                   (Bin_W,
+                    14 + Count_Image (F.Old_Size)'Length
+                    + Count_Image (F.New_Size)'Length);
+               Count_W := Natural'Max (Count_W, 3);
+            else
+               Max_Change := Natural'Max (Max_Change, F.Ins + F.Del);
                Total_Ins := Total_Ins + F.Ins;
                Total_Del := Total_Del + F.Del;
             end if;
          end;
       end loop;
 
+      Count_W :=
+        Natural'Max (Count_W, Count_Image (Max_Change)'Length);
+
+      --  git's width budget: name + number + 6 constant columns + graph.
+      Width := Term_Columns;
+      if Width < 16 + 6 + Count_W then
+         Width := 16 + 6 + Count_W;
+      end if;
+
+      Graph_W :=
+        (if Max_Change + 4 > Bin_W then Max_Change else Bin_W - 4);
+
+      if Name_W + Count_W + 6 + Graph_W > Width then
+         if Graph_W > Width * 3 / 8 - Count_W - 6 then
+            Graph_W := Width * 3 / 8 - Count_W - 6;
+            if Graph_W < 6 then
+               Graph_W := 6;
+            end if;
+         end if;
+         if Name_W > Width - Count_W - 6 - Graph_W then
+            Name_W := Natural'Max (0, Width - Count_W - 6 - Graph_W);
+         else
+            Graph_W := Width - Count_W - 6 - Name_W;
+         end if;
+      end if;
+
       if Show_Stat then
          for I in Files.First_Index .. Files.Last_Index loop
             declare
-               F        : constant Stat_Entry := Files.Element (I);
-               Name     : constant String := Stat_Name (F);
+               F    : constant Stat_Entry := Files.Element (I);
+               Full : constant String := Stat_Name (F);
+
+               --  git elides the head of an over-long name as "...", cutting
+               --  back to a path separator when there is one.
+               function Display_Name return String is
+                  Budget : constant Integer := Name_W - 3;
+                  Cut    : Integer;
+               begin
+                  if Full'Length <= Name_W then
+                     return Full;
+                  end if;
+                  Cut := Full'Last - Integer'Max (Budget, 0) + 1;
+                  for J in Cut .. Full'Last loop
+                     if Full (J) = '/' then
+                        return "..." & Full (J .. Full'Last);
+                     end if;
+                  end loop;
+                  return "..." & Full (Cut .. Full'Last);
+               end Display_Name;
+
+               Name     : constant String := Display_Name;
                Pad_Name : constant String :=
-                 Name & Repeat (' ', Name_W - Name'Length);
+                 Name & Repeat (' ', Integer'Max (0, Name_W - Name'Length));
             begin
                if F.Binary then
-                  Append
-                    (Result,
-                     " " & Pad_Name & " | Bin "
-                     & Count_Image (F.Old_Size) & " -> "
-                     & Count_Image (F.New_Size) & " bytes" & LF);
-               else
                   declare
-                     Num : constant String := Count_Image (F.Ins + F.Del);
+                     Bin : constant String := "Bin";
                   begin
                      Append
                        (Result,
                         " " & Pad_Name & " | "
-                        & Repeat (' ', Count_W - Num'Length) & Num
+                        & Repeat (' ', Integer'Max (0, Count_W - Bin'Length))
+                        & Bin & " "
+                        & Count_Image (F.Old_Size) & " -> "
+                        & Count_Image (F.New_Size) & " bytes" & LF);
+                  end;
+               else
+                  declare
+                     Num : constant String := Count_Image (F.Ins + F.Del);
+                     Add : Natural := F.Ins;
+                     Del_N : Natural := F.Del;
+                  begin
+                     --  git scales the bar graph into the graph column when
+                     --  the largest change does not fit.
+                     if Graph_W <= Max_Change and then Max_Change > 0 then
+                        declare
+                           Total : Natural :=
+                             Scale_Linear (Add + Del_N, Graph_W, Max_Change);
+                        begin
+                           if Total < 2 and then Add > 0 and then Del_N > 0 then
+                              Total := 2;
+                           end if;
+                           if Add < Del_N then
+                              Add := Scale_Linear (Add, Graph_W, Max_Change);
+                              Del_N := Total - Add;
+                           else
+                              Del_N := Scale_Linear (Del_N, Graph_W, Max_Change);
+                              Add := Total - Del_N;
+                           end if;
+                        end;
+                     end if;
+
+                     Append
+                       (Result,
+                        " " & Pad_Name & " | "
+                        & Repeat (' ', Integer'Max (0, Count_W - Num'Length))
+                        & Num
                         --  git separates the count from the bars only when
                         --  there are bars (a pure rename shows a bare "0").
                         & (if F.Ins + F.Del > 0 then " " else "")
-                        & Repeat ('+', F.Ins) & Repeat ('-', F.Del) & LF);
+                        & Repeat ('+', Add) & Repeat ('-', Del_N) & LF);
                   end;
                end if;
             end;
@@ -1201,7 +1412,8 @@ package body Version.Diff is
       Name_Status : Boolean := False;
       Detect_Renames : Boolean := False;
       Rename_Score   : Natural := 0;
-      Rename_Limit   : Natural := 0) return String
+      Rename_Limit   : Natural := 0;
+      Binary_Patch   : Boolean := False) return String
    is
       HT       : constant Character := Character'Val (9);
       NL       : constant Character := Character'Val (10);
@@ -1458,7 +1670,8 @@ package body Version.Diff is
                         Context     => Context,
                         Old_Path     =>
                           (if Is_Rename_Dest then Rn_Path else ""),
-                        Rename_Score => Rn.Score));
+                        Rename_Score => Rn.Score,
+                        Binary_Patch => Binary_Patch));
                end if;
             end;
 
@@ -1502,7 +1715,8 @@ package body Version.Diff is
                  Name_Status => Options.Name_Status,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
-                 Rename_Limit   => Options.Rename_Limit);
+                 Rename_Limit   => Options.Rename_Limit,
+                 Binary_Patch   => Options.Binary_Patch);
          end;
       end;
    end Diff_Working_Tree;
@@ -1543,7 +1757,8 @@ package body Version.Diff is
                  Name_Status => Options.Name_Status,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
-                 Rename_Limit   => Options.Rename_Limit);
+                 Rename_Limit   => Options.Rename_Limit,
+                 Binary_Patch   => Options.Binary_Patch);
          end;
       end;
    end Diff_Working_Tree;
@@ -1577,7 +1792,8 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
-              Rename_Limit   => Options.Rename_Limit);
+              Rename_Limit   => Options.Rename_Limit,
+              Binary_Patch   => Options.Binary_Patch);
       end;
    end Diff_Staged;
 
@@ -1615,7 +1831,8 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
-              Rename_Limit   => Options.Rename_Limit);
+              Rename_Limit   => Options.Rename_Limit,
+              Binary_Patch   => Options.Binary_Patch);
       end;
    end Diff_Staged;
 
@@ -1664,7 +1881,8 @@ package body Version.Diff is
            Name_Status => Options.Name_Status,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
-           Rename_Limit   => Options.Rename_Limit);
+           Rename_Limit   => Options.Rename_Limit,
+           Binary_Patch   => Options.Binary_Patch);
    end Diff_Tree_Vs_Working;
 
    function Diff_Tree_Vs_Index
@@ -1691,7 +1909,8 @@ package body Version.Diff is
            Name_Status => Options.Name_Status,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
-           Rename_Limit   => Options.Rename_Limit);
+           Rename_Limit   => Options.Rename_Limit,
+           Binary_Patch   => Options.Binary_Patch);
    end Diff_Tree_Vs_Index;
 
    function Diff_Commits
@@ -1730,7 +1949,8 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
-              Rename_Limit   => Options.Rename_Limit);
+              Rename_Limit   => Options.Rename_Limit,
+              Binary_Patch   => Options.Binary_Patch);
       end;
    end Diff_Commits;
 
@@ -1779,7 +1999,8 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
-              Rename_Limit   => Options.Rename_Limit);
+              Rename_Limit   => Options.Rename_Limit,
+              Binary_Patch   => Options.Binary_Patch);
       end;
    end Diff_Commits;
 
@@ -1813,7 +2034,8 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
-              Rename_Limit   => Options.Rename_Limit);
+              Rename_Limit   => Options.Rename_Limit,
+              Binary_Patch   => Options.Binary_Patch);
       end;
    end Diff_Root_Commit;
 
@@ -1854,7 +2076,8 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
-              Rename_Limit   => Options.Rename_Limit);
+              Rename_Limit   => Options.Rename_Limit,
+              Binary_Patch   => Options.Binary_Patch);
       end;
    end Diff_Root_Commit;
 

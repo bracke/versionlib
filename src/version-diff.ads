@@ -17,6 +17,7 @@ package Version.Diff is
       Detect_Renames : Rename_Detection := Renames_Default;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
+      Binary_Patch   : Boolean := False;
    end record;
    --  Name_Only lists just the changed paths; Name_Status prefixes each with
    --  git's status letter (A/D/M/R) and a tab. Both suppress the patch body.
@@ -31,6 +32,11 @@ package Version.Diff is
    --  Rename_Score is the minimum similarity, in git's 0 .. 60000 scale
    --  (`-M<n>`); 0 takes git's default of 50%. Rename_Limit caps the
    --  detection matrix (`diff.renameLimit`); 0 takes git's default of 1000.
+   --  Binary_Patch emits git's `GIT binary patch` block for a binary file
+   --  (git's `--binary`, which `format-patch` implies) instead of the
+   --  "Binary files ... differ" line, together with the full index line. The
+   --  deflated payload is not byte-identical to git's -- a zlib stream is not
+   --  canonical -- but decodes to the same bytes and applies with `git am`.
 
    function Diff_Working_Tree
      (Repo    : Version.Repository.Repository_Handle;
