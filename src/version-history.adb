@@ -1,11 +1,13 @@
 with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Ordered_Sets;
 with Ada.IO_Exceptions;
+with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
 with Version.Object_Cache;
 with Version.Objects; use Version.Objects;
 with Version.Hash;
 with Version.Shallow_Cache;
+with Version.Tree_Cache;
 
 package body Version.History is
 
@@ -382,13 +384,20 @@ package body Version.History is
         (Key_Type     => Version.Objects.Object_Id_Storage,
          Element_Type => Seen_State);
 
-      Objects : Version.Object_Cache.Object_Cache;
-      Shallow : Version.Shallow_Cache.Shallow_Cache;
+      package Signature_Maps is new Ada.Containers.Ordered_Maps
+        (Key_Type     => Version.Objects.Object_Id_Storage,
+         Element_Type => Unbounded_String);
+
+      Objects    : Version.Object_Cache.Object_Cache;
+      Shallow    : Version.Shallow_Cache.Shallow_Cache;
+      Trees      : Version.Tree_Cache.Tree_Cache;
+      Signatures : Signature_Maps.Map;
 
       Queue   : Queue_Sets.Set;
       Seen    : Seen_Maps.Map;
       Seq     : Natural := 0;
       Live    : Natural := 0;   --  interesting entries still queued
+      Skipped : Natural := 0;
       Result  : Commit_Id_Vectors.Vector;
 
       function Commit_Time
@@ -438,6 +447,60 @@ package body Version.History is
              Id            => Id));
          Seq := Seq + 1;
       end Push;
+
+      Path_Limited : constant Boolean := not Options.Paths.Is_Empty;
+
+      function Under_Limit (Path : String) return Boolean is
+      begin
+         --  A limit names a file, or a directory whose subtree it covers.
+         for Limit of Options.Paths loop
+            if Path = Limit
+              or else (Path'Length > Limit'Length
+                       and then Path (Path'First
+                                      .. Path'First + Limit'Length - 1) = Limit
+                       and then Path (Path'First + Limit'Length) = '/')
+            then
+               return True;
+            end if;
+         end loop;
+
+         return False;
+      end Under_Limit;
+
+      function Signature
+        (Id : Version.Objects.Hex_Object_Id) return Unbounded_String
+      is
+         Cur  : constant Signature_Maps.Cursor := Signatures.Find (Id);
+         Text : Unbounded_String;
+      begin
+         if Signature_Maps.Has_Element (Cur) then
+            return Signature_Maps.Element (Cur);
+         end if;
+
+         --  What the commit's tree holds under the limits. Two commits with
+         --  equal signatures are TREESAME in git's sense.
+         declare
+            Commit : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object (Repo, Objects, Id);
+         begin
+            for E of Version.Tree_Cache.Flatten_Tree
+              (Repo, Trees, Version.Objects.Commit_Tree_Id (Commit))
+            loop
+               if Under_Limit (To_String (E.Path)) then
+                  Append (Text, E.Path);
+                  Append (Text, Character'Val (0));
+                  Append (Text, Version.Objects.To_String (E.Id));
+                  Append (Text, Character'Val (10));
+               end if;
+            end loop;
+         exception
+            when Ada.IO_Exceptions.Data_Error | Ada.IO_Exceptions.Name_Error =>
+               null;
+         end;
+
+         Signatures.Insert (Id, Text);
+         return Text;
+      end Signature;
    begin
       for Id of Exclude loop
          Push (Id, Uninteresting => True);
@@ -451,8 +514,9 @@ package body Version.History is
       while Live > 0 and then not Queue.Is_Empty loop
          declare
             Item : constant Queue_Entry := Queue.First_Element;
-            Parents : Commit_Id_Vectors.Vector;
-            Emit    : Boolean;
+            Parents     : Commit_Id_Vectors.Vector;
+            Emit        : Boolean;
+            Same_Parent : Integer;
          begin
             Queue.Delete_First;
 
@@ -473,19 +537,62 @@ package body Version.History is
               not Item.Uninteresting
               and then not Seen.Element (Item.Id).Uninteresting
               and then not (Options.No_Merges
-                            and then Natural (Parents.Length) > 1);
+                            and then Natural (Parents.Length) > 1)
+              and then Natural (Parents.Length) >= Options.Min_Parents
+              and then (Options.Max_Parents = No_Parent_Limit
+                        or else Natural (Parents.Length)
+                                <= Options.Max_Parents);
+
+            --  git's default history simplification. A commit that leaves the
+            --  limited paths exactly as some parent left them is not itself a
+            --  change to them, so it is dropped -- and for a merge, only that
+            --  parent is followed, which is what makes a side branch that
+            --  never touched the paths vanish from the result.
+            Same_Parent := -1;
+
+            if Path_Limited and then not Item.Uninteresting then
+               declare
+                  Mine : constant Unbounded_String := Signature (Item.Id);
+               begin
+                  for I in Parents.First_Index .. Parents.Last_Index loop
+                     if Signature (Parents.Element (I)) = Mine then
+                        Same_Parent := I;
+                        exit;
+                     end if;
+                  end loop;
+
+                  if Parents.Is_Empty then
+                     --  A root commit counts as a change when the paths
+                     --  exist in it at all.
+                     Emit := Emit and then Mine /= Null_Unbounded_String;
+                  else
+                     Emit := Emit and then Same_Parent < 0;
+                  end if;
+               end;
+            end if;
 
             if Emit then
-               Result.Append (Item.Id);
+               --  git drops the first Skip selected commits, so the count cap
+               --  below applies to what survives the skip.
+               if Skipped < Options.Skip then
+                  Skipped := Skipped + 1;
+               else
+                  Result.Append (Item.Id);
+               end if;
             end if;
 
             exit when Options.Max_Count > 0
               and then Natural (Result.Length) >= Options.Max_Count;
 
-            for I in Parents.First_Index .. Parents.Last_Index loop
-               exit when Options.First_Parent and then I > Parents.First_Index;
-               Push (Parents.Element (I), Item.Uninteresting);
-            end loop;
+            if Same_Parent >= 0 then
+               Push (Parents.Element (Same_Parent), Item.Uninteresting);
+            else
+               for I in Parents.First_Index .. Parents.Last_Index loop
+                  exit when Options.First_Parent
+                    and then I > Parents.First_Index;
+                  Push (Parents.Element (I), Item.Uninteresting);
+               end loop;
+            end if;
          end;
       end loop;
 
@@ -502,6 +609,229 @@ package body Version.History is
 
       return Result;
    end Rev_List;
+
+   function Apply_Limits
+     (Commits : Commit_Id_Vectors.Vector;
+      Options : Rev_List_Options)
+      return Commit_Id_Vectors.Vector
+   is
+      Result : Commit_Id_Vectors.Vector;
+      Kept   : Natural := 0;
+   begin
+      for I in Commits.First_Index .. Commits.Last_Index loop
+         exit when Options.Max_Count > 0 and then Kept >= Options.Max_Count;
+
+         if I >= Commits.First_Index + Options.Skip then
+            Result.Append (Commits.Element (I));
+            Kept := Kept + 1;
+         end if;
+      end loop;
+
+      if Options.Oldest_First then
+         declare
+            Reversed : Commit_Id_Vectors.Vector;
+         begin
+            for I in reverse Result.First_Index .. Result.Last_Index loop
+               Reversed.Append (Result.Element (I));
+            end loop;
+
+            return Reversed;
+         end;
+      end if;
+
+      return Result;
+   end Apply_Limits;
+
+   function Topological_Order
+     (Repo     : Version.Repository.Repository_Handle;
+      Selected : Commit_Id_Vectors.Vector)
+      return Commit_Id_Vectors.Vector
+   is
+      package Index_Maps is new Ada.Containers.Ordered_Maps
+        (Key_Type     => Version.Objects.Object_Id_Storage,
+         Element_Type => Natural);
+
+      Position : Index_Maps.Map;   --  id -> its slot in Selected
+      Children : array (0 .. Natural'Max (Natural (Selected.Length), 1) - 1)
+                   of Natural := (others => 0);
+      Emitted  : array (Children'Range) of Boolean := (others => False);
+
+      Objects : Version.Object_Cache.Object_Cache;
+      Shallow : Version.Shallow_Cache.Shallow_Cache;
+
+      Stack  : Commit_Id_Vectors.Vector;
+      Result : Commit_Id_Vectors.Vector;
+
+      function Parents_Of (Id : Version.Objects.Hex_Object_Id)
+         return Commit_Id_Vectors.Vector
+      is
+      begin
+         return Parent_Commits
+           (Repo => Repo, Objects => Objects, Shallow => Shallow,
+            Commit_Id => Id);
+      end Parents_Of;
+   begin
+      if Selected.Is_Empty then
+         return Result;
+      end if;
+
+      for I in Selected.First_Index .. Selected.Last_Index loop
+         Position.Include (Selected.Element (I), I);
+      end loop;
+
+      --  Count, for each selected commit, how many selected commits name it
+      --  as a parent. Those are the children that must come out first.
+      for Id of Selected loop
+         for P of Parents_Of (Id) loop
+            declare
+               Cur : constant Index_Maps.Cursor := Position.Find (P);
+            begin
+               if Index_Maps.Has_Element (Cur) then
+                  Children (Index_Maps.Element (Cur)) :=
+                    Children (Index_Maps.Element (Cur)) + 1;
+               end if;
+            end;
+         end loop;
+      end loop;
+
+      --  Seed with the commits nothing selected points at, oldest last so the
+      --  newest is popped first.
+      for I in reverse Selected.First_Index .. Selected.Last_Index loop
+         if Children (I) = 0 then
+            Stack.Append (Selected.Element (I));
+         end if;
+      end loop;
+
+      while not Stack.Is_Empty loop
+         declare
+            Id  : constant Version.Objects.Object_Id_Storage :=
+              Stack.Last_Element;
+            Idx : constant Natural := Position.Element (Id);
+         begin
+            Stack.Delete_Last;
+
+            if not Emitted (Idx) then
+               Emitted (Idx) := True;
+               Result.Append (Id);
+
+               for P of Parents_Of (Id) loop
+                  declare
+                     Cur : constant Index_Maps.Cursor := Position.Find (P);
+                  begin
+                     if Index_Maps.Has_Element (Cur) then
+                        declare
+                           PI : constant Natural := Index_Maps.Element (Cur);
+                        begin
+                           Children (PI) := Children (PI) - 1;
+
+                           --  LIFO: the parent that just became ready is
+                           --  taken next, so a side branch stays contiguous.
+                           if Children (PI) = 0 then
+                              Stack.Append (P);
+                           end if;
+                        end;
+                     end if;
+                  end;
+               end loop;
+            end if;
+         end;
+      end loop;
+
+      return Result;
+   end Topological_Order;
+
+   function Object_List
+     (Repo     : Version.Repository.Repository_Handle;
+      Commits  : Commit_Id_Vectors.Vector;
+      Excluded : Commit_Id_Vectors.Vector := Commit_Id_Vectors.Empty_Vector)
+      return Named_Object_Vectors.Vector
+   is
+      Result        : Named_Object_Vectors.Vector;
+      Uninteresting : Object_Id_Sets.Set;
+      Seen          : Object_Id_Sets.Set;
+      Objects       : Version.Object_Cache.Object_Cache;
+
+      procedure Walk_Tree
+        (Tree_Id : Version.Objects.Hex_Object_Id;
+         Prefix  : String)
+      is
+      begin
+         if Uninteresting.Contains (Tree_Id)
+           or else Seen.Contains (Tree_Id)
+         then
+            return;
+         end if;
+
+         Seen.Include (Tree_Id);
+         Result.Append
+           (Named_Object'(Id   => Tree_Id,
+                          Name => To_Unbounded_String (Prefix)));
+
+         for E of Version.Objects.Tree_Entries (Repo, Tree_Id) loop
+            declare
+               Name : constant String :=
+                 (if Prefix = "" then To_String (E.Path)
+                  else Prefix & "/" & To_String (E.Path));
+            begin
+               case E.Kind is
+                  when Version.Objects.Tree_Directory =>
+                     Walk_Tree (E.Id, Name);
+
+                  when Version.Objects.Tree_Blob =>
+                     if not Uninteresting.Contains (E.Id)
+                       and then not Seen.Contains (E.Id)
+                     then
+                        Seen.Include (E.Id);
+                        Result.Append
+                          (Named_Object'(Id   => E.Id,
+                                         Name => To_Unbounded_String (Name)));
+                     end if;
+
+                  when Version.Objects.Tree_Gitlink =>
+                     --  A gitlink names a commit in another repository, which
+                     --  this one does not have; git does not list it either.
+                     null;
+               end case;
+            end;
+         end loop;
+      exception
+         when Ada.IO_Exceptions.Data_Error | Ada.IO_Exceptions.Name_Error =>
+            null;
+      end Walk_Tree;
+
+      function Root_Tree (Commit : Version.Objects.Hex_Object_Id)
+         return Version.Objects.Hex_Object_Id
+      is
+      begin
+         return Version.Objects.Commit_Tree_Id
+           (Version.Object_Cache.Read_Object (Repo, Objects, Commit));
+      end Root_Tree;
+   begin
+      --  Everything the excluded side already has is uninteresting, so a
+      --  range lists only what it introduced.
+      for Id of Excluded loop
+         for O of Reachable_Objects (Repo, Id) loop
+            Uninteresting.Include (O);
+         end loop;
+      end loop;
+
+      --  git prints every selected commit first, then the object graph.
+      for Id of Commits loop
+         Result.Append
+           (Named_Object'(Id => Id, Name => Null_Unbounded_String));
+      end loop;
+
+      for Id of Commits loop
+         begin
+            Walk_Tree (Root_Tree (Id), "");
+         exception
+            when Ada.IO_Exceptions.Data_Error | Ada.IO_Exceptions.Name_Error =>
+               null;
+         end;
+      end loop;
+
+      return Result;
+   end Object_List;
 
    function Reachable_Objects
      (Repo    : Version.Repository.Repository_Handle;

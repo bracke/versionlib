@@ -496,11 +496,25 @@ package body Version.Log is
       return Result;
    end Collect_History;
 
-   function Log_From_Commit
+   function To_Commit_List
+     (Ids : Id_Vectors.Vector)
+      return Version.History.Commit_Id_Vectors.Vector
+   is
+      Result : Version.History.Commit_Id_Vectors.Vector;
+   begin
+      --  The internal walker still yields its own id vector; the renderers
+      --  now take the shared one.
+      for Id of Ids loop
+         Result.Append (Version.Objects.To_Object_Id (To_String (Id)));
+      end loop;
+
+      return Result;
+   end To_Commit_List;
+
+   function Log_List_Text
      (Repo           : Version.Repository.Repository_Handle;
-      Commit_Id      : Version.Objects.Hex_Object_Id;
+      Commits        : Version.History.Commit_Id_Vectors.Vector;
       Show_Signature : Boolean := False;
-      Max_Count      : Natural := 0;
       Stat           : Boolean := False;
       Patch          : Boolean := False;
       Context        : Natural := 3) return String
@@ -508,13 +522,9 @@ package body Version.Log is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       First   : Boolean := True;
-      History : constant Id_Vectors.Vector :=
-        Collect_History (Repo, Objects, Commit_Id, Max_Count);
    begin
-      for Entry_Id of History loop
+      for Current_Id of Commits loop
          declare
-            Current_Id : constant Version.Objects.Hex_Object_Id :=
-              Version.Objects.To_Object_Id (To_String (Entry_Id));
             Obj        : constant Version.Objects.Git_Object :=
               Version.Object_Cache.Read_Object
                 (Repo => Repo, Cache => Objects, Id => Current_Id);
@@ -566,31 +576,52 @@ package body Version.Log is
       end loop;
 
       return To_String (Result);
+   end Log_List_Text;
+
+   function Log_From_Commit
+     (Repo           : Version.Repository.Repository_Handle;
+      Commit_Id      : Version.Objects.Hex_Object_Id;
+      Show_Signature : Boolean := False;
+      Max_Count      : Natural := 0;
+      Stat           : Boolean := False;
+      Patch          : Boolean := False;
+      Context        : Natural := 3) return String
+   is
+      Objects : Version.Object_Cache.Object_Cache;
+   begin
+      return Log_List_Text
+        (Repo, To_Commit_List (Collect_History
+                                 (Repo, Objects, Commit_Id, Max_Count)),
+         Show_Signature, Stat, Patch, Context);
    end Log_From_Commit;
+
+   function Log_Oneline_List_Text
+     (Repo    : Version.Repository.Repository_Handle;
+      Commits : Version.History.Commit_Id_Vectors.Vector) return String
+   is
+      Result  : Unbounded_String;
+      Objects : Version.Object_Cache.Object_Cache;
+   begin
+      for Current_Id of Commits loop
+         Append_Line
+           (Result,
+            Format_Commit_Oneline_With_Cache
+              (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
+      end loop;
+
+      return To_String (Result);
+   end Log_Oneline_List_Text;
 
    function Log_Oneline_From_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
       Max_Count : Natural := 0) return String
    is
-      Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
-      History : constant Id_Vectors.Vector :=
-        Collect_History (Repo, Objects, Commit_Id, Max_Count);
    begin
-      for Entry_Id of History loop
-         declare
-            Current_Id : constant Version.Objects.Hex_Object_Id :=
-              Version.Objects.To_Object_Id (To_String (Entry_Id));
-         begin
-            Append_Line
-              (Result,
-               Format_Commit_Oneline_With_Cache
-                 (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
-         end;
-      end loop;
-
-      return To_String (Result);
+      return Log_Oneline_List_Text
+        (Repo, To_Commit_List (Collect_History
+                                 (Repo, Objects, Commit_Id, Max_Count)));
    end Log_Oneline_From_Commit;
 
    function Log_Head
@@ -641,24 +672,18 @@ package body Version.Log is
           (Repo, Version.Objects.To_Object_Id (Current), Max_Count);
    end Log_Oneline_Head;
 
-   function Log_Formatted_From_Commit
-     (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id;
-      Format    : String;
-      Terminate_Records : Boolean := True;
-      Max_Count : Natural := 0) return String
+   function Log_Formatted_List_Text
+     (Repo    : Version.Repository.Repository_Handle;
+      Commits : Version.History.Commit_Id_Vectors.Vector;
+      Format  : String;
+      Terminate_Records : Boolean := True) return String
    is
       LF      : constant Character := Character'Val (10);
       Result  : Unbounded_String;
-      Objects : Version.Object_Cache.Object_Cache;
       First   : Boolean := True;
-      History : constant Id_Vectors.Vector :=
-        Collect_History (Repo, Objects, Commit_Id, Max_Count);
    begin
-      for Entry_Id of History loop
+      for Current_Id of Commits loop
          declare
-            Current_Id : constant Version.Objects.Hex_Object_Id :=
-              Version.Objects.To_Object_Id (To_String (Entry_Id));
          begin
             if not First and then not Terminate_Records then
                Append (Result, LF);
@@ -672,6 +697,22 @@ package body Version.Log is
          end;
       end loop;
       return To_String (Result);
+   end Log_Formatted_List_Text;
+
+   function Log_Formatted_From_Commit
+     (Repo      : Version.Repository.Repository_Handle;
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Format    : String;
+      Terminate_Records : Boolean := True;
+      Max_Count : Natural := 0) return String
+   is
+      Objects : Version.Object_Cache.Object_Cache;
+   begin
+      return Log_Formatted_List_Text
+        (Repo,
+         To_Commit_List (Collect_History
+                           (Repo, Objects, Commit_Id, Max_Count)),
+         Format, Terminate_Records);
    end Log_Formatted_From_Commit;
 
 end Version.Log;
