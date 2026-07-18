@@ -434,6 +434,59 @@ package body Version.Multi_Pack_Index is
             return False;
          end if;
 
+         --  A correct checksum only says the bytes are the ones that were
+         --  written; it says nothing about whether they make sense. git also
+         --  checks the structure, so corruption that was re-checksummed --
+         --  or written by a broken tool -- is still caught.
+         declare
+            function U32 (At_Index : Natural) return Natural is
+              (Natural (Character'Pos (Data (At_Index))) * 16#100_00_00#
+               + Natural (Character'Pos (Data (At_Index + 1))) * 16#1_00_00#
+               + Natural (Character'Pos (Data (At_Index + 2))) * 16#100#
+               + Natural (Character'Pos (Data (At_Index + 3))));
+
+            Chunk_Count : constant Natural :=
+              Natural (Character'Pos (Data (Data'First + 6)));
+
+            Table : constant Natural := Data'First + 12;
+            Fanout : Natural := 0;
+         begin
+            --  Locate the OIDF (fanout) chunk in the chunk table.
+            for I in 0 .. Chunk_Count loop
+               declare
+                  Entry_At : constant Natural := Table + I * 12;
+               begin
+                  exit when Entry_At + 11 > Data'Last;
+                  if Data (Entry_At .. Entry_At + 3) = "OIDF" then
+                     --  The offset is 8 bytes; the low 4 are enough here.
+                     Fanout := Data'First + U32 (Entry_At + 8);
+                     exit;
+                  end if;
+               end;
+            end loop;
+
+            if Fanout = 0 or else Fanout + 256 * 4 - 1 > Data'Last then
+               Say ("multi-pack-index is missing its object fanout");
+               return False;
+            end if;
+
+            declare
+               Previous : Natural := 0;
+            begin
+               for Bucket in 0 .. 255 loop
+                  declare
+                     Value : constant Natural := U32 (Fanout + Bucket * 4);
+                  begin
+                     if Value < Previous then
+                        Say ("oid fanout out of order");
+                        return False;
+                     end if;
+                     Previous := Value;
+                  end;
+               end loop;
+            end;
+         end;
+
          return True;
       end;
    end Verify;
