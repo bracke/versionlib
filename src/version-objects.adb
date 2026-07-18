@@ -697,8 +697,10 @@ package body Version.Objects is
                   then Name_Text
                   else Base_Path & "/" & Name_Text);
             begin
+               --  git stores control characters in tree entry names (a tab
+               --  in a filename is a legal POSIX name); only NUL is refused.
                Version.Path_Safety.Require_Safe_Relative_Path
-                 (Full_Path, "tree entry path");
+                 (Full_Path, "tree entry path", Allow_Control => True);
 
                if Mode_Text = "40000" then
                   Append_Flattened_Tree
@@ -788,7 +790,7 @@ package body Version.Objects is
                Name_Text : constant String := Data (Name_Start .. Name_End);
             begin
                Version.Path_Safety.Require_Safe_Relative_Path
-                 (Name_Text, "tree entry path");
+                 (Name_Text, "tree entry path", Allow_Control => True);
                Result.Append
                  (Tree_Entry'
                     (Path => To_Unbounded_String (Name_Text),

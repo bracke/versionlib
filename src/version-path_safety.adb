@@ -114,7 +114,8 @@ package body Version.Path_Safety is
    end Validate_Windows_Component;
 
    function Normalize_Relative_Path
-     (Path : String)
+     (Path          : String;
+      Allow_Control : Boolean := False)
       return String
    is
       Result    : Unbounded_String;
@@ -154,7 +155,7 @@ package body Version.Path_Safety is
       for C of Path loop
          if C = Character'Val (0) then
             raise Ada.IO_Exceptions.Data_Error with "path contains NUL";
-         elsif Is_Control (C) then
+         elsif Is_Control (C) and then not Allow_Control then
             raise Ada.IO_Exceptions.Data_Error with "path contains control character";
          elsif C = '/' or else C = '\' then
             if Length (Component) = 0 then
@@ -200,10 +201,12 @@ package body Version.Path_Safety is
    end Is_Safe_Relative_Path;
 
    procedure Require_Safe_Relative_Path
-     (Path    : String;
-      Context : String := "path")
+     (Path          : String;
+      Context       : String := "path";
+      Allow_Control : Boolean := False)
    is
-      Normalized : constant String := Normalize_Relative_Path (Path);
+      Normalized : constant String :=
+        Normalize_Relative_Path (Path, Allow_Control);
       pragma Unreferenced (Normalized);
    begin
       null;
