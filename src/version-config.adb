@@ -813,10 +813,8 @@ package body Version.Config is
                Require_Config_Scalar (To_String (Item.Value), "config value");
 
                if To_String (Item.Section) /= To_String (Last_Section) then
-                  if Length (Last_Section) > 0 then
-                     Ada.Text_IO.New_Line (File);
-                  end if;
-
+                  --  git's writer runs sections together with no separating
+                  --  blank line.
                   Ada.Text_IO.Put_Line
                     (File, "[" & To_String (Item.Section) & "]");
 
@@ -876,7 +874,10 @@ package body Version.Config is
    procedure Remove_Section
      (Repo : Version.Repository.Repository_Handle; Section : String)
    is
-      Existing : constant Config_Entry_Vectors.Vector := Read_All (Repo);
+      --  Repo-local scope only, for the same reason as Replace_Section: the
+      --  merged view would drag the global config into the repo's file.
+      Existing : constant Config_Entry_Vectors.Vector :=
+        Read_File_Entries (Config_Path (Repo));
 
       Result : Config_Entry_Vectors.Vector;
 
@@ -1262,7 +1263,11 @@ package body Version.Config is
       Section : String;
       Entries : Config_Entry_Vectors.Vector)
    is
-      Existing : constant Config_Entry_Vectors.Vector := Read_All (Repo);
+      --  Only this repository's own config: Read_All merges the system and
+      --  global scopes in, and writing that back would copy the user's whole
+      --  ~/.gitconfig (identity, credential helpers, ...) into the repo.
+      Existing : constant Config_Entry_Vectors.Vector :=
+        Read_File_Entries (Config_Path (Repo));
 
       Result : Config_Entry_Vectors.Vector;
    begin
