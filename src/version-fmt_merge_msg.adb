@@ -186,6 +186,17 @@ package body Version.Fmt_Merge_Msg is
                                 (Entry_Rec'
                                    (Type_Word => TW, Name => NM, Src => SR,
                                     Sha => To_Unbounded_String (Sha)));
+                           else
+                              --  A description that is just a URL is a fetch
+                              --  of that remote's HEAD; git reports it as the
+                              --  URL alone, or as "HEAD" beside named refs
+                              --  from the same URL.
+                              Entries.Append
+                                (Entry_Rec'
+                                   (Type_Word => Null_Unbounded_String,
+                                    Name      => To_Unbounded_String ("HEAD"),
+                                    Src       => To_Unbounded_String (Desc),
+                                    Sha       => To_Unbounded_String (Sha)));
                            end if;
                         end if;
                      end;
@@ -229,24 +240,77 @@ package body Version.Fmt_Merge_Msg is
       end if;
 
       Append (Result, "Merge ");
-      for I in Groups.First_Index .. Groups.Last_Index loop
-         declare
-            G  : constant Group_Rec := Groups.Element (I);
-            TW : constant String :=
-              (if Length (G.Type_Word) > 0 then To_String (G.Type_Word)
-               else "commit");
-            Word : constant String :=
-              (if Natural (G.Names.Length) > 1 then Plural (TW) else TW);
-         begin
-            if I > Groups.First_Index then
-               Append (Result, "; ");
+
+      --  git groups by source: every kind fetched from one URL is listed
+      --  together and the "of <url>" is written once, after all of them.
+      --  Separate sources are joined with "; ".
+      declare
+         Emitted : Natural := 0;
+         Done    : array (1 .. Natural (Groups.Length)) of Boolean :=
+           [others => False];
+      begin
+         for I in Groups.First_Index .. Groups.Last_Index loop
+            if not Done (I) then
+               declare
+                  Src : constant Unbounded_String := Groups.Element (I).Src;
+                  Only_Head : Boolean := True;
+                  Part : Unbounded_String;
+                  Kinds : Natural := 0;
+               begin
+                  for J in I .. Groups.Last_Index loop
+                     if not Done (J) and then Groups.Element (J).Src = Src then
+                        declare
+                           G  : constant Group_Rec := Groups.Element (J);
+                           TW : constant String :=
+                             (if Length (G.Type_Word) > 0
+                              then To_String (G.Type_Word) else "commit");
+                           Word : constant String :=
+                             (if Natural (G.Names.Length) > 1
+                              then Plural (TW) else TW);
+                           Is_Head : constant Boolean :=
+                             Length (G.Type_Word) = 0
+                             and then Natural (G.Names.Length) = 1
+                             and then G.Names.Element (G.Names.First_Index)
+                                      = "HEAD";
+                        begin
+                           --  Local refs (no URL) each stand alone, as git
+                           --  reports them.
+                           exit when Length (Src) = 0 and then J > I;
+
+                           Done (J) := True;
+                           if Kinds > 0 then
+                              Append (Part, ", ");
+                           end if;
+                           if Is_Head then
+                              Append (Part, "HEAD");
+                           else
+                              Only_Head := False;
+                              Append (Part, Word & " " & Names_List (G.Names));
+                           end if;
+                           Kinds := Kinds + 1;
+                        end;
+                     end if;
+                  end loop;
+
+                  if Emitted > 0 then
+                     Append (Result, "; ");
+                  end if;
+
+                  --  A source that contributed nothing but its HEAD is
+                  --  reported as the URL alone.
+                  if Only_Head and then Length (Src) > 0 then
+                     Append (Result, To_String (Src));
+                  else
+                     Append (Result, To_String (Part));
+                     if Length (Src) > 0 then
+                        Append (Result, " of " & To_String (Src));
+                     end if;
+                  end if;
+                  Emitted := Emitted + 1;
+               end;
             end if;
-            Append (Result, Word & " " & Names_List (G.Names));
-            if Length (G.Src) > 0 then
-               Append (Result, " of " & To_String (G.Src));
-            end if;
-         end;
-      end loop;
+         end loop;
+      end;
 
       --  git omits the "into <branch>" suffix on the conventional defaults.
       if Current_Branch'Length > 0
