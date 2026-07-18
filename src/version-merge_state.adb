@@ -423,6 +423,11 @@ package body Version.Merge_State is
       Version.Files.Delete_File_If_Exists (Git_State_Path (Repo, "MERGE_MODE"));
       Version.Files.Delete_File_If_Exists (Git_State_Path (Repo, "AUTO_MERGE"));
       Version.Files.Delete_File_If_Exists (Git_State_Path (Repo, "SQUASH_MSG"));
+      --  A conflicted cherry-pick or revert also leaves git's own head file.
+      Version.Files.Delete_File_If_Exists
+        (Git_State_Path (Repo, "CHERRY_PICK_HEAD"));
+      Version.Files.Delete_File_If_Exists
+        (Git_State_Path (Repo, "REVERT_HEAD"));
    end Clear_State;
 
 end Version.Merge_State;

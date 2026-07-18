@@ -34,7 +34,7 @@ package body Version.Cherry_Pick is
    Zero_Id : constant Version.Objects.Hex_Object_Id :=
      Version.Objects.Zero_Object_Id;
 
-   type Replay_Result_Kind is (Replay_Clean, Replay_Conflict);
+   type Replay_Result_Kind is (Replay_Clean, Replay_Conflict, Replay_Empty);
    type Replay_Result is record
       Kind      : Replay_Result_Kind;
       Commit_Id : Version.Objects.Object_Id_Storage := Zero_Id;
@@ -542,10 +542,65 @@ package body Version.Cherry_Pick is
             Base_Id       => Base_Id,
             Target_Branch => "cherry-pick",
             Conflicts     => Conflicts);
+
+         --  git leaves a conflicted cherry-pick in a state its own tools can
+         --  read: the index carries stages 1/2/3, CHERRY_PICK_HEAD names the
+         --  commit being picked, and MERGE_MSG holds its message. Without the
+         --  staged conflict `git status` reports a plain modification.
+         Version.Staging.Write (Repo => Repo, Entries => Merged_Index);
+         Version.Files.Write_Binary_File_Atomic
+           (Path    =>
+              Version.Files.Join
+                (Version.Repository.Git_Dir (Repo), "CHERRY_PICK_HEAD"),
+            Content => To_String (Commit_Id) & Character'Val (10));
+         declare
+            Msg : constant String :=
+              Commit_Message (Version.Objects.Read_Object (Repo, Commit_Id));
+         begin
+            Version.Files.Write_Binary_File_Atomic
+              (Path    =>
+                 Version.Files.Join
+                   (Version.Repository.Git_Dir (Repo), "MERGE_MSG"),
+               Content =>
+                 (if Msg'Length = 0 or else Msg (Msg'Last) /= Character'Val (10)
+                  then Msg & Character'Val (10) else Msg));
+         end;
          return Replay_Result'(Kind => Replay_Conflict, Commit_Id => Zero_Id);
       end if;
 
       Version.Staging.Write (Repo => Repo, Entries => Merged_Index);
+      declare
+         Tree_Id : constant Version.Objects.Hex_Object_Id :=
+           Version.Write.Write_Tree_From_Index (Repo => Repo, Entries => Merged_Index);
+      begin
+         --  The pick contributes nothing (already applied, or emptied by
+         --  conflict resolution). git refuses to record an empty commit: it
+         --  pauses with CHERRY_PICK_HEAD/MERGE_MSG set so the user can
+         --  --continue, --skip or --abort. Committing anyway would silently
+         --  add an empty commit to the history.
+         if Tree_Id = Tree_Id_For_Commit (Repo, Objects, Replay_Parent) then
+            Version.Files.Write_Binary_File_Atomic
+              (Path    =>
+                 Version.Files.Join
+                   (Version.Repository.Git_Dir (Repo), "CHERRY_PICK_HEAD"),
+               Content => To_String (Commit_Id) & Character'Val (10));
+            declare
+               Msg : constant String :=
+                 Commit_Message (Version.Objects.Read_Object (Repo, Commit_Id));
+            begin
+               Version.Files.Write_Binary_File_Atomic
+                 (Path    =>
+                    Version.Files.Join
+                      (Version.Repository.Git_Dir (Repo), "MERGE_MSG"),
+                  Content =>
+                    (if Msg'Length = 0
+                       or else Msg (Msg'Last) /= Character'Val (10)
+                     then Msg & Character'Val (10) else Msg));
+            end;
+            return Replay_Result'(Kind => Replay_Empty, Commit_Id => Commit_Id);
+         end if;
+      end;
+
       declare
          Tree_Id : constant Version.Objects.Hex_Object_Id :=
            Version.Write.Write_Tree_From_Index (Repo => Repo, Entries => Merged_Index);
@@ -623,6 +678,24 @@ package body Version.Cherry_Pick is
                   Paused         => True,
                   Current_Commit => To_String (Commit_Id));
                raise Ada.IO_Exceptions.Data_Error with "cherry-pick paused: conflicts recorded";
+            end if;
+
+            if Result.Kind = Replay_Empty then
+               --  Nothing to record: pause exactly as a conflict does, so
+               --  --continue/--skip/--abort all work from here.
+               Version.Cherry_Pick_State.Write_State
+                 (Repo           => Repo,
+                  Kind           => Kind,
+                  Head_Ref       => Head_Ref,
+                  Original_Head  => Original_Head,
+                  Current_Head   => Replay_Head,
+                  Next_Index     => Index,
+                  Commits        => Commits,
+                  Mainline       => Mainline,
+                  Paused         => True,
+                  Current_Commit => To_String (Commit_Id));
+               raise Ada.IO_Exceptions.Data_Error with
+                 "cherry-pick is now empty";
             end if;
 
             declare
