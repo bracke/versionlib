@@ -141,8 +141,12 @@ package Version.Diff is
    --  Raw diff of the index against the working tree (`git diff-files`): the
    --  second object id is all-zero.
    function Raw_Diff_Files
-     (Repo : Version.Repository.Repository_Handle)
+     (Repo      : Version.Repository.Repository_Handle;
+      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector :=
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector)
       return String;
+   --  Pathspecs, when non-empty, restricts the output to matching paths, as
+   --  git's `diff-files -- <path>` does.
 
    --  One file's patch, exactly as `git diff` writes it: the `diff --git`
    --  and `index` headers, the mode lines, and the hunks.  A side that is not

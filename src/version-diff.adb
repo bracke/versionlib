@@ -2352,7 +2352,9 @@ package body Version.Diff is
    end Raw_Diff_Index;
 
    function Raw_Diff_Files
-     (Repo : Version.Repository.Repository_Handle)
+     (Repo      : Version.Repository.Repository_Handle;
+      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector :=
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector)
       return String
    is
       Algo  : constant Version.Hash.Hash_Algorithm :=
@@ -2406,7 +2408,11 @@ package body Version.Diff is
       end loop;
 
       for Path of Paths loop
-         if Del_Map.Contains (Path) then
+         if not Pathspecs.Is_Empty
+           and then not Version.Pathspec.Matches_Any (Pathspecs, Path)
+         then
+            null;   --  filtered out by the pathspec
+         elsif Del_Map.Contains (Path) then
             Append
               (Result,
                ":" & Mode_Map (Path) & " 000000 " & Sha_Map (Path) & " "
