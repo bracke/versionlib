@@ -1,4 +1,6 @@
 with Ada.Containers.Ordered_Sets;
+with Ada.Directories;
+with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.IO_Exceptions;
 
 with Version.Files;
@@ -9,6 +11,7 @@ with Version.Pack_Write;
 with Version.Pack_Index_Cache;
 with Version.Reachability;
 with Version.Shallow_Cache;
+with Version.Commit_Graph;
 
 package body Version.Maintenance is
 
@@ -146,6 +149,46 @@ package body Version.Maintenance is
       Result.Object_Count := Natural (Reachable.Length);
       return Result;
    end Verify;
+
+   --  git lists the repository's packs in objects/info/packs so a dumb-HTTP
+   --  client can discover them without a directory listing: one "P <name>"
+   --  line per pack, then a blank line.
+   procedure Write_Info_Packs (Repo : Version.Repository.Repository_Handle) is
+      Pack_Dir : constant String :=
+        Join (Version.Repository.Common_Git_Dir (Repo), "objects/pack");
+      Info_Dir : constant String :=
+        Join (Version.Repository.Common_Git_Dir (Repo), "objects/info");
+      Content : Unbounded_String;
+   begin
+      if not Ada.Directories.Exists (Pack_Dir) then
+         return;
+      end if;
+
+      declare
+         Search : Ada.Directories.Search_Type;
+         Item   : Ada.Directories.Directory_Entry_Type;
+      begin
+         Ada.Directories.Start_Search
+           (Search, Pack_Dir, "*.pack",
+            [Ada.Directories.Ordinary_File => True, others => False]);
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Item);
+            Append
+              (Content,
+               "P " & Ada.Directories.Simple_Name (Item)
+               & Character'Val (10));
+         end loop;
+         Ada.Directories.End_Search (Search);
+      end;
+
+      Append (Content, Character'Val (10));
+      Version.Files.Create_Directory_If_Missing (Info_Dir);
+      Version.Files.Write_Binary_File_Atomic
+        (Path => Join (Info_Dir, "packs"), Content => To_String (Content));
+   exception
+      when others =>
+         null;   --  a missing pack list costs discovery, not correctness
+   end Write_Info_Packs;
 
    function Repack
      (Repo : Version.Repository.Repository_Handle)
@@ -309,6 +352,16 @@ package body Version.Maintenance is
             null;
       end;
 
+      --  git refreshes the pack list a dumb-HTTP client reads, and the
+      --  commit-graph, whenever it rewrites the packs.
+      Write_Info_Packs (Repo);
+      begin
+         Version.Commit_Graph.Write (Repo);
+      exception
+         when others =>
+            null;   --  an absent graph costs speed, not correctness
+      end;
+
       Result.Object_Count := Natural (Reachable.Length);
       return Result;
    exception
@@ -397,6 +450,7 @@ package body Version.Maintenance is
    begin
       Result := Repack (Repo);
       Pruned := Prune (Repo, Dry_Run => Dry_Run, Now => not Dry_Run);
+
       Result.Unreachable_Count := Pruned.Unreachable_Count;
       Result.Deleted_Count := Pruned.Deleted_Count;
       return Result;
