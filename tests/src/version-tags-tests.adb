@@ -96,10 +96,13 @@ package body Version.Tags.Tests is
            Version.Repository.Open;
          Expected : constant String := Version.Refs.Current_Commit_Id (Repo);
       begin
+         --  git: "Deleted tag 'v1.0' (was <abbrev>)"; a repo this small
+         --  abbreviates at the 7-character floor.
          Assert
            (Version.Tags.Delete_Tag_Text ("v1.0")
-            = "deleted tag v1.0 " & Expected,
-            "tag delete text must include deleted object id");
+            = "Deleted tag 'v1.0' (was "
+              & Expected (Expected'First .. Expected'First + 6) & ")",
+            "tag delete text must match git's report line");
       end;
 
       declare

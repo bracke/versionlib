@@ -86,6 +86,28 @@ package Version.Tags is
      (Name : String)
       return String;
 
+   function Tag_Message_Lines
+     (Name  : String;
+      Lines : Positive := 1)
+      return String;
+   --  The leading Lines lines of the text `git tag -n<Lines>` shows for Name:
+   --  the annotation body of an annotated tag, the commit message of a
+   --  lightweight one. Lines after the first carry git's four-space
+   --  continuation indent (blank ones included, as %(contents:lines=N) does);
+   --  the result has no trailing newline.
+
+   function Tag_Object_Text
+     (Name : String)
+      return String;
+   --  The raw contents of Name's tag object, as `git tag --verify` prints it.
+   --  Raises Data_Error when Name is lightweight, since there is no tag
+   --  object to verify.
+
+   function Tag_Is_Signed
+     (Name : String)
+      return Boolean;
+   --  True when Name resolves to a tag object carrying a PGP signature block.
+
    function List_Tags
       return Tag_Name_Vectors.Vector;
 

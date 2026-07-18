@@ -603,10 +603,16 @@ package body Version.Packed_Refs.Tests is
          Write_Main_Ref (Repo);
          Version.Tags.Create_Tag ("v1");
          Version.Packed_Refs.Pack_Refs (Repo => Repo, Prune_Loose => True);
-         Assert
-           (Version.Tags.Delete_Tag_Text ("v1")
-            = "deleted tag v1 " & To_String (Main_Id),
-            "packed tag delete text must include deleted object id");
+         declare
+            Full : constant String := To_String (Main_Id);
+         begin
+            --  git's report line, with find_unique_abbrev's 7-char floor.
+            Assert
+              (Version.Tags.Delete_Tag_Text ("v1")
+               = "Deleted tag 'v1' (was "
+                 & Full (Full'First .. Full'First + 6) & ")",
+               "packed tag delete text must match git's report line");
+         end;
 
          Assert
            (not Version.Refs.Ref_Exists (Repo, "refs/tags/v1"),

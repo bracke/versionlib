@@ -70,8 +70,15 @@ package Version.Status is
 
    function Clean_Status_Line return String;
    function Change_Kind_Text (Kind : Change_Kind) return String;
-   function Change_Output_Line
-     (Kind : Change_Kind; Path : String) return String;
+
+   function Long_Status_Line
+     (Kind     : Change_Kind;
+      Path     : String;
+      Unmerged : Boolean := False)
+      return String;
+   --  One entry line of the long `status` format: a tab, git's label for the
+   --  change padded to its column (12 normally, 17 in the unmerged section),
+   --  then the path.
 
    function Porcelain_Kind_Code (Kind : Change_Kind) return String;
 
@@ -85,11 +92,16 @@ package Version.Status is
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String;
 
-   procedure Print_Status (All_Untracked : Boolean := False);
+   --  Show_Untracked is git's `-uno`: omit the untracked section entirely,
+   --  which also changes the closing summary line.
+   procedure Print_Status
+     (All_Untracked  : Boolean := False;
+      Show_Untracked : Boolean := True);
 
    procedure Print_Status
-     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
-      All_Untracked : Boolean := False);
+     (Pathspecs      : Version.Pathspec.Pathspec_Vectors.Vector;
+      All_Untracked  : Boolean := False;
+      Show_Untracked : Boolean := True);
 
    procedure Print_Porcelain_Status
      (Include_Ignored : Boolean := False;

@@ -244,10 +244,20 @@ package body Version.Tags is
    end Delete_Tag;
 
    function Delete_Tag_Text (Name : String) return String is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
       Deleted_Id : constant Version.Objects.Hex_Object_Id := Resolve_Tag (Name);
+      Full       : constant String := To_String (Deleted_Id);
+      Short      : constant String :=
+        Full (Full'First .. Full'First
+              + Version.Revisions.Unique_Abbrev_Length (Repo, Deleted_Id, 7)
+              - 1);
    begin
       Delete_Tag (Name);
-      return "deleted tag " & Name & " " & To_String (Deleted_Id);
+
+      --  git's exact report line, abbreviating the old target the way
+      --  find_unique_abbrev does.
+      return "Deleted tag '" & Name & "' (was " & Short & ")";
    end Delete_Tag_Text;
 
    procedure Rename_Tag
@@ -629,6 +639,81 @@ package body Version.Tags is
 
       return To_String (Text);
    end Show_Tag_Text;
+
+   function Tagged_Object (Name : String) return Version.Objects.Git_Object is
+      Repo    : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Objects : Version.Object_Cache.Object_Cache;
+   begin
+      return Version.Object_Cache.Read_Object (Repo, Objects, Resolve_Tag (Name));
+   end Tagged_Object;
+
+   function Tag_Message_Lines
+     (Name  : String;
+      Lines : Positive := 1)
+      return String
+   is
+      Obj : constant Version.Objects.Git_Object := Tagged_Object (Name);
+
+      --  Headers and message are separated by a blank line in both tag and
+      --  commit objects, so Tag_Message splits either one. A lightweight tag
+      --  shows the message of the commit it names.
+      Message : constant String :=
+        (if Version.Objects.Kind (Obj) in
+           Version.Objects.Tag_Object | Version.Objects.Commit_Object
+         then Tag_Message (Version.Objects.Content (Obj))
+         else "");
+
+      Result  : Unbounded_String;
+      Start   : Positive := Message'First;
+      Stop    : Natural;
+      Emitted : Natural := 0;
+   begin
+      while Emitted < Lines and then Start <= Message'Last loop
+         Stop := Start;
+
+         while Stop <= Message'Last
+           and then Message (Stop) /= Character'Val (10)
+         loop
+            Stop := Stop + 1;
+         end loop;
+
+         if Emitted > 0 then
+            Append (Result, Character'Val (10) & "    ");
+         end if;
+
+         Append (Result, Message (Start .. Stop - 1));
+         Emitted := Emitted + 1;
+         Start := Stop + 1;
+      end loop;
+
+      return To_String (Result);
+   end Tag_Message_Lines;
+
+   function Tag_Object_Text (Name : String) return String is
+      Obj : constant Version.Objects.Git_Object := Tagged_Object (Name);
+   begin
+      if Version.Objects.Kind (Obj) /= Version.Objects.Tag_Object then
+         raise Ada.IO_Exceptions.Data_Error
+           with Name & ": cannot verify a non-tag object of type "
+                & Object_Kind_Name (Version.Objects.Kind (Obj)) & ".";
+      end if;
+
+      return Version.Objects.Content (Obj);
+   end Tag_Object_Text;
+
+   function Tag_Is_Signed (Name : String) return Boolean is
+      Text : constant String := Tag_Object_Text (Name);
+   begin
+      --  git recognises a tag as signed by the armor header of any of the
+      --  signature formats it supports.
+      return
+        Ada.Strings.Fixed.Index (Text, "-----BEGIN PGP SIGNATURE-----") > 0
+        or else Ada.Strings.Fixed.Index
+                  (Text, "-----BEGIN SSH SIGNATURE-----") > 0
+        or else Ada.Strings.Fixed.Index
+                  (Text, "-----BEGIN SIGNED MESSAGE-----") > 0;
+   end Tag_Is_Signed;
 
    function List_Tags return Tag_Name_Vectors.Vector is
       Repo : constant Version.Repository.Repository_Handle :=

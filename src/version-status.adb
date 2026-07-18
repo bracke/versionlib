@@ -12,6 +12,7 @@ with Version.Config;
 with Version.Console;
 with Version.Objects;
 with Version.Refs;
+with Version.Revisions;
 with Version.Repository;
 with Version.Staging;
 with Version.Working_Tree;
@@ -69,7 +70,7 @@ package body Version.Status is
 
    function Clean_Status_Line return String is
    begin
-      return "nothing to save, working tree clean";
+      return "nothing to commit, working tree clean";
    end Clean_Status_Line;
 
    --  The mode git would record for a path as it is on disk right now.  A
@@ -101,12 +102,6 @@ package body Version.Status is
    begin
       return Kind_Image (Kind);
    end Change_Kind_Text;
-
-   function Change_Output_Line
-     (Kind : Change_Kind; Path : String) return String is
-   begin
-      return "  " & Change_Kind_Text (Kind) & ": " & Path;
-   end Change_Output_Line;
 
    function Porcelain_Kind_Code (Kind : Change_Kind) return String is
    begin
@@ -1220,28 +1215,6 @@ package body Version.Status is
       Change_Sorting.Sort (List);
    end Sort_Changes;
 
-   procedure Print_Change_List
-     (Title : String; List : File_Change_Vectors.Vector) is
-   begin
-      if List.Is_Empty then
-         return;
-      end if;
-
-      Ada.Text_IO.Put_Line (Title & ":");
-
-      for I in List.First_Index .. List.Last_Index loop
-         Ada.Text_IO.Put_Line
-           (Change_Output_Line
-              (List.Element (I).Kind,
-               (if List.Element (I).Kind = Renamed_File
-                then To_String (List.Element (I).Old_Path) & " -> "
-                     & To_String (List.Element (I).Path)
-                else To_String (List.Element (I).Path))));
-      end loop;
-
-      Ada.Text_IO.New_Line;
-   end Print_Change_List;
-
    function Load_Head_Tree
      (Repo    : Version.Repository.Repository_Handle;
       Commit  : String;
@@ -1508,11 +1481,30 @@ package body Version.Status is
       if Version.Refs.Is_Attached (Head) then
          Ada.Text_IO.Put_Line ("On branch " & Version.Refs.Branch_Name (Head));
       else
-         Ada.Text_IO.Put_Line
-           ("HEAD detached at " & Short_Id (Version.Refs.Commit_Id (Head)));
+         declare
+            Full : constant String := Version.Refs.Commit_Id (Head);
+            Id   : constant Version.Objects.Hex_Object_Id :=
+              Version.Objects.To_Object_Id (Full);
+         begin
+            --  git names the commit with find_unique_abbrev, not a fixed
+            --  width.
+            Ada.Text_IO.Put_Line
+              ("HEAD detached at "
+               & Full (Full'First .. Full'First
+                       + Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7)
+                       - 1));
+         exception
+            when others =>
+               Ada.Text_IO.Put_Line ("HEAD detached at " & Short_Id (Full));
+         end;
       end if;
    end Print_Head_Line;
 
+   --  Prints git's tracking block: the relation to the upstream branch and,
+   --  when it is not up to date, the hint telling the user what to do about
+   --  it. The block is followed by a blank line, exactly as git's
+   --  wt_status_print_tracking does. Prints nothing at all when the branch
+   --  has no upstream.
    procedure Print_Upstream_Line (Repo : Version.Repository.Repository_Handle)
    is
       Head : constant Version.Refs.Head_Info := Version.Refs.Read_Head (Repo);
@@ -1543,45 +1535,49 @@ package body Version.Status is
                    = Prefix
                then Merge (Merge'First + Prefix'Length .. Merge'Last)
                else Merge);
+            Upstream      : constant String :=
+              "'" & Remote & "/" & Remote_Branch & "'";
          begin
             if Counts.Ahead > 0 and then Counts.Behind > 0 then
                Ada.Text_IO.Put_Line
-                 ("Your branch and "
-                  & Remote
-                  & "/"
-                  & Remote_Branch
-                  & " have diverged; ahead by "
+                 ("Your branch and " & Upstream & " have diverged,");
+               Ada.Text_IO.Put_Line
+                 ("and have "
                   & Natural_Image (Counts.Ahead)
-                  & " "
-                  & Commit_Word (Counts.Ahead)
-                  & ", behind by "
+                  & " and "
                   & Natural_Image (Counts.Behind)
-                  & " "
-                  & Commit_Word (Counts.Behind)
-                  & ".");
+                  & " different commits each, respectively.");
+               Ada.Text_IO.Put_Line
+                 ("  (use ""git pull"" if you want to integrate the remote "
+                  & "branch with yours)");
             elsif Counts.Ahead > 0 then
                Ada.Text_IO.Put_Line
                  ("Your branch is ahead of "
-                  & Remote
-                  & "/"
-                  & Remote_Branch
+                  & Upstream
                   & " by "
                   & Natural_Image (Counts.Ahead)
                   & " "
                   & Commit_Word (Counts.Ahead)
                   & ".");
+               Ada.Text_IO.Put_Line
+                 ("  (use ""git push"" to publish your local commits)");
             elsif Counts.Behind > 0 then
                Ada.Text_IO.Put_Line
                  ("Your branch is behind "
-                  & Remote
-                  & "/"
-                  & Remote_Branch
+                  & Upstream
                   & " by "
                   & Natural_Image (Counts.Behind)
                   & " "
                   & Commit_Word (Counts.Behind)
-                  & ".");
+                  & ", and can be fast-forwarded.");
+               Ada.Text_IO.Put_Line
+                 ("  (use ""git pull"" to update your local branch)");
+            else
+               Ada.Text_IO.Put_Line
+                 ("Your branch is up to date with " & Upstream & ".");
             end if;
+
+            Ada.Text_IO.New_Line;
          end;
       exception
          when Ada.Text_IO.Data_Error | Ada.IO_Exceptions.Data_Error =>
@@ -1589,46 +1585,231 @@ package body Version.Status is
       end;
    end Print_Upstream_Line;
 
-   procedure Print_Status_Result
-     (Result : Status_Result; Include_Ignored : Boolean := False) is
-      Repo : Version.Repository.Repository_Handle;
+   --  git aligns the change label in a fixed column: 12 for the staged and
+   --  unstaged sections, 17 for unmerged paths.
+   Change_Label_Width   : constant := 12;
+   Unmerged_Label_Width : constant := 17;
+
+   function Pad_Label (Label : String; Width : Positive) return String is
+      Fill : constant Positive := Positive'Max (1, Width - Label'Length);
    begin
-      Repo := Version.Repository.Open;
+      return Label & String'(1 .. Fill => ' ');
+   end Pad_Label;
 
+   function Long_Change_Label (Kind : Change_Kind) return String is
+     (case Kind is
+         when New_File      => "new file:",
+         when Deleted_File  => "deleted:",
+         when Renamed_File  => "renamed:",
+         when others        => "modified:");
+
+   function Long_Unmerged_Label (Kind : Change_Kind) return String is
+     (case Kind is
+         when Both_Added_File       => "both added:",
+         when Deleted_Modified_File => "deleted by us:",
+         when others                => "both modified:");
+
+   function Long_Entry_Path (Change : File_Change) return String is
+     (if Change.Kind = Renamed_File
+      then To_String (Change.Old_Path) & " -> " & To_String (Change.Path)
+      else To_String (Change.Path));
+
+   function Long_Status_Line
+     (Kind     : Change_Kind;
+      Path     : String;
+      Unmerged : Boolean := False)
+      return String is
+   begin
+      return Ada.Characters.Latin_1.HT
+        & Pad_Label
+            ((if Unmerged then Long_Unmerged_Label (Kind)
+              else Long_Change_Label (Kind)),
+             (if Unmerged then Unmerged_Label_Width else Change_Label_Width))
+        & Path;
+   end Long_Status_Line;
+
+   procedure Print_Long_Entries
+     (List     : File_Change_Vectors.Vector;
+      Unmerged : Boolean) is
+   begin
+      for Change of List loop
+         Ada.Text_IO.Put_Line
+           (Long_Status_Line
+              (Change.Kind, Long_Entry_Path (Change), Unmerged));
+      end loop;
+   end Print_Long_Entries;
+
+   procedure Print_Long_Paths (List : File_Change_Vectors.Vector) is
+      Tab : constant Character := Ada.Characters.Latin_1.HT;
+   begin
+      --  Untracked and ignored entries carry no label, only the path.
+      for Change of List loop
+         Ada.Text_IO.Put_Line (Tab & To_String (Change.Path));
+      end loop;
+   end Print_Long_Paths;
+
+   procedure Print_Status_Result
+     (Result          : Status_Result;
+      Include_Ignored : Boolean := False;
+      Show_Untracked  : Boolean := True)
+   is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+
+      --  Before the first commit git swaps in a different set of hints and
+      --  closing lines, so the two cases have to be told apart.
+      Is_Initial : constant Boolean :=
+        Version.Refs.Current_Commit_Id (Repo) = "";
+
+      Merging : constant Boolean :=
+        Ada.Directories.Exists
+          (Version.Files.Join
+             (Version.Repository.Git_Dir (Repo), "MERGE_HEAD"));
+
+      --  git's own bookkeeping: `committable` suppresses the closing summary,
+      --  `workdir_dirty` selects which summary is printed.
+      Committable   : constant Boolean := not Result.Staged.Is_Empty;
+      Workdir_Dirty : constant Boolean :=
+        not Result.Changes.Is_Empty or else not Result.Conflicted.Is_Empty;
+
+      --  A deletion among the unstaged changes switches the first hint to
+      --  the add/rm spelling.
+      Has_Deleted : constant Boolean :=
+        (for some Change of Result.Changes => Change.Kind = Deleted_File);
+   begin
       Print_Head_Line (Repo);
-      Print_Upstream_Line (Repo);
 
-      if Result.Changes.Is_Empty
-        and then Result.Staged.Is_Empty
-        and then Result.Untracked.Is_Empty
-        and then Result.Conflicted.Is_Empty
-        and then ((not Include_Ignored) or else Result.Ignored.Is_Empty)
-      then
+      if Is_Initial then
+         Ada.Text_IO.New_Line;
+         Ada.Text_IO.Put_Line ("No commits yet");
+         Ada.Text_IO.New_Line;
+      else
+         Print_Upstream_Line (Repo);
+      end if;
+
+      if Merging then
+         if Result.Conflicted.Is_Empty then
+            Ada.Text_IO.Put_Line
+              ("All conflicts fixed but you are still merging.");
+            Ada.Text_IO.Put_Line ("  (use ""git commit"" to conclude merge)");
+         else
+            Ada.Text_IO.Put_Line ("You have unmerged paths.");
+            Ada.Text_IO.Put_Line ("  (fix conflicts and run ""git commit"")");
+            Ada.Text_IO.Put_Line
+              ("  (use ""git merge --abort"" to abort the merge)");
+         end if;
+
+         Ada.Text_IO.New_Line;
+      end if;
+
+      if not Result.Staged.Is_Empty then
+         Ada.Text_IO.Put_Line ("Changes to be committed:");
+
+         if Is_Initial then
+            Ada.Text_IO.Put_Line
+              ("  (use ""git rm --cached <file>..."" to unstage)");
+         else
+            Ada.Text_IO.Put_Line
+              ("  (use ""git restore --staged <file>..."" to unstage)");
+         end if;
+
+         Print_Long_Entries (Result.Staged, Unmerged => False);
+         Ada.Text_IO.New_Line;
+      end if;
+
+      if not Result.Conflicted.Is_Empty then
+         Ada.Text_IO.Put_Line ("Unmerged paths:");
+         Ada.Text_IO.Put_Line
+           ("  (use ""git add <file>..."" to mark resolution)");
+         Print_Long_Entries (Result.Conflicted, Unmerged => True);
+         Ada.Text_IO.New_Line;
+      end if;
+
+      if not Result.Changes.Is_Empty then
+         Ada.Text_IO.Put_Line ("Changes not staged for commit:");
+
+         if Has_Deleted then
+            Ada.Text_IO.Put_Line
+              ("  (use ""git add/rm <file>..."" to update what will be "
+               & "committed)");
+         else
+            Ada.Text_IO.Put_Line
+              ("  (use ""git add <file>..."" to update what will be "
+               & "committed)");
+         end if;
+
+         Ada.Text_IO.Put_Line
+           ("  (use ""git restore <file>..."" to discard changes in working "
+            & "directory)");
+         Print_Long_Entries (Result.Changes, Unmerged => False);
+         Ada.Text_IO.New_Line;
+      end if;
+
+      if Show_Untracked and then not Result.Untracked.Is_Empty then
+         Ada.Text_IO.Put_Line ("Untracked files:");
+         Ada.Text_IO.Put_Line
+           ("  (use ""git add <file>..."" to include in what will be "
+            & "committed)");
+         Print_Long_Paths (Result.Untracked);
+         Ada.Text_IO.New_Line;
+      end if;
+
+      if Include_Ignored and then not Result.Ignored.Is_Empty then
+         Ada.Text_IO.Put_Line ("Ignored files:");
+         Ada.Text_IO.Put_Line
+           ("  (use ""git add -f <file>..."" to include in what will be "
+            & "committed)");
+         Print_Long_Paths (Result.Ignored);
+         Ada.Text_IO.New_Line;
+      end if;
+
+      --  git mentions the suppressed untracked files only when there is
+      --  something staged to commit.
+      if not Show_Untracked and then Committable then
+         Ada.Text_IO.Put_Line
+           ("Untracked files not listed (use -u option to show untracked "
+            & "files)");
+      end if;
+
+      --  The closing summary. Anything staged means git says nothing here.
+      if Committable then
+         null;
+      elsif Workdir_Dirty then
+         Ada.Text_IO.Put_Line
+           ("no changes added to commit (use ""git add"" and/or "
+            & """git commit -a"")");
+      elsif Show_Untracked and then not Result.Untracked.Is_Empty then
+         Ada.Text_IO.Put_Line
+           ("nothing added to commit but untracked files present "
+            & "(use ""git add"" to track)");
+      elsif Is_Initial then
+         Ada.Text_IO.Put_Line
+           ("nothing to commit (create/copy files and use ""git add"" to "
+            & "track)");
+      elsif not Show_Untracked then
+         Ada.Text_IO.Put_Line
+           ("nothing to commit (use -u to show untracked files)");
+      else
          Ada.Text_IO.Put_Line (Clean_Status_Line);
-         return;
       end if;
-
-      Ada.Text_IO.New_Line;
-      Print_Change_List ("Unmerged", Result.Conflicted);
-      Print_Change_List ("Staged", Result.Staged);
-      Print_Change_List ("Unstaged", Result.Changes);
-      Print_Change_List ("Untracked", Result.Untracked);
-      if Include_Ignored then
-         Print_Change_List ("Ignored", Result.Ignored);
-      end if;
-
    end Print_Status_Result;
 
-   procedure Print_Status (All_Untracked : Boolean := False) is
+   procedure Print_Status
+     (All_Untracked  : Boolean := False;
+      Show_Untracked : Boolean := True) is
    begin
-      Print_Status_Result (Current_Status (All_Untracked));
+      Print_Status_Result
+        (Current_Status (All_Untracked), Show_Untracked => Show_Untracked);
    end Print_Status;
 
    procedure Print_Status
-     (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
-      All_Untracked : Boolean := False) is
+     (Pathspecs      : Version.Pathspec.Pathspec_Vectors.Vector;
+      All_Untracked  : Boolean := False;
+      Show_Untracked : Boolean := True) is
    begin
-      Print_Status_Result (Current_Status (Pathspecs, All_Untracked));
+      Print_Status_Result
+        (Current_Status (Pathspecs, All_Untracked),
+         Show_Untracked => Show_Untracked);
    end Print_Status;
 
    procedure Print_Porcelain_Status
