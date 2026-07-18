@@ -118,9 +118,28 @@ package body Version.Trailers is
       Unfold        : Boolean   := False)
       return String
    is
-      Lines : constant Line_Vectors.Vector := Split_Lines (Input);
+      Lines : Line_Vectors.Vector := Split_Lines (Input);
       Added : Line_Vectors.Vector;
       Out_B : Unbounded_String;
+
+      --  Ada's Trim only removes spaces; a folded trailer is just as often
+      --  indented with a tab.
+      function Strip_Whitespace (Line : String) return String is
+         First : Natural := Line'First;
+         Last_C : Natural := Line'Last;
+      begin
+         while First <= Last_C
+           and then (Line (First) = ' ' or else Line (First) = ASCII.HT)
+         loop
+            First := First + 1;
+         end loop;
+         while Last_C >= First
+           and then (Line (Last_C) = ' ' or else Line (Last_C) = ASCII.HT)
+         loop
+            Last_C := Last_C - 1;
+         end loop;
+         return Line (First .. Last_C);
+      end Strip_Whitespace;
 
       procedure Emit (Line : String) is
       begin
@@ -128,8 +147,28 @@ package body Version.Trailers is
          Append (Out_B, LF);
       end Emit;
 
+      --  git's --unfold joins a trailer's continuation lines onto it: drop
+      --  the pending newline, then add a single space and the trimmed text.
+      procedure Emit_Unfolded (Line : String) is
+      begin
+         if Unfold and then Is_Continuation (Line)
+           and then Length (Out_B) > 0
+         then
+            Head (Out_B, Length (Out_B) - 1);
+            Append (Out_B, " " & Strip_Whitespace (Line));
+            Append (Out_B, LF);
+         else
+            Emit (Line);
+         end if;
+      end Emit_Unfolded;
+
       --  Last content line (trailing blank lines ignored); 0 if all-blank.
       Last : Natural := Lines.Last_Index;
+
+      --  git stops reading the commit message at a "---" line: everything
+      --  from there on is the patch, so trailers belong before it, not after
+      --  the diff.
+      Tail : Line_Vectors.Vector;
    begin
       if not Only_Input then
          for Tr of Trailers loop
@@ -137,6 +176,19 @@ package body Version.Trailers is
          end loop;
       end if;
 
+      for I in Lines.First_Index .. Lines.Last_Index loop
+         if Lines (I) = "---" then
+            for J in I .. Lines.Last_Index loop
+               Tail.Append (Lines (J));
+            end loop;
+            while Lines.Last_Index >= I loop
+               Lines.Delete_Last;
+            end loop;
+            exit;
+         end if;
+      end loop;
+
+      Last := Lines.Last_Index;
       while Last >= 1 and then Is_Blank (Lines (Last)) loop
          Last := Last - 1;
       end loop;
@@ -148,12 +200,17 @@ package body Version.Trailers is
             for L of Added loop
                Emit (L);
             end loop;
-         elsif not Added.Is_Empty then
+         else
+            --  git emits the separator even with nothing to add.
             Append (Out_B, LF);
             for L of Added loop
                Emit (L);
             end loop;
          end if;
+
+         for L of Tail loop
+            Emit (L);
+         end loop;
          return To_String (Out_B);
       end if;
 
@@ -204,11 +261,7 @@ package body Version.Trailers is
                      --  Fold the continuation onto the previous line: drop the
                      --  trailing LF, add a single space and the trimmed text.
                      Head (Out_B, Length (Out_B) - 1);
-                     Append
-                       (Out_B,
-                        " "
-                        & Ada.Strings.Fixed.Trim
-                            (Collected (I), Ada.Strings.Both));
+                     Append (Out_B, " " & Strip_Whitespace (Collected (I)));
                      Append (Out_B, LF);
                   else
                      Emit (Collected (I));
@@ -232,13 +285,17 @@ package body Version.Trailers is
                   end loop;
                   --  Emit through Insert_At, the added trailers, then the rest.
                   for I in 1 .. Insert_At loop
-                     Emit (Lines (I));
+                     if I >= BS then
+                        Emit_Unfolded (Lines (I));
+                     else
+                        Emit (Lines (I));
+                     end if;
                   end loop;
                   for L of Added loop
                      Emit (L);
                   end loop;
                   for I in Insert_At + 1 .. Last loop
-                     Emit (Lines (I));
+                     Emit_Unfolded (Lines (I));
                   end loop;
                else
                   Insert_At := BS;
@@ -248,13 +305,17 @@ package body Version.Trailers is
                      Insert_At := Insert_At + 1;
                   end loop;
                   for I in 1 .. Insert_At - 1 loop
-                     Emit (Lines (I));
+                     if I >= BS then
+                        Emit_Unfolded (Lines (I));
+                     else
+                        Emit (Lines (I));
+                     end if;
                   end loop;
                   for L of Added loop
                      Emit (L);
                   end loop;
                   for I in Insert_At .. Last loop
-                     Emit (Lines (I));
+                     Emit_Unfolded (Lines (I));
                   end loop;
                end if;
             end;
@@ -262,14 +323,18 @@ package body Version.Trailers is
             for I in 1 .. Last loop
                Emit (Lines (I));
             end loop;
-            if not Added.Is_Empty then
-               Append (Out_B, LF);
-               for L of Added loop
-                  Emit (L);
-               end loop;
-            end if;
+            --  git emits the blank separator line that would precede a
+            --  trailer block even when it adds no trailers.
+            Append (Out_B, LF);
+            for L of Added loop
+               Emit (L);
+            end loop;
          end if;
       end;
+
+      for L of Tail loop
+         Emit (L);
+      end loop;
 
       return To_String (Out_B);
    end Interpret;
