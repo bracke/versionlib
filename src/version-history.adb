@@ -1,3 +1,4 @@
+with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Ordered_Sets;
 with Ada.IO_Exceptions;
 
@@ -341,6 +342,166 @@ package body Version.History is
          end;
       end loop;
    end Collect_Tree;
+
+   --  git's rev-list: a committer-date-ordered walk over both the interesting
+   --  (Include) and uninteresting (Exclude) frontiers at once.  The queue is
+   --  popped newest-first, so by the time a commit is popped every child that
+   --  could mark it uninteresting has already been popped and propagated --
+   --  which is also why, exactly as in git, clock skew can leak a commit.
+   function Rev_List
+     (Repo    : Version.Repository.Repository_Handle;
+      Include : Commit_Id_Vectors.Vector;
+      Exclude : Commit_Id_Vectors.Vector := Commit_Id_Vectors.Empty_Vector;
+      Options : Rev_List_Options := (others => <>))
+      return Commit_Id_Vectors.Vector
+   is
+      type Queue_Entry is record
+         Time          : Long_Long_Integer := 0;
+         Seq           : Natural := 0;
+         Uninteresting : Boolean := False;
+         Id            : Version.Objects.Object_Id_Storage;
+      end record;
+
+      --  Newest first; Seq breaks ties so the order is total (and stable in
+      --  discovery order, as git's insertion-ordered queue is).
+      function "<" (L, R : Queue_Entry) return Boolean is
+        (if L.Time /= R.Time then L.Time > R.Time else L.Seq < R.Seq);
+
+      package Queue_Sets is new Ada.Containers.Ordered_Sets
+        (Element_Type => Queue_Entry, "<" => "<");
+
+      --  Each commit is queued at most twice: once per frontier.  Re-queuing
+      --  on the uninteresting side is what lets a commit already popped as
+      --  interesting still propagate the boundary to its parents.
+      type Seen_State is record
+         Interesting   : Boolean := False;
+         Uninteresting : Boolean := False;
+      end record;
+
+      package Seen_Maps is new Ada.Containers.Ordered_Maps
+        (Key_Type     => Version.Objects.Object_Id_Storage,
+         Element_Type => Seen_State);
+
+      Objects : Version.Object_Cache.Object_Cache;
+      Shallow : Version.Shallow_Cache.Shallow_Cache;
+
+      Queue   : Queue_Sets.Set;
+      Seen    : Seen_Maps.Map;
+      Seq     : Natural := 0;
+      Live    : Natural := 0;   --  interesting entries still queued
+      Result  : Commit_Id_Vectors.Vector;
+
+      function Commit_Time
+        (Id : Version.Objects.Hex_Object_Id) return Long_Long_Integer
+      is
+      begin
+         return Version.Objects.Commit_Committer_Time
+           (Version.Object_Cache.Read_Object (Repo, Objects, Id));
+      exception
+         when Ada.IO_Exceptions.Data_Error | Ada.IO_Exceptions.Name_Error =>
+            return 0;
+      end Commit_Time;
+
+      procedure Push
+        (Id            : Version.Objects.Hex_Object_Id;
+         Uninteresting : Boolean)
+      is
+         Cur   : constant Seen_Maps.Cursor := Seen.Find (Id);
+         State : Seen_State;
+      begin
+         if Seen_Maps.Has_Element (Cur) then
+            State := Seen_Maps.Element (Cur);
+            if (Uninteresting and then State.Uninteresting)
+              or else (not Uninteresting and then State.Interesting)
+            then
+               return;   --  already queued on this frontier
+            end if;
+         end if;
+
+         if Uninteresting then
+            State.Uninteresting := True;
+         else
+            State.Interesting := True;
+            Live := Live + 1;
+         end if;
+
+         if Seen_Maps.Has_Element (Cur) then
+            Seen.Replace_Element (Cur, State);
+         else
+            Seen.Insert (Id, State);
+         end if;
+
+         Queue.Insert
+           ((Time          => Commit_Time (Id),
+             Seq           => Seq,
+             Uninteresting => Uninteresting,
+             Id            => Id));
+         Seq := Seq + 1;
+      end Push;
+   begin
+      for Id of Exclude loop
+         Push (Id, Uninteresting => True);
+      end loop;
+      for Id of Include loop
+         Push (Id, Uninteresting => False);
+      end loop;
+
+      --  Once no interesting commit is queued, the rest of the walk could only
+      --  mark boundaries, never produce output.
+      while Live > 0 and then not Queue.Is_Empty loop
+         declare
+            Item : constant Queue_Entry := Queue.First_Element;
+            Parents : Commit_Id_Vectors.Vector;
+            Emit    : Boolean;
+         begin
+            Queue.Delete_First;
+
+            Parents :=
+              Parent_Commits
+                (Repo      => Repo,
+                 Objects   => Objects,
+                 Shallow   => Shallow,
+                 Commit_Id => Item.Id);
+
+            if not Item.Uninteresting then
+               Live := Live - 1;
+            end if;
+
+            --  A commit reached from both frontiers is excluded; the
+            --  uninteresting pass still walks it, so drop it here only.
+            Emit :=
+              not Item.Uninteresting
+              and then not Seen.Element (Item.Id).Uninteresting
+              and then not (Options.No_Merges
+                            and then Natural (Parents.Length) > 1);
+
+            if Emit then
+               Result.Append (Item.Id);
+            end if;
+
+            exit when Options.Max_Count > 0
+              and then Natural (Result.Length) >= Options.Max_Count;
+
+            for I in Parents.First_Index .. Parents.Last_Index loop
+               exit when Options.First_Parent and then I > Parents.First_Index;
+               Push (Parents.Element (I), Item.Uninteresting);
+            end loop;
+         end;
+      end loop;
+
+      if Options.Oldest_First then
+         declare
+            Reversed : Commit_Id_Vectors.Vector;
+         begin
+            for I in reverse Result.First_Index .. Result.Last_Index loop
+               Reversed.Append (Result.Element (I));
+            end loop;
+            return Reversed;
+         end;
+      end if;
+
+      return Result;
+   end Rev_List;
 
    function Reachable_Objects
      (Repo    : Version.Repository.Repository_Handle;

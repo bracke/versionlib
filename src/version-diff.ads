@@ -4,20 +4,33 @@ with Version.Pathspec;
 
 package Version.Diff is
 
+   --  Renames_Default consults the `diff.renames` configuration (git's
+   --  default is on); the other two force the choice, as `-M`/`--no-renames`.
+   type Rename_Detection is (Renames_Default, Renames_On, Renames_Off);
+
    type Diff_Options is record
-      Context_Lines : Natural := 3;
-      Stat          : Boolean := False;
-      Summary       : Boolean := False;
-      Name_Only     : Boolean := False;
-      Name_Status   : Boolean := False;
+      Context_Lines  : Natural := 3;
+      Stat           : Boolean := False;
+      Summary        : Boolean := False;
+      Name_Only      : Boolean := False;
+      Name_Status    : Boolean := False;
+      Detect_Renames : Rename_Detection := Renames_Default;
+      Rename_Score   : Natural := 0;
+      Rename_Limit   : Natural := 0;
    end record;
    --  Name_Only lists just the changed paths; Name_Status prefixes each with
-   --  git's status letter (A/D/M) and a tab. Both suppress the patch body.
+   --  git's status letter (A/D/M/R) and a tab. Both suppress the patch body.
    --  Stat renders git's `--stat` summary (per-file change bars plus a
    --  "N files changed, ..." footer) instead of the unified patch. Summary
-   --  appends git's `--summary` lines (create/delete mode, mode change). When
-   --  either Stat or Summary is set the patch body is suppressed; both may be
-   --  set together (as `git merge` reports).
+   --  appends git's `--summary` lines (create/delete mode, mode change,
+   --  rename). When either Stat or Summary is set the patch body is
+   --  suppressed; both may be set together (as `git merge` reports).
+   --
+   --  Detect_Renames pairs deletions with creations and reports them as
+   --  renames, which is git's default for diff/log/show (`diff.renames`).
+   --  Rename_Score is the minimum similarity, in git's 0 .. 60000 scale
+   --  (`-M<n>`); 0 takes git's default of 50%. Rename_Limit caps the
+   --  detection matrix (`diff.renameLimit`); 0 takes git's default of 1000.
 
    function Diff_Working_Tree
      (Repo    : Version.Repository.Repository_Handle;

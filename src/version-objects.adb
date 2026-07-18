@@ -1,4 +1,5 @@
 with Ada.IO_Exceptions;
+with Ada.Strings.Fixed;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Directories;
@@ -567,6 +568,65 @@ package body Version.Objects is
 
       return "";
    end Commit_Message_First_Line;
+
+   function Commit_Committer_Time (Obj : Git_Object) return Long_Long_Integer
+   is
+      LF   : constant Character := Character'Val (10);
+      Text : constant String := To_String (Obj.Content_Value);
+      --  "committer Name <mail> <seconds> <tz>", in the header only: the blank
+      --  line ends the header, so a body line spelled the same way is not it.
+      Head_End : Natural := Text'Last;
+      Start    : Natural;
+   begin
+      if Obj.Kind_Value /= Commit_Object then
+         raise Ada.IO_Exceptions.Data_Error with "object is not a commit";
+      end if;
+
+      for I in Text'First .. Integer'Max (Text'First, Text'Last - 1) loop
+         if Text (I) = LF and then Text (I + 1) = LF then
+            Head_End := I;
+            exit;
+         end if;
+      end loop;
+
+      Start :=
+        Ada.Strings.Fixed.Index
+          (Text (Text'First .. Head_End), LF & "committer ");
+      if Start = 0 then
+         return 0;
+      end if;
+
+      declare
+         Line_End : Natural := Start + 1;
+         Last_Sp  : Natural := 0;
+         Prev_Sp  : Natural := 0;
+      begin
+         while Line_End <= Head_End and then Text (Line_End) /= LF loop
+            Line_End := Line_End + 1;
+         end loop;
+
+         --  The timestamp is the field between the last two spaces.
+         for I in reverse Start + 1 .. Line_End - 1 loop
+            if Text (I) = ' ' then
+               if Last_Sp = 0 then
+                  Last_Sp := I;
+               else
+                  Prev_Sp := I;
+                  exit;
+               end if;
+            end if;
+         end loop;
+
+         if Prev_Sp = 0 or else Last_Sp = 0 then
+            return 0;
+         end if;
+
+         return Long_Long_Integer'Value (Text (Prev_Sp + 1 .. Last_Sp - 1));
+      end;
+   exception
+      when Constraint_Error =>
+         return 0;
+   end Commit_Committer_Time;
 
    procedure Append_Flattened_Tree
      (Repo      : Version.Repository.Repository_Handle;

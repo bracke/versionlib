@@ -133,6 +133,17 @@ package body Version.Format_Patch is
          else Version.Diff.Diff_Commits
                 (Repo, Parents.First_Element, Commit_Id));
 
+      --  git format-patch puts a diffstat + summary block between the "---"
+      --  line and the patch body (the same content as `git diff --stat
+      --  --summary`).
+      Stat_Opts : constant Version.Diff.Diff_Options :=
+        (Stat => True, Summary => True, others => <>);
+      Stat : constant String :=
+        (if Parents.Is_Empty
+         then Version.Diff.Diff_Root_Commit (Repo, Commit_Id, Stat_Opts)
+         else Version.Diff.Diff_Commits
+                (Repo, Parents.First_Element, Commit_Id, Stat_Opts));
+
       --  Split "Name <email> <ts> <tz>".
       Last_GT : Natural := 0;
       Result  : Unbounded_String;
@@ -218,15 +229,23 @@ package body Version.Format_Patch is
                Append (Result, "Subject: " & Tag & " " & Subject & LF);
                Append (Result, "" & LF);
 
+               --  git runs the body straight into the "---" line; no blank
+               --  line between them.
                if Body_Text'Length > 0 then
                   Append (Result, Body_Text);
                   if Body_Text (Body_Text'Last) /= LF then
                      Append (Result, LF);
                   end if;
-                  Append (Result, "" & LF);
                end if;
 
                Append (Result, "---" & LF);
+               if Stat'Length > 0 then
+                  Append (Result, Stat);
+                  if Stat (Stat'Last) /= LF then
+                     Append (Result, LF);
+                  end if;
+                  Append (Result, "" & LF);   --  blank line before the diff
+               end if;
                Append (Result, Diff);
                if Diff'Length > 0 and then Diff (Diff'Last) /= LF then
                   Append (Result, LF);

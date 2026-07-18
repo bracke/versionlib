@@ -18,6 +18,9 @@ with Version.Working_Tree;
 with Version.Object_Cache;
 with Version.Ref_Cache;
 with Version.Sparse;
+with Version.Rename_Detect;
+with Version.Config;
+with Ada.Characters.Handling;
 with Version.Tree_Cache;
 
 package body Version.Diff is
@@ -289,8 +292,15 @@ package body Version.Diff is
       Old_Mode    : String;
       New_Mode    : String;
       Context     : Natural;
-      Git_Header  : Boolean := True) return String
+      Git_Header  : Boolean := True;
+      --  Rename source path ("" when this is not a rename) and the score the
+      --  pairing settled on, for git's "similarity index" block.
+      Old_Path     : String := "";
+      Rename_Score : Natural := 0) return String
    is
+      --  git names the a/ side after the path the content came from.
+      Head_A : constant String :=
+        (if Old_Path'Length > 0 then Old_Path else Path);
       Result    : Unbounded_String;
       Old_Lines : constant Line_Vectors.Vector := Split_Lines (Old_Text);
       New_Lines : constant Line_Vectors.Vector := Split_Lines (New_Text);
@@ -319,8 +329,27 @@ package body Version.Diff is
       end if;
 
       if Git_Header then
-         Append_Line (Result, "diff --git a/" & Path & " b/" & Path);
-         if not Old_Present then
+         Append_Line (Result, "diff --git a/" & Head_A & " b/" & Path);
+         if Old_Path'Length > 0 then
+            --  git orders a rename header as mode lines, then the similarity
+            --  block, then index.
+            if Old_Mode /= New_Mode then
+               Append_Line (Result, "old mode " & Old_Mode);
+               Append_Line (Result, "new mode " & New_Mode);
+            end if;
+            Append_Line
+              (Result,
+               "similarity index "
+               & Count_Image
+                   (Version.Rename_Detect.Similarity_Index (Rename_Score))
+               & "%");
+            Append_Line (Result, "rename from " & Old_Path);
+            Append_Line (Result, "rename to " & Path);
+            Append_Line
+              (Result,
+               "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id)
+               & (if Old_Mode = New_Mode then " " & New_Mode else ""));
+         elsif not Old_Present then
             Append_Line (Result, "new file mode " & New_Mode);
             Append_Line
               (Result, "index " & Abbrev (Short_Zero) & ".." & Abbrev (New_Id));
@@ -347,7 +376,7 @@ package body Version.Diff is
          end if;
       end if;
       Append_Line
-        (Result, "--- " & (if Old_Present then "a/" & Path else "/dev/null"));
+        (Result, "--- " & (if Old_Present then "a/" & Head_A else "/dev/null"));
       Append_Line
         (Result, "+++ " & (if New_Present then "b/" & Path else "/dev/null"));
 
@@ -454,12 +483,18 @@ package body Version.Diff is
       New_Id      : Version.Objects.Hex_Object_Id;
       New_Mode    : String;
       New_Working : Boolean;
-      Context     : Natural) return String is
+      Context     : Natural;
+      Old_Path     : String := "";
+      Rename_Score : Natural := 0) return String
+   is
+      Head_A : constant String :=
+        (if Old_Path'Length > 0 then Old_Path else Path);
    begin
       if Old_Present and then New_Present and then Old_Id = New_Id then
          --  Identical content: a pure mode change still shows a git header
-         --  ("old mode"/"new mode" and nothing else); no change at all is
-         --  empty.
+         --  ("old mode"/"new mode" and nothing else), and a rename shows its
+         --  similarity block with no index or hunks at all; no change at all
+         --  is empty.
          declare
             Eff_Old : constant String :=
               (if Old_Mode'Length > 0 then Old_Mode else "100644");
@@ -467,12 +502,24 @@ package body Version.Diff is
               (if New_Mode'Length > 0 then New_Mode else Eff_Old);
             R : Unbounded_String;
          begin
-            if Eff_Old = Eff_New then
+            if Eff_Old = Eff_New and then Old_Path'Length = 0 then
                return "";
             end if;
-            Append_Line (R, "diff --git a/" & Path & " b/" & Path);
-            Append_Line (R, "old mode " & Eff_Old);
-            Append_Line (R, "new mode " & Eff_New);
+            Append_Line (R, "diff --git a/" & Head_A & " b/" & Path);
+            if Eff_Old /= Eff_New then
+               Append_Line (R, "old mode " & Eff_Old);
+               Append_Line (R, "new mode " & Eff_New);
+            end if;
+            if Old_Path'Length > 0 then
+               Append_Line
+                 (R,
+                  "similarity index "
+                  & Count_Image
+                      (Version.Rename_Detect.Similarity_Index (Rename_Score))
+                  & "%");
+               Append_Line (R, "rename from " & Old_Path);
+               Append_Line (R, "rename to " & Path);
+            end if;
             return To_String (R);
          end;
       end if;
@@ -495,8 +542,23 @@ package body Version.Diff is
             declare
                R : Unbounded_String;
             begin
-               Append_Line (R, "diff --git a/" & Path & " b/" & Path);
-               if not Old_Present then
+               Append_Line (R, "diff --git a/" & Head_A & " b/" & Path);
+               if Old_Path'Length > 0 then
+                  Append_Line
+                    (R,
+                     "similarity index "
+                     & Count_Image
+                         (Version.Rename_Detect.Similarity_Index
+                            (Rename_Score))
+                     & "%");
+                  Append_Line (R, "rename from " & Old_Path);
+                  Append_Line (R, "rename to " & Path);
+                  Append_Line
+                    (R,
+                     "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id)
+                     & (if Eff_Old_Mode = Eff_New_Mode
+                        then " " & Eff_New_Mode else ""));
+               elsif not Old_Present then
                   Append_Line (R, "new file mode " & Eff_New_Mode);
                   Append_Line
                     (R, "index " & Abbrev (Short_Zero) & ".." & Abbrev (New_Id));
@@ -513,7 +575,7 @@ package body Version.Diff is
                Append_Line
                  (R,
                   "Binary files "
-                  & (if Old_Present then "a/" & Path else "/dev/null")
+                  & (if Old_Present then "a/" & Head_A else "/dev/null")
                   & " and "
                   & (if New_Present then "b/" & Path else "/dev/null")
                   & " differ");
@@ -532,7 +594,9 @@ package body Version.Diff is
               New_Id      => New_Id,
               Old_Mode    => Eff_Old_Mode,
               New_Mode    => Eff_New_Mode,
-              Context     => Context);
+              Context     => Context,
+              Old_Path     => Old_Path,
+              Rename_Score => Rename_Score);
       end;
    end One_File_Diff;
 
@@ -781,18 +845,140 @@ package body Version.Diff is
       return S;
    end Repeat;
 
-   type Stat_Entry is record
-      Path        : Unbounded_String;
-      Ins         : Natural := 0;
-      Del         : Natural := 0;
-      Binary      : Boolean := False;
-      Old_Size    : Natural := 0;
-      New_Size    : Natural := 0;
-      Old_Present : Boolean := False;
-      New_Present : Boolean := False;
-      Old_Mode    : Unbounded_String := Null_Unbounded_String;
-      New_Mode    : Unbounded_String := Null_Unbounded_String;
+   --  git's pprint_rename(): collapse the shared head and tail of the two
+   --  paths into "pfx{old-mid => new-mid}sfx", falling back to "old => new"
+   --  when they share nothing. A common prefix always ends at a '/'.
+   function Pretty_Rename (Old_Path, New_Path : String) return String is
+      Len_A : constant Natural := Old_Path'Length;
+      Len_B : constant Natural := New_Path'Length;
+      Pfx   : Natural := 0;
+      Sfx   : Natural := 0;
+      I     : Natural := 0;
+   begin
+      while I < Natural'Min (Len_A, Len_B)
+        and then Old_Path (Old_Path'First + I) = New_Path (New_Path'First + I)
+      loop
+         if Old_Path (Old_Path'First + I) = '/' then
+            Pfx := I + 1;
+         end if;
+         I := I + 1;
+      end loop;
+
+      --  Walk back from the ends. Both scans start on the (virtual) string
+      --  terminator, and with a common prefix the scan may run one character
+      --  into it, to see that same slash again.
+      declare
+         NUL : constant Character := Character'Val (0);
+
+         function Char_A (K : Integer) return Character is
+           (if K >= Len_A then NUL else Old_Path (Old_Path'First + K));
+
+         function Char_B (K : Integer) return Character is
+           (if K >= Len_B then NUL else New_Path (New_Path'First + K));
+
+         Adjust : constant Integer := (if Pfx > 0 then 1 else 0);
+         A      : Integer := Len_A;
+         B      : Integer := Len_B;
+      begin
+         while A >= Integer (Pfx) - Adjust
+           and then B >= Integer (Pfx) - Adjust
+           and then Char_A (A) = Char_B (B)
+         loop
+            if Char_A (A) = '/' then
+               Sfx := Len_A - A;
+            end if;
+            A := A - 1;
+            B := B - 1;
+         end loop;
+      end;
+
+      declare
+         A_Mid : constant Natural :=
+           Natural'Max (0, Len_A - Pfx - Sfx);
+         B_Mid : constant Natural :=
+           Natural'Max (0, Len_B - Pfx - Sfx);
+         Head  : constant String :=
+           Old_Path (Old_Path'First .. Old_Path'First + Pfx - 1);
+         Tail  : constant String :=
+           Old_Path (Old_Path'Last - Sfx + 1 .. Old_Path'Last);
+         Mid_A : constant String :=
+           Old_Path (Old_Path'First + Pfx .. Old_Path'First + Pfx + A_Mid - 1);
+         Mid_B : constant String :=
+           New_Path (New_Path'First + Pfx .. New_Path'First + Pfx + B_Mid - 1);
+      begin
+         if Pfx + Sfx > 0 then
+            return Head & "{" & Mid_A & " => " & Mid_B & "}" & Tail;
+         end if;
+         return Mid_A & " => " & Mid_B;
+      end;
+   end Pretty_Rename;
+
+   --  Resolve Diff_Options.Detect_Renames: an explicit -M/--no-renames wins,
+   --  otherwise `diff.renames` decides, defaulting to on as git does.
+   function Renames_Enabled
+     (Repo    : Version.Repository.Repository_Handle;
+      Options : Diff_Options) return Boolean
+   is
+      Text : constant String :=
+        (if Version.Config.Has_Key (Repo, "diff.renames")
+         then Version.Config.Get_Value (Repo, "diff.renames") else "");
+      Lower : String := Text;
+   begin
+      case Options.Detect_Renames is
+         when Renames_On  => return True;
+         when Renames_Off => return False;
+         when Renames_Default =>
+            for I in Lower'Range loop
+               Lower (I) := Ada.Characters.Handling.To_Lower (Lower (I));
+            end loop;
+            return not (Lower = "false" or else Lower = "0"
+                        or else Lower = "no");
+      end case;
+   exception
+      when others =>
+         return True;
+   end Renames_Enabled;
+
+   --  git's R<nnn>/C<nnn> code: the similarity percentage, zero padded to
+   --  three digits.
+   function Score_Image (Score : Natural) return String is
+      Pct : constant Natural :=
+        Version.Rename_Detect.Similarity_Index (Score);
+      Img : constant String := Count_Image (Pct);
+   begin
+      return [1 .. 3 - Img'Length => '0'] & Img;
+   end Score_Image;
+
+   --  Where a created path's content came from, and how similar it was.
+   type Rename_Target is record
+      Source : Unbounded_String;
+      Score  : Natural := 0;
    end record;
+
+   type Stat_Entry is record
+      Path         : Unbounded_String;
+      --  Set only for a rename: the path the content came from.
+      Old_Path     : Unbounded_String := Null_Unbounded_String;
+      Rename_Score : Natural := 0;
+      Ins          : Natural := 0;
+      Del          : Natural := 0;
+      Binary       : Boolean := False;
+      Old_Size     : Natural := 0;
+      New_Size     : Natural := 0;
+      Old_Present  : Boolean := False;
+      New_Present  : Boolean := False;
+      Old_Mode     : Unbounded_String := Null_Unbounded_String;
+      New_Mode     : Unbounded_String := Null_Unbounded_String;
+   end record;
+
+   function Is_Rename (F : Stat_Entry) return Boolean is
+     (Length (F.Old_Path) > 0);
+
+   --  The name git prints for the entry in --stat and --summary.
+   function Stat_Name (F : Stat_Entry) return String is
+     (if Is_Rename (F)
+      then Pretty_Rename (To_String (F.Old_Path), To_String (F.Path))
+      else To_String (F.Path));
    package Stat_Vectors is new
      Ada.Containers.Vectors (Index_Type => Natural, Element_Type => Stat_Entry);
 
@@ -824,6 +1010,9 @@ package body Version.Diff is
          others      => <>);
       Changed := False;
       if Old_Present and then New_Present and then Old_Id = New_Id then
+         --  Identical content: still a change if the mode moved, and git
+         --  reports it (as "M", with a zero-width stat bar).
+         Changed := Result.Old_Mode /= Result.New_Mode;
          return;
       end if;
 
@@ -887,7 +1076,7 @@ package body Version.Diff is
          declare
             F : constant Stat_Entry := Files.Element (I);
          begin
-            Name_W := Natural'Max (Name_W, Length (F.Path));
+            Name_W := Natural'Max (Name_W, Stat_Name (F)'Length);
             if not F.Binary then
                Count_W :=
                  Natural'Max (Count_W, Count_Image (F.Ins + F.Del)'Length);
@@ -901,7 +1090,7 @@ package body Version.Diff is
          for I in Files.First_Index .. Files.Last_Index loop
             declare
                F        : constant Stat_Entry := Files.Element (I);
-               Name     : constant String := To_String (F.Path);
+               Name     : constant String := Stat_Name (F);
                Pad_Name : constant String :=
                  Name & Repeat (' ', Name_W - Name'Length);
             begin
@@ -918,7 +1107,10 @@ package body Version.Diff is
                      Append
                        (Result,
                         " " & Pad_Name & " | "
-                        & Repeat (' ', Count_W - Num'Length) & Num & " "
+                        & Repeat (' ', Count_W - Num'Length) & Num
+                        --  git separates the count from the bars only when
+                        --  there are bars (a pure rename shows a bare "0").
+                        & (if F.Ins + F.Del > 0 then " " else "")
                         & Repeat ('+', F.Ins) & Repeat ('-', F.Del) & LF);
                   end;
                end if;
@@ -932,13 +1124,16 @@ package body Version.Diff is
               (Result,
                " " & Count_Image (N) & " file"
                & (if N = 1 then "" else "s") & " changed");
-            if Total_Ins > 0 then
+            --  git's print_stat_summary(): each clause appears when its own
+            --  count is non-zero, or when the other one is zero -- so a
+            --  change with neither (a pure rename) still prints both zeros.
+            if Total_Ins > 0 or else Total_Del = 0 then
                Append
                  (Result,
                   ", " & Count_Image (Total_Ins) & " insertion"
                   & (if Total_Ins = 1 then "" else "s") & "(+)");
             end if;
-            if Total_Del > 0 then
+            if Total_Del > 0 or else Total_Ins = 0 then
                Append
                  (Result,
                   ", " & Count_Image (Total_Del) & " deletion"
@@ -952,9 +1147,25 @@ package body Version.Diff is
          for I in Files.First_Index .. Files.Last_Index loop
             declare
                F    : constant Stat_Entry := Files.Element (I);
-               Name : constant String := To_String (F.Path);
+               Name : constant String := Stat_Name (F);
             begin
-               if not F.Old_Present then
+               if Is_Rename (F) then
+                  Append
+                    (Result,
+                     " rename " & Name & " ("
+                     & Count_Image
+                         (Version.Rename_Detect.Similarity_Index
+                            (F.Rename_Score))
+                     & "%)" & LF);
+                  --  git's show_mode_change with show_name = 0: a rename's
+                  --  mode change is reported without repeating the path.
+                  if F.Old_Mode /= F.New_Mode then
+                     Append
+                       (Result,
+                        " mode change " & To_String (F.Old_Mode) & " => "
+                        & To_String (F.New_Mode) & LF);
+                  end if;
+               elsif not F.Old_Present then
                   Append
                     (Result,
                      " create mode " & To_String (F.New_Mode) & " "
@@ -987,7 +1198,10 @@ package body Version.Diff is
       Stat        : Boolean := False;
       Summary     : Boolean := False;
       Name_Only   : Boolean := False;
-      Name_Status : Boolean := False) return String
+      Name_Status : Boolean := False;
+      Detect_Renames : Boolean := False;
+      Rename_Score   : Natural := 0;
+      Rename_Limit   : Natural := 0) return String
    is
       HT       : constant Character := Character'Val (9);
       NL       : constant Character := Character'Val (10);
@@ -998,6 +1212,99 @@ package body Version.Diff is
       Paths    : Path_Sets.Map;
       Result   : Unbounded_String;
       Stats    : Stat_Vectors.Vector;
+
+      --  Rename pairing state: for a created path, where its content came
+      --  from; for a deleted path, that it has been consumed as a source and
+      --  must not be reported as a deletion of its own.
+      package Rename_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => Rename_Target);
+      Renamed_To   : Rename_Maps.Map;
+      Renamed_From : Path_Sets.Map;
+
+      function Side_Text
+        (Side : Version.Rename_Detect.Rename_Side) return String
+      is
+         Path : constant String := To_String (Side.Path);
+         Mode : constant String := To_String (Side.Mode);
+      begin
+         if New_Working
+           and then New_Map.Contains (Path)
+           and then not Is_Gitlink_Mode (Mode)
+         then
+            return Working_Content (Repo, Path);
+         end if;
+         return Side_Content (Repo, Objects, True, Side.Id, Mode);
+      exception
+         when others =>
+            return "";
+      end Side_Text;
+
+      function Detect_Pairs is
+        new Version.Rename_Detect.Detect (Content_Of => Side_Text);
+
+      procedure Pair_Renames is
+         Sources, Dests : Version.Rename_Detect.Side_Vectors.Vector;
+      begin
+         for I in Old_Side.First_Index .. Old_Side.Last_Index loop
+            declare
+               E    : constant Side_Entry := Old_Side.Element (I);
+               Path : constant String := To_String (E.Path);
+            begin
+               --  A sparse-excluded path is missing from the working tree by
+               --  design, not deleted, so it is not a rename source either.
+               if not New_Map.Contains (Path)
+                 and then not (New_Working
+                               and then not Version.Sparse.Included
+                                              (Repo, Path))
+               then
+                  Sources.Append
+                    (Version.Rename_Detect.Rename_Side'
+                       (Path => E.Path, Id => E.Id, Mode => E.Mode));
+               end if;
+            end;
+         end loop;
+
+         for I in New_Side.First_Index .. New_Side.Last_Index loop
+            declare
+               E    : constant Side_Entry := New_Side.Element (I);
+               Path : constant String := To_String (E.Path);
+            begin
+               if not Old_Map.Contains (Path) then
+                  Dests.Append
+                    (Version.Rename_Detect.Rename_Side'
+                       (Path => E.Path, Id => E.Id, Mode => E.Mode));
+               end if;
+            end;
+         end loop;
+
+         declare
+            Pairs : constant Version.Rename_Detect.Pair_Vectors.Vector :=
+              Detect_Pairs
+                (Sources, Dests,
+                 Minimum_Score =>
+                   (if Rename_Score = 0
+                    then Version.Rename_Detect.Default_Rename_Score
+                    else Rename_Score),
+                 Rename_Limit =>
+                   (if Rename_Limit = 0
+                    then Version.Rename_Detect.Default_Rename_Limit
+                    else Rename_Limit));
+         begin
+            for P of Pairs loop
+               declare
+                  Src : constant Version.Rename_Detect.Rename_Side :=
+                    Sources.Element (P.Source);
+                  Dst : constant Version.Rename_Detect.Rename_Side :=
+                    Dests.Element (P.Dest);
+               begin
+                  Renamed_To.Include
+                    (To_String (Dst.Path),
+                     Rename_Target'(Source => Src.Path, Score => P.Score));
+                  Renamed_From.Include (To_String (Src.Path), True);
+               end;
+            end loop;
+         end;
+      end Pair_Renames;
    begin
       if not Old_Side.Is_Empty then
          for I in Old_Side.First_Index .. Old_Side.Last_Index loop
@@ -1009,6 +1316,10 @@ package body Version.Diff is
          for I in New_Side.First_Index .. New_Side.Last_Index loop
             Paths.Include (To_String (New_Side.Element (I).Path), True);
          end loop;
+      end if;
+
+      if Detect_Renames then
+         Pair_Renames;
       end if;
 
       declare
@@ -1039,8 +1350,25 @@ package body Version.Diff is
                        Mode    => Null_Unbounded_String,
                        Present => False)
                   else Side_Entry_Maps.Element (New_Cursor));
+
+               --  Rename role of this path, if any.
+               Rn_Cursor : constant Rename_Maps.Cursor :=
+                 Renamed_To.Find (Path);
+               Is_Rename_Dest : constant Boolean :=
+                 Rename_Maps.Has_Element (Rn_Cursor);
+               Rn : constant Rename_Target :=
+                 (if Is_Rename_Dest then Rename_Maps.Element (Rn_Cursor)
+                  else (Source => Null_Unbounded_String, Score => 0));
+               Rn_Path : constant String := To_String (Rn.Source);
+               --  For a rename the "old" side is the source path's entry.
+               Src_E : constant Side_Entry :=
+                 (if Is_Rename_Dest and then Old_Map.Contains (Rn_Path)
+                  then Old_Map.Element (Rn_Path) else Old_E);
             begin
-               if New_Working
+               if Renamed_From.Contains (Path) then
+                  --  Consumed as a rename source; reported at its destination.
+                  null;
+               elsif New_Working
                  and then Old_E.Present
                  and then not New_E.Present
                  and then not Version.Sparse.Included (Repo, Path)
@@ -1057,23 +1385,32 @@ package body Version.Diff is
                        (Repo        => Repo,
                         Cache       => Objects,
                         Path        => Path,
-                        Old_Present => Old_E.Present,
-                        Old_Id      => Old_E.Id,
-                        Old_Mode    => To_String (Old_E.Mode),
+                        Old_Present => Src_E.Present or else Is_Rename_Dest,
+                        Old_Id      => Src_E.Id,
+                        Old_Mode    => To_String (Src_E.Mode),
                         New_Present => New_E.Present,
                         New_Id      => New_E.Id,
                         New_Mode    => To_String (New_E.Mode),
                         New_Working => New_Working,
                         Result      => Entry_Stat,
                         Changed     => Changed);
-                     if Changed then
+                     if Changed or else Is_Rename_Dest then
                         if Name_Status then
-                           Append
-                             (Result,
-                              (if not Entry_Stat.Old_Present then 'A'
-                               elsif not Entry_Stat.New_Present then 'D'
-                               else 'M')
-                              & HT);
+                           if Is_Rename_Dest then
+                              --  git pads the score to three digits and names
+                              --  both sides.
+                              Append
+                                (Result,
+                                 "R" & Score_Image (Rn.Score) & HT
+                                 & Rn_Path & HT);
+                           else
+                              Append
+                                (Result,
+                                 (if not Entry_Stat.Old_Present then 'A'
+                                  elsif not Entry_Stat.New_Present then 'D'
+                                  else 'M')
+                                 & HT);
+                           end if;
                         end if;
                         Append (Result, Path & NL);
                      end if;
@@ -1087,16 +1424,20 @@ package body Version.Diff is
                        (Repo        => Repo,
                         Cache       => Objects,
                         Path        => Path,
-                        Old_Present => Old_E.Present,
-                        Old_Id      => Old_E.Id,
-                        Old_Mode    => To_String (Old_E.Mode),
+                        Old_Present => Src_E.Present or else Is_Rename_Dest,
+                        Old_Id      => Src_E.Id,
+                        Old_Mode    => To_String (Src_E.Mode),
                         New_Present => New_E.Present,
                         New_Id      => New_E.Id,
                         New_Mode    => To_String (New_E.Mode),
                         New_Working => New_Working,
                         Result      => Entry_Stat,
                         Changed     => Changed);
-                     if Changed then
+                     if Is_Rename_Dest then
+                        Entry_Stat.Old_Path := Rn.Source;
+                        Entry_Stat.Rename_Score := Rn.Score;
+                     end if;
+                     if Changed or else Is_Rename_Dest then
                         Stats.Append (Entry_Stat);
                      end if;
                   end;
@@ -1107,14 +1448,17 @@ package body Version.Diff is
                        (Repo        => Repo,
                         Cache       => Objects,
                         Path        => Path,
-                        Old_Present => Old_E.Present,
-                        Old_Id      => Old_E.Id,
-                        Old_Mode    => To_String (Old_E.Mode),
+                        Old_Present => Src_E.Present or else Is_Rename_Dest,
+                        Old_Id      => Src_E.Id,
+                        Old_Mode    => To_String (Src_E.Mode),
                         New_Present => New_E.Present,
                         New_Id      => New_E.Id,
                         New_Mode    => To_String (New_E.Mode),
                         New_Working => New_Working,
-                        Context     => Context));
+                        Context     => Context,
+                        Old_Path     =>
+                          (if Is_Rename_Dest then Rn_Path else ""),
+                        Rename_Score => Rn.Score));
                end if;
             end;
 
@@ -1155,7 +1499,10 @@ package body Version.Diff is
                  Stat        => Options.Stat,
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
-                 Name_Status => Options.Name_Status);
+                 Name_Status => Options.Name_Status,
+                 Detect_Renames => Renames_Enabled (Repo, Options),
+                 Rename_Score   => Options.Rename_Score,
+                 Rename_Limit   => Options.Rename_Limit);
          end;
       end;
    end Diff_Working_Tree;
@@ -1193,7 +1540,10 @@ package body Version.Diff is
                  Stat        => Options.Stat,
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
-                 Name_Status => Options.Name_Status);
+                 Name_Status => Options.Name_Status,
+                 Detect_Renames => Renames_Enabled (Repo, Options),
+                 Rename_Score   => Options.Rename_Score,
+                 Rename_Limit   => Options.Rename_Limit);
          end;
       end;
    end Diff_Working_Tree;
@@ -1224,7 +1574,10 @@ package body Version.Diff is
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
-              Name_Status => Options.Name_Status);
+              Name_Status => Options.Name_Status,
+              Detect_Renames => Renames_Enabled (Repo, Options),
+              Rename_Score   => Options.Rename_Score,
+              Rename_Limit   => Options.Rename_Limit);
       end;
    end Diff_Staged;
 
@@ -1259,7 +1612,10 @@ package body Version.Diff is
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
-              Name_Status => Options.Name_Status);
+              Name_Status => Options.Name_Status,
+              Detect_Renames => Renames_Enabled (Repo, Options),
+              Rename_Score   => Options.Rename_Score,
+              Rename_Limit   => Options.Rename_Limit);
       end;
    end Diff_Staged;
 
@@ -1305,7 +1661,10 @@ package body Version.Diff is
            Context     => Options.Context_Lines,
            Stat        => Options.Stat, Summary => Options.Summary,
            Name_Only   => Options.Name_Only,
-           Name_Status => Options.Name_Status);
+           Name_Status => Options.Name_Status,
+           Detect_Renames => Renames_Enabled (Repo, Options),
+           Rename_Score   => Options.Rename_Score,
+           Rename_Limit   => Options.Rename_Limit);
    end Diff_Tree_Vs_Working;
 
    function Diff_Tree_Vs_Index
@@ -1329,7 +1688,10 @@ package body Version.Diff is
            Context     => Options.Context_Lines,
            Stat        => Options.Stat, Summary => Options.Summary,
            Name_Only   => Options.Name_Only,
-           Name_Status => Options.Name_Status);
+           Name_Status => Options.Name_Status,
+           Detect_Renames => Renames_Enabled (Repo, Options),
+           Rename_Score   => Options.Rename_Score,
+           Rename_Limit   => Options.Rename_Limit);
    end Diff_Tree_Vs_Index;
 
    function Diff_Commits
@@ -1365,7 +1727,10 @@ package body Version.Diff is
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
-              Name_Status => Options.Name_Status);
+              Name_Status => Options.Name_Status,
+              Detect_Renames => Renames_Enabled (Repo, Options),
+              Rename_Score   => Options.Rename_Score,
+              Rename_Limit   => Options.Rename_Limit);
       end;
    end Diff_Commits;
 
@@ -1411,7 +1776,10 @@ package body Version.Diff is
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
-              Name_Status => Options.Name_Status);
+              Name_Status => Options.Name_Status,
+              Detect_Renames => Renames_Enabled (Repo, Options),
+              Rename_Score   => Options.Rename_Score,
+              Rename_Limit   => Options.Rename_Limit);
       end;
    end Diff_Commits;
 
@@ -1442,7 +1810,10 @@ package body Version.Diff is
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
-              Name_Status => Options.Name_Status);
+              Name_Status => Options.Name_Status,
+              Detect_Renames => Renames_Enabled (Repo, Options),
+              Rename_Score   => Options.Rename_Score,
+              Rename_Limit   => Options.Rename_Limit);
       end;
    end Diff_Root_Commit;
 
@@ -1480,7 +1851,10 @@ package body Version.Diff is
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
-              Name_Status => Options.Name_Status);
+              Name_Status => Options.Name_Status,
+              Detect_Renames => Renames_Enabled (Repo, Options),
+              Rename_Score   => Options.Rename_Score,
+              Rename_Limit   => Options.Rename_Limit);
       end;
    end Diff_Root_Commit;
 

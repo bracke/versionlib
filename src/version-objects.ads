@@ -127,6 +127,13 @@ package Version.Objects is
      (Obj : Git_Object)
       return String;
 
+   function Commit_Committer_Time
+     (Obj : Git_Object)
+      return Long_Long_Integer;
+   --  The commit's committer unix timestamp (the seconds field of the
+   --  `committer` header), which is what git orders rev-list output by.
+   --  Returns 0 when the header is absent or unparseable.
+
    function Tag_Target_Id
      (Obj : Git_Object)
       return Hex_Object_Id;
