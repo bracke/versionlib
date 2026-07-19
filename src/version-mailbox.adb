@@ -253,7 +253,11 @@ package body Version.Mailbox is
    -- Parse --
    -----------
 
-   function Parse (Mail : String) return Message is
+   function Parse
+     (Mail         : String;
+      Keep_Subject : Boolean := False)
+      return Message
+   is
       Lines  : constant Text_Vectors.Vector := Lines_Of (Mail);
       Result : Message;
 
@@ -316,7 +320,8 @@ package body Version.Mailbox is
       --  "[PATCH v2 3/7] [RFC] real subject" -> "real subject": git strips
       --  every leading bracket group, not just the first.
       declare
-         Done : Boolean := False;
+         --  -k leaves the subject exactly as it arrived.
+         Done : Boolean := Keep_Subject;
       begin
          while not Done loop
             declare

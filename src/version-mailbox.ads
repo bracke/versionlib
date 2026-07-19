@@ -37,6 +37,12 @@ package Version.Mailbox is
    --  One entry per message, each the message's own text.
    function Split (Mailbox : String) return Text_Vectors.Vector;
 
-   function Parse (Mail : String) return Message;
+   function Parse
+     (Mail         : String;
+      Keep_Subject : Boolean := False)
+      return Message;
+   --  Keep_Subject is git's `mailinfo -k`: leave the Subject header exactly
+   --  as it arrived, instead of stripping the "[PATCH ...]" bracket prefixes
+   --  and leading "Re:" that a patch mail normally carries.
 
 end Version.Mailbox;

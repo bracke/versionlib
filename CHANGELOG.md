@@ -1,3 +1,4 @@
+- Add: `Version.Mailbox.Parse` takes `Keep_Subject`, git's `mailinfo -k`, leaving the Subject header exactly as it arrived instead of stripping bracket prefixes and a leading "Re:".
 - Fix: `Version.Ref_Format` implements `%(upstream:track)` and `:trackshort` via `Version.Tracking.Count_Ahead_Behind` instead of falling through to the upstream refname, and shortens `refs/remotes/<remote>/HEAD` to `<remote>` as git does.
 - Fix: `Version.Show.Show_Commit` omits the patch for a commit with more than one parent, as git does; there is no single "the" diff for a merge and the first parent's is one side's changes wearing the merge's name. A requested `--stat` is still produced.
 - Fix: `Version.Shortlog.Summarize` walks history with `Version.History.Rev_List` instead of its own depth-first crawl, so the per-group reversal to oldest-first actually yields chronological order.
