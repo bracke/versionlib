@@ -363,11 +363,19 @@ package body Version.Fetch is
       end loop;
    end Collect_Remote_Packed_Tag_Refs;
 
+   --  `fetch <remote> <branch>` updates only that branch's tracking ref. The
+   --  collectors below take every advertised branch, and the advertised-ref
+   --  path matched by object id, so a second branch sitting on the same
+   --  commit got a tracking ref nobody asked for.
+   function Branch_Wanted (Only_Branch, Branch : String) return Boolean is
+     (Only_Branch'Length = 0 or else Only_Branch = Branch);
+
    procedure Collect_Remote_Head_Refs
      (Remote_Name    : String;
       Remote_Git_Dir : String;
       Local_Git_Dir  : String;
-      Updates        : in out Ref_Update_Vectors.Vector)
+      Updates        : in out Ref_Update_Vectors.Vector;
+      Only_Branch    : String := "")
    is
       Remote_Heads : constant String :=
         Version.Files.Join (Remote_Git_Dir, "refs/heads");
@@ -445,12 +453,15 @@ package body Version.Fetch is
                         raise Ada.IO_Exceptions.Data_Error
                           with Invalid_Loose_Branch_Object_Id_Diagnostic;
                      end if;
-                     Updates.Append
-                       (Ref_Update'(Name      =>
-                          To_Unbounded_String
-                            ("refs/remotes/" & Remote_Name & "/" & Ref_Name),
-                        Object_Id =>
-                          Version.Objects.To_Object_Id (Commit_Id)));
+                     if Branch_Wanted (Only_Branch, Ref_Name) then
+                        Updates.Append
+                          (Ref_Update'(Name      =>
+                             To_Unbounded_String
+                               ("refs/remotes/" & Remote_Name & "/"
+                                & Ref_Name),
+                           Object_Id =>
+                             Version.Objects.To_Object_Id (Commit_Id)));
+                     end if;
                   end;
                end if;
             end;
@@ -476,7 +487,8 @@ package body Version.Fetch is
      (Remote_Name    : String;
       Remote_Git_Dir : String;
       Local_Git_Dir  : String;
-      Updates        : in out Ref_Update_Vectors.Vector)
+      Updates        : in out Ref_Update_Vectors.Vector;
+      Only_Branch    : String := "")
    is
       pragma Unreferenced (Local_Git_Dir);
       Items        : constant Version.Packed_Refs.Packed_Ref_Vectors.Vector :=
@@ -505,11 +517,14 @@ package body Version.Fetch is
                begin
                   Version.Ref_Names.Require_Branch_Name (Branch_Name);
 
-                  Updates.Append
-                    (Ref_Update'(Name      =>
-                        To_Unbounded_String
-                          ("refs/remotes/" & Remote_Name & "/" & Branch_Name),
-                      Object_Id => Items.Element (I).Id));
+                  if Branch_Wanted (Only_Branch, Branch_Name) then
+                     Updates.Append
+                       (Ref_Update'(Name      =>
+                           To_Unbounded_String
+                             ("refs/remotes/" & Remote_Name & "/"
+                              & Branch_Name),
+                         Object_Id => Items.Element (I).Id));
+                  end if;
                end;
             end if;
          end;
@@ -758,7 +773,8 @@ package body Version.Fetch is
      (Remote_Name   : String;
       Local_Git_Dir : String;
       Discovery     : Version.Upload_Pack.Discovery_Result;
-      Fetched_Id    : Version.Objects.Hex_Object_Id)
+      Fetched_Id    : Version.Objects.Hex_Object_Id;
+      Only_Branch   : String := "")
    is
       pragma Unreferenced (Local_Git_Dir);
 
@@ -819,13 +835,15 @@ package body Version.Fetch is
                   begin
                      Version.Ref_Names.Require_Branch_Name (Branch_Name);
 
-                     Version.Fetch.Internal.Add_Update_With_Current_Old
-                       (Tx       => Tx,
-                        Repo     => Repo,
-                        Ref_Name =>
-                          "refs/remotes/" & Remote_Name & "/" & Branch_Name,
-                        New_Id   => Ref.Id);
-                     Has_Ref_Update := True;
+                     if Branch_Wanted (Only_Branch, Branch_Name) then
+                        Version.Fetch.Internal.Add_Update_With_Current_Old
+                          (Tx       => Tx,
+                           Repo     => Repo,
+                           Ref_Name =>
+                             "refs/remotes/" & Remote_Name & "/" & Branch_Name,
+                           New_Id   => Ref.Id);
+                        Has_Ref_Update := True;
+                     end if;
                   end;
                end if;
 
@@ -1408,7 +1426,8 @@ package body Version.Fetch is
       Has_Depth     : Boolean;
       Depth         : Positive;
       Filter_Spec   : String := "";
-      Relative      : Boolean := False)
+      Relative      : Boolean := False;
+      Only_Branch   : String := "")
    is
       Discovery_Raw : Collecting_Consumer;
    begin
@@ -1602,7 +1621,8 @@ package body Version.Fetch is
            (Remote_Name   => Remote_Name,
             Local_Git_Dir => Local_Git_Dir,
             Discovery     => Discovery,
-            Fetched_Id    => Want_Id);
+            Fetched_Id    => Want_Id,
+            Only_Branch   => Only_Branch);
 
       exception
          when others =>
@@ -1619,7 +1639,8 @@ package body Version.Fetch is
       Has_Depth     : Boolean;
       Depth         : Positive;
       Filter_Spec   : String := "";
-      Relative      : Boolean := False)
+      Relative      : Boolean := False;
+      Only_Branch   : String := "")
    is
       Stream : Version.Transport.Ssh.Ssh_Stream;
       Raw_Advertisement : Ada.Strings.Unbounded.Unbounded_String;
@@ -1837,7 +1858,8 @@ package body Version.Fetch is
            (Remote_Name   => Remote_Name,
             Local_Git_Dir => Local_Git_Dir,
             Discovery     => Discovery,
-            Fetched_Id    => Want_Id);
+            Fetched_Id    => Want_Id,
+            Only_Branch   => Only_Branch);
 
       exception
          when others =>
@@ -2048,7 +2070,8 @@ package body Version.Fetch is
 
    procedure Fetch
      (Remote_Name : String; Has_Depth : Boolean; Depth : Positive;
-      Filter_Spec : String := ""; Relative : Boolean := False)
+      Filter_Spec : String := ""; Relative : Boolean := False;
+      Only_Branch : String := "")
    is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -2086,13 +2109,15 @@ package body Version.Fetch is
                  (Remote_Name    => Remote_Name,
                   Remote_Git_Dir => Remote_Git_Dir,
                   Local_Git_Dir  => Local_Git_Dir,
-                  Updates        => Ref_Updates);
+                  Updates        => Ref_Updates,
+                  Only_Branch    => Only_Branch);
 
                Collect_Remote_Packed_Head_Refs
                  (Remote_Name    => Remote_Name,
                   Remote_Git_Dir => Remote_Git_Dir,
                   Local_Git_Dir  => Local_Git_Dir,
-                  Updates        => Ref_Updates);
+                  Updates        => Ref_Updates,
+                  Only_Branch    => Only_Branch);
 
                if Filter_Spec = "" then
                   Version.Transport.Local.Copy_Object_Store
@@ -2128,7 +2153,8 @@ package body Version.Fetch is
                Has_Depth     => Has_Depth,
                Depth         => Depth,
                Filter_Spec   => Filter_Spec,
-               Relative      => Relative);
+               Relative      => Relative,
+               Only_Branch   => Only_Branch);
 
          when Version.Transport.Ssh_Transport         =>
             Fetch_Ssh
@@ -2138,7 +2164,8 @@ package body Version.Fetch is
                Has_Depth     => Has_Depth,
                Depth         => Depth,
                Filter_Spec   => Filter_Spec,
-               Relative      => Relative);
+               Relative      => Relative,
+               Only_Branch   => Only_Branch);
 
          when Version.Transport.Unsupported_Transport =>
             raise Ada.IO_Exceptions.Data_Error
@@ -2150,6 +2177,11 @@ package body Version.Fetch is
    begin
       Fetch (Remote_Name, False, 1);
    end Fetch;
+
+   procedure Fetch_Branch (Remote_Name : String; Branch : String) is
+   begin
+      Fetch (Remote_Name, False, 1, Only_Branch => Branch);
+   end Fetch_Branch;
 
    procedure Fetch (Remote_Name : String; Filter_Spec : String) is
    begin

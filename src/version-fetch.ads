@@ -40,6 +40,14 @@ package Version.Fetch is
    procedure Fetch
      (Remote_Name : String);
 
+   procedure Fetch_Branch
+     (Remote_Name : String;
+      Branch      : String);
+   --  `fetch <remote> <branch>`: update only that branch's remote-tracking
+   --  ref. A plain Fetch tracks every advertised branch, so naming one still
+   --  created tracking refs for the others -- and the advertised-ref path
+   --  matched by object id, so any branch sharing the commit came along.
+
    procedure Fetch
      (Remote_Name : String;
       Depth       : Positive);
