@@ -1,3 +1,4 @@
+- Add: `Version.Show.Show_Commit` takes `No_Patch`, `Oneline` and `Format`, so a caller can shape the header (git's `show -s`, `--oneline`, `--format=<fmt>`) instead of always emitting the full one.
 - Add: `Version.Mailbox.Parse` takes `Keep_Subject`, git's `mailinfo -k`, leaving the Subject header exactly as it arrived instead of stripping bracket prefixes and a leading "Re:".
 - Fix: `Version.Ref_Format` implements `%(upstream:track)` and `:trackshort` via `Version.Tracking.Count_Ahead_Behind` instead of falling through to the upstream refname, and shortens `refs/remotes/<remote>/HEAD` to `<remote>` as git does.
 - Fix: `Version.Show.Show_Commit` omits the patch for a commit with more than one parent, as git does; there is no single "the" diff for a merge and the first parent's is one side's changes wearing the merge's name. A requested `--stat` is still produced.

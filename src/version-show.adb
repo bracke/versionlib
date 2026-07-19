@@ -21,7 +21,10 @@ package body Version.Show is
    function Show_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
-      Options   : Version.Diff.Diff_Options := (others => <>))
+      Options   : Version.Diff.Diff_Options := (others => <>);
+      No_Patch  : Boolean := False;
+      Oneline   : Boolean := False;
+      Format    : String := "")
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -33,8 +36,28 @@ package body Version.Show is
          raise Ada.IO_Exceptions.Data_Error with "object is not a commit: " & To_String (Commit_Id);
       end if;
 
-      Append (Result, Version.Log.Format_Commit (Repo, Commit_Id, Full_Message => True));
-      Append (Result, Character'Val (10));
+      if Oneline then
+         --  Max_Count 1: show reports this commit, not the history behind it.
+         Append
+           (Result,
+            Version.Log.Log_Oneline_From_Commit
+              (Repo, Commit_Id, Max_Count => 1));
+      elsif Format'Length > 0 then
+         Append
+           (Result,
+            Version.Log.Log_Formatted_From_Commit
+              (Repo, Commit_Id, Format, Max_Count => 1));
+         Append (Result, Character'Val (10));
+      else
+         Append
+           (Result,
+            Version.Log.Format_Commit (Repo, Commit_Id, Full_Message => True));
+         Append (Result, Character'Val (10));
+      end if;
+
+      if No_Patch then
+         return To_String (Result);
+      end if;
 
       --  git shows no patch for a merge unless asked with -m/-c/--cc: with
       --  more than one parent there is no single "the" diff, and picking the
