@@ -493,9 +493,15 @@ package body Version.Remotes.Tests is
         (Root,
          "test -z """"$(git config --get remote.origin.url)""""");
 
+      --  The refspec names the remote inside its own value, so a rename has
+      --  to rewrite it. Leaving it at refs/remotes/origin/* -- which this
+      --  test used to require -- points the renamed remote at the old
+      --  remote's namespace, so its next fetch lands under a name that is
+      --  gone.
       Version.Git_Fixtures.Run
         (Root,
-         "git config --get remote.upstream.fetch | grep '^+refs/heads/\*:refs/remotes/origin/\*$'");
+         "git config --get remote.upstream.fetch"
+         & " | grep '^+refs/heads/\*:refs/remotes/upstream/\*$'");
 
       Ada.Directories.Set_Directory (Old_Dir);
 

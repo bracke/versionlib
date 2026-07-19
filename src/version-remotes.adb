@@ -21,6 +21,20 @@ with Version.Packed_Refs;
 with Version.Unsupported;
 
 package body Version.Remotes is
+
+   package String_Maps is new
+     Ada.Containers.Indefinite_Ordered_Maps
+       (Key_Type     => String,
+        Element_Type => String);
+
+   --  Declared up here because Rename_Remote, far above its body, needs the
+   --  tracking refs a remote currently owns.
+   function Local_Remote_Tracking_Branch_Ids
+     (Repo : Version.Repository.Repository_Handle; Name : String)
+      return String_Maps.Map;
+
+   procedure Prune_Empty_Remote_Ref_Dir
+     (Repo : Version.Repository.Repository_Handle; Name : String);
    use Version.Objects;
 
    function Invalid_Remote_Name_Diagnostic
@@ -108,7 +122,6 @@ package body Version.Remotes is
          Entries => Entries);
    end Add_Remote;
 
-
    procedure Set_Url (Name : String; Url : String) is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -173,6 +186,22 @@ package body Version.Remotes is
         (Repo => Repo, Section => Section, Entries => Entries);
    end Set_Url;
 
+   --  Replace the remote's own tracking namespace inside a refspec value.
+   function Retarget_Refspec
+     (Value : String; Old_Name : String; New_Name : String) return String
+   is
+      Needle : constant String := "refs/remotes/" & Old_Name & "/";
+      Repl   : constant String := "refs/remotes/" & New_Name & "/";
+      Pos    : constant Natural := Ada.Strings.Fixed.Index (Value, Needle);
+   begin
+      if Pos = 0 then
+         return Value;
+      end if;
+
+      return Value (Value'First .. Pos - 1) & Repl
+        & Value (Pos + Needle'Length .. Value'Last);
+   end Retarget_Refspec;
+
    procedure Rename_Remote (Old_Name : String; New_Name : String) is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -213,13 +242,21 @@ package body Version.Remotes is
                if Item_Section = Old_Section then
                   Found_Old := True;
 
+                  --  A refspec names the remote inside its own value
+                  --  ("+refs/heads/*:refs/remotes/<name>/*"). Copying it
+                  --  verbatim under the new section leaves the renamed
+                  --  remote fetching into the old remote's namespace.
                   Entries.Append
                     (Version.Config.Config_Entry'
                        (Section =>
                           Ada.Strings.Unbounded.To_Unbounded_String
                             (New_Section),
                         Key     => Item.Key,
-                        Value   => Item.Value));
+                        Value   =>
+                          Ada.Strings.Unbounded.To_Unbounded_String
+                            (Retarget_Refspec
+                               (Ada.Strings.Unbounded.To_String (Item.Value),
+                                Old_Name, New_Name))));
 
                elsif Item_Section = New_Section then
                   Found_New := True;
@@ -238,8 +275,53 @@ package body Version.Remotes is
            with Remote_Already_Exists_Diagnostic (New_Name);
       end if;
 
-      Version.Config.Replace_Section
-        (Repo => Repo, Section => Old_Section, Entries => Entries);
+      declare
+         --  Snapshot before the config changes, so the refs are still
+         --  discoverable under the old remote's name.
+         Tracked : constant String_Maps.Map :=
+           Local_Remote_Tracking_Branch_Ids (Repo, Old_Name);
+      begin
+         Version.Config.Replace_Section
+           (Repo => Repo, Section => Old_Section, Entries => Entries);
+
+         --  git carries refs/remotes/<old>/* across to <new>/*. Leaving them
+         --  behind strands every tracking ref under a remote that no longer
+         --  exists, and the renamed remote starts from nothing.
+         if not Tracked.Is_Empty then
+            declare
+               Tx : Version.Ref_Transaction.Transaction;
+            begin
+               Version.Ref_Transaction.Start (Tx, Repo);
+
+               for Cursor in Tracked.Iterate loop
+                  declare
+                     Branch : constant String := String_Maps.Key (Cursor);
+                     Id     : constant String := String_Maps.Element (Cursor);
+                  begin
+                     Version.Ref_Transaction.Add_Update
+                       (Item     => Tx,
+                        Ref_Name =>
+                          "refs/remotes/" & New_Name & "/" & Branch,
+                        New_Id   => Version.Objects.To_Object_Id (Id),
+                        Expected_Old => "");
+                     Version.Ref_Transaction.Add_Delete
+                       (Item         => Tx,
+                        Ref_Name     =>
+                          "refs/remotes/" & Old_Name & "/" & Branch,
+                        Expected_Old => Id);
+                  end;
+               end loop;
+
+               Version.Ref_Transaction.Commit (Tx);
+            exception
+               when others =>
+                  Version.Ref_Transaction.Cancel (Tx);
+                  raise;
+            end;
+
+            Prune_Empty_Remote_Ref_Dir (Repo, Old_Name);
+         end if;
+      end;
    end Rename_Remote;
 
    function List_Remotes return Remote_Vectors.Vector is
@@ -346,11 +428,6 @@ package body Version.Remotes is
 
    package String_Sets is new
      Ada.Containers.Indefinite_Ordered_Sets (Element_Type => String);
-
-   package String_Maps is new
-     Ada.Containers.Indefinite_Ordered_Maps
-       (Key_Type     => String,
-        Element_Type => String);
 
    type Collecting_Consumer is new Version.Transport.Http.Byte_Consumer
    with record
@@ -835,6 +912,56 @@ package body Version.Remotes is
       return To_String (Result);
    end Prune_Dry_Run_Text;
 
+   --  Deleting the last ref under refs/remotes/<name>/ leaves the directory
+   --  behind, so the remote goes on showing up in a listing of that tree even
+   --  though it owns nothing. git removes it.
+   procedure Prune_Empty_Remote_Ref_Dir
+     (Repo : Version.Repository.Repository_Handle; Name : String)
+   is
+      Dir : constant String :=
+        Version.Files.Join
+          (Version.Repository.Common_Git_Dir (Repo),
+           "refs/remotes/" & Name);
+      Native : constant String := Version.Files.To_Native_Path (Dir);
+   begin
+      if Ada.Directories.Exists (Native)
+        and then Ada.Directories.Kind (Native) = Ada.Directories.Directory
+      then
+         --  Only when nothing is left in it; a partial delete must not take
+         --  surviving refs with it.
+         declare
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+            Empty  : Boolean := True;
+         begin
+            Ada.Directories.Start_Search
+              (Search, Native, "",
+               [Ada.Directories.Directory => True,
+                Ada.Directories.Ordinary_File => True,
+                Ada.Directories.Special_File => True]);
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               declare
+                  Simple : constant String :=
+                    Ada.Directories.Simple_Name (Item);
+               begin
+                  if Simple /= "." and then Simple /= ".." then
+                     Empty := False;
+                  end if;
+               end;
+            end loop;
+            Ada.Directories.End_Search (Search);
+
+            if Empty then
+               Ada.Directories.Delete_Directory (Native);
+            end if;
+         end;
+      end if;
+   exception
+      when others =>
+         null;
+   end Prune_Empty_Remote_Ref_Dir;
+
    procedure Delete_Stale_Remote_Tracking_Refs
      (Repo     : Version.Repository.Repository_Handle;
       Name     : String;
@@ -860,6 +987,7 @@ package body Version.Remotes is
       end loop;
 
       Version.Ref_Transaction.Commit (Tx);
+      Prune_Empty_Remote_Ref_Dir (Repo, Name);
    exception
       when others =>
          Version.Ref_Transaction.Cancel (Tx);

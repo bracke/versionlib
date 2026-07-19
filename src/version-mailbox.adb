@@ -166,7 +166,6 @@ package body Version.Mailbox is
       return To_String (Result);
    end Decode_RFC2047;
 
-
    LF : constant Character := Character'Val (10);
 
    function Is_Digit (C : Character) return Boolean is (C in '0' .. '9');
