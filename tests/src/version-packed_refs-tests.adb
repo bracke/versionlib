@@ -122,7 +122,8 @@ package body Version.Packed_Refs.Tests is
               Read_File (Join (Version.Repository.Git_Dir (Repo), "packed-refs"));
          begin
             Assert
-              (Text = "# pack-refs with: sorted" & Character'Val (10)
+              (Text = "# pack-refs with: peeled fully-peeled sorted "
+                 & Character'Val (10)
                  & "0123456789012345678901234567890123456789 refs/heads/main"
                  & Character'Val (10)
                  & "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/tags/v1"
