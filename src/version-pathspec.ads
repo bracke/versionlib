@@ -53,6 +53,16 @@ package Version.Pathspec is
    --  command failure, so it is raised distinctly from the other pathspec
    --  diagnostics.
 
+   function Resolve_Against_Prefix
+     (Prefix  : String;
+      Payload : String)
+      return String;
+   --  Fold a path operand into the directory the command ran in and collapse
+   --  its "." and ".." segments, yielding a worktree-relative path. Operands
+   --  that are paths rather than pathspecs -- `blame`'s file, say -- resolve
+   --  this way too, but without the magic prefixes, which git reads literally
+   --  there. Raises Outside_Repository if the result escapes the root.
+
    function Parse
      (Text   : String;
       Prefix : String := "")
