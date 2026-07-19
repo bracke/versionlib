@@ -1,6 +1,7 @@
 with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Directories;
+with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
 
@@ -344,6 +345,29 @@ package body Version.Bisect is
          Result.Kind := Need_Good;
          return Result;
       end if;
+
+      --  Both endpoints known, so the marks have to be consistent before any
+      --  arithmetic is done on them. A good rev that is not an ancestor of
+      --  the bad one -- the same commit marked both ways being the obvious
+      --  case -- describes no bisectable range at all; carrying on regardless
+      --  produces a confident "is the first bad commit" for a question that
+      --  was never well posed. git refuses.
+      declare
+         Bad_For_Check : constant Hex_Object_Id := Bad_Id (Repo);
+      begin
+         for G of Goods loop
+            if To_String (G) = To_String (Bad_For_Check)
+              or else not Version.History.Is_Ancestor
+                            (Repo,
+                             Base_Id    => Version.Objects.To_Object_Id
+                                             (To_String (G)),
+                             Derived_Id => Bad_For_Check)
+            then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "Some good revs are not ancestors of the bad rev.";
+            end if;
+         end loop;
+      end;
 
       --  Both endpoints known: build the candidate set S = commits reachable
       --  from bad but not from any good.
