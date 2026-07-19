@@ -8,6 +8,7 @@ with Version.Object_Cache;
 with Version.Tree_Cache;
 with Version.Merge_State;
 with Version.Pack_Write;
+with Version.Pack;
 with Version.Pack_Index_Cache;
 with Version.Reachability;
 with Version.Shallow_Cache;
@@ -198,6 +199,11 @@ package body Version.Maintenance is
         Version.Reachability.Repository_Roots (Repo);
       Reachable : constant Version.Objects.Object_Id_Vectors.Vector :=
         Version.Reachability.Reachable_From (Repo, Roots);
+      --  Everything the existing packs hold, captured before the new pack is
+      --  written: a pack may only be removed once the new one is proved to
+      --  contain all of it.
+      Pre_Packed : constant Version.Objects.Object_Id_Vectors.Vector :=
+        Version.Pack.All_Pack_Objects (Repo);
       Pack_Dir  : constant String := Join (Version.Repository.Common_Git_Dir (Repo), "objects/pack");
       Pack_Path : constant String := Join (Pack_Dir, "version-repack.pack");
       Idx_Path  : constant String := Join (Pack_Dir, "version-repack.idx");
@@ -348,6 +354,72 @@ package body Version.Maintenance is
          end if;
       exception
          --  A failure to prune leaves a correct, if larger, repository.
+         when others =>
+            null;
+      end;
+
+      --  The new pack supersedes the ones that came before it. Leaving them
+      --  meant every object existed twice over -- `count-objects` went from
+      --  9 in-pack to 18 across 2 packs on a repack of an already-packed
+      --  repository -- so repacking grew the store it exists to shrink.
+      --
+      --  A pack is removed only once the new one is proved to hold every
+      --  object it had. That is stricter than `git repack -a -d`, which drops
+      --  unreachable objects outright; keeping a pack that still has some is
+      --  the conservative side of that difference, and it costs nothing in
+      --  the ordinary case where everything packed is reachable.
+      declare
+         Published : Version.Pack_Index_Cache.Cache;
+         Complete  : Boolean := True;
+      begin
+         Version.Pack_Index_Cache.Load_Index
+           (Item       => Published,
+            Index_Path => Idx_Path,
+            Pack_Path  => Pack_Path,
+            Algorithm  => Version.Repository.Algorithm (Repo));
+
+         for I in Pre_Packed.First_Index .. Pre_Packed.Last_Index loop
+            if not Version.Pack_Index_Cache.Contains
+                     (Published, Pre_Packed.Element (I))
+            then
+               Complete := False;
+               exit;
+            end if;
+         end loop;
+
+         if Complete then
+            declare
+               Search : Ada.Directories.Search_Type;
+               Item   : Ada.Directories.Directory_Entry_Type;
+            begin
+               Ada.Directories.Start_Search
+                 (Search    => Search,
+                  Directory => Version.Files.To_Native_Path (Pack_Dir),
+                  Pattern   => "*",
+                  Filter    =>
+                    [Ada.Directories.Ordinary_File => True,
+                     Ada.Directories.Directory     => False,
+                     Ada.Directories.Special_File  => False]);
+               while Ada.Directories.More_Entries (Search) loop
+                  Ada.Directories.Get_Next_Entry (Search, Item);
+                  declare
+                     Name : constant String :=
+                       Ada.Directories.Simple_Name (Item);
+                  begin
+                     if Name'Length > 11
+                       and then Name (Name'First .. Name'First + 10)
+                                /= "version-rep"
+                     then
+                        Version.Files.Delete_File_If_Exists
+                          (Join (Pack_Dir, Name));
+                     end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (Search);
+            end;
+         end if;
+      exception
+         --  A failure to consolidate leaves a correct, if larger, repository.
          when others =>
             null;
       end;
