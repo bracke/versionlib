@@ -86,9 +86,10 @@ package body Version.Submodules.Tests is
    begin
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String (Url)));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String (Url),
+            Branch => Null_Unbounded_String));
       Version.Gitmodules.Write (Root, Items);
    end Configure_Submodule;
 
@@ -140,9 +141,10 @@ package body Version.Submodules.Tests is
       Version.Init.Init (Root);
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String ("file:///tmp/libfoo.git")));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String ("file:///tmp/libfoo.git"),
+            Branch => Null_Unbounded_String));
 
       Version.Gitmodules.Write (Root, Items);
       Read_Back := Version.Gitmodules.Read (Root);
@@ -359,11 +361,10 @@ package body Version.Submodules.Tests is
       Version.Init.Init (Root);
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  =>
-              To_Unbounded_String
-                ("file:///tmp/libfoo.git" & Character'Val (9) & "x")));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String ("file:///tmp/libfoo.git" & Character'Val (9) & "x"),
+            Branch => Null_Unbounded_String));
 
       begin
          Version.Gitmodules.Write (Root, Items);
@@ -388,9 +389,10 @@ package body Version.Submodules.Tests is
       Version.Init.Init (Root);
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo""bad"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String ("file:///tmp/libfoo.git")));
+           (Name   => To_Unbounded_String ("deps/libfoo""bad"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String ("file:///tmp/libfoo.git"),
+            Branch => Null_Unbounded_String));
 
       begin
          Version.Gitmodules.Write (Root, Items);
@@ -434,9 +436,10 @@ package body Version.Submodules.Tests is
       Version.Init.Init (Root);
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String ("../libfoo.git")));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String ("../libfoo.git"),
+            Branch => Null_Unbounded_String));
       Version.Gitmodules.Write (Root, Items);
 
       Version.Files.With_Directory (Path => Root, Action => Check'Access);
@@ -480,9 +483,10 @@ package body Version.Submodules.Tests is
       Version.Init.Init (Root);
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String ("../../../evil.git")));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String ("../../../evil.git"),
+            Branch => Null_Unbounded_String));
       Version.Gitmodules.Write (Root, Items);
 
       Version.Files.With_Directory (Path => Root, Action => Check'Access);
@@ -1467,9 +1471,10 @@ package body Version.Submodules.Tests is
       Version.Init.Init (Root);
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String ("file:///tmp/libfoo.git")));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String ("file:///tmp/libfoo.git"),
+            Branch => Null_Unbounded_String));
       Version.Gitmodules.Write (Root, Items);
 
       Ada.Directories.Create_Path (Version.Files.To_Native_Path (Sub_Path));
@@ -1523,9 +1528,10 @@ package body Version.Submodules.Tests is
       Version.Init.Init (Root);
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String ("file:///tmp/libfoo.git")));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String ("file:///tmp/libfoo.git"),
+            Branch => Null_Unbounded_String));
       Version.Gitmodules.Write (Root, Items);
 
       Version.Files.With_Directory (Path => Root, Action => Check'Access);
@@ -1645,9 +1651,10 @@ package body Version.Submodules.Tests is
 
       Items.Append
         (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String ("deps/libfoo"),
-            Path => To_Unbounded_String ("deps/libfoo"),
-            Url  => To_Unbounded_String (Sub_Path)));
+           (Name   => To_Unbounded_String ("deps/libfoo"),
+            Path   => To_Unbounded_String ("deps/libfoo"),
+            Url    => To_Unbounded_String (Sub_Path),
+            Branch => Null_Unbounded_String));
       Version.Gitmodules.Write (Root, Items);
 
       Version.Files.With_Directory (Path => Root, Action => Check'Access);

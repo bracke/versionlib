@@ -183,8 +183,9 @@ package body Version.Gitmodules is
                                   (Strip_Quotes
                                      (Trim
                                         (Line (Line'First + 11 .. Line'Last - 1)))),
-                        Path => Null_Unbounded_String,
-                        Url  => Null_Unbounded_String);
+                        Path   => Null_Unbounded_String,
+                        Url    => Null_Unbounded_String,
+                        Branch => Null_Unbounded_String);
                      Current_Has_Path := False;
                      Current_Has_Url  := False;
                      In_Section := True;
@@ -220,6 +221,8 @@ package body Version.Gitmodules is
                               end if;
                               Current.Url := To_Unbounded_String (Value);
                               Current_Has_Url := True;
+                           elsif Key = "branch" then
+                              Current.Branch := To_Unbounded_String (Value);
                            else
                               null;
                            end if;
@@ -281,6 +284,13 @@ package body Version.Gitmodules is
                Append (Text, Normalized_Sub_Path & Character'Val (10));
                Append (Text, Character'Val (9) & "url = ");
                Append (Text, To_String (Item.Url) & Character'Val (10));
+
+               --  git writes branch last, and only when there is one.
+               if Length (Item.Branch) > 0 then
+                  Require_Config_Value (To_String (Item.Branch), "branch");
+                  Append (Text, Character'Val (9) & "branch = ");
+                  Append (Text, To_String (Item.Branch) & Character'Val (10));
+               end if;
             end;
          end loop;
       end if;

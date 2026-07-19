@@ -15,6 +15,7 @@ with Version.Files;
 with Version.Filesystem_Guard; use Version.Filesystem_Guard;
 with Version.Gitmodules;
 
+with Version.Branch;
 with Version.Packed_Refs;
 with Version.Path_Safety;
 with Version.Platform;
@@ -455,38 +456,6 @@ package body Version.Submodules is
       return Normalized;
    end Normalized_Relative_Submodule_Url;
 
-   --  Not used when resolving a relative submodule URL: git resolves those
-   --  against the base treated as a DIRECTORY, so "…/hub/super.git" with
-   --  "../donor" is "…/hub/donor". Stripping the repository name first and
-   --  then applying the "../" removed one component too many.
-   function Directory_Name_For_Url_Path (Path : String) return String is
-      Last  : Natural := Path'Last;
-      Slash : Natural := 0;
-   begin
-      if Path'Length = 0 then
-         return "";
-      end if;
-
-      while Last > Path'First and then Path (Last) = '/' loop
-         Last := Last - 1;
-      end loop;
-
-      for I in reverse Path'First .. Last loop
-         if Path (I) = '/' then
-            Slash := I;
-            exit;
-         end if;
-      end loop;
-
-      if Slash = 0 then
-         return "";
-      elsif Slash = Path'First then
-         return "/";
-      else
-         return Path (Path'First .. Slash - 1);
-      end if;
-   end Directory_Name_For_Url_Path;
-
    function Append_Relative_And_Normalize
      (Base_Dir, Relative : String) return String is
    begin
@@ -776,12 +745,49 @@ package body Version.Submodules is
       end if;
    end Is_Unsupported_Relative_Submodule_Url;
 
+   --  The pointer git writes in a submodule's `.git` file is RELATIVE to the
+   --  submodule worktree ("gitdir: ../../.git/modules/lib/sub"). An absolute
+   --  one works only until the superproject is moved or cloned elsewhere, at
+   --  which point every submodule in it breaks, so express it relatively
+   --  whenever the administrative directory really does live under the
+   --  superproject root -- and fall back to absolute when it does not, since
+   --  then there are no "../" steps that would reach it.
+   function Submodule_Gitdir_Pointer
+     (Repo : Version.Repository.Repository_Handle;
+      Path : String;
+      Name : String)
+      return String
+   is
+      Root     : constant String := Version.Repository.Root_Path (Repo);
+      Git_Dir  : constant String := Version.Repository.Git_Dir (Repo);
+      Absolute : constant String :=
+        Join (Join (Git_Dir, "modules"), Admin_Name (Name));
+   begin
+      if Git_Dir'Length > Root'Length + 1
+        and then Git_Dir (Git_Dir'First .. Git_Dir'First + Root'Length - 1) = Root
+        and then Git_Dir (Git_Dir'First + Root'Length) = '/'
+      then
+         declare
+            Git_Dir_Rel : constant String :=
+              Git_Dir (Git_Dir'First + Root'Length + 1 .. Git_Dir'Last);
+         begin
+            return Version.Files.Relative_To_Prefix
+              (Path   => Join (Join (Git_Dir_Rel, "modules"), Admin_Name (Name)),
+               Prefix => Canonical_Submodule_Path (Path) & "/");
+         end;
+      end if;
+
+      return Absolute;
+   end Submodule_Gitdir_Pointer;
+
    procedure Absorb_Clone_Gitdir
-     (Repo : Version.Repository.Repository_Handle; Path : String)
+     (Repo : Version.Repository.Repository_Handle;
+      Path : String;
+      Name : String)
    is
       Work_Path      : constant String := Submodule_Worktree_Path (Repo, Path);
       Dot_Git        : constant String := Join (Work_Path, ".git");
-      Admin          : constant String := Submodule_Admin_Path (Repo, Path);
+      Admin          : constant String := Submodule_Admin_Path (Repo, Name);
       Native_Dot_Git : constant String :=
         Version.Files.To_Native_Path (Dot_Git);
       Native_Admin   : constant String := Version.Files.To_Native_Path (Admin);
@@ -801,7 +807,10 @@ package body Version.Submodules is
 
       Version.Files.Rename_Directory (Dot_Git, Admin);
       Version.Files.Write_Binary_File_Atomic
-        (Path => Dot_Git, Content => "gitdir: " & Admin & Character'Val (10));
+        (Path    => Dot_Git,
+         Content => "gitdir: "
+                    & Submodule_Gitdir_Pointer (Repo, Path, Name)
+                    & Character'Val (10));
    end Absorb_Clone_Gitdir;
 
    procedure Require_Submodule_Repository
@@ -1091,7 +1100,9 @@ package body Version.Submodules is
       if not Ada.Directories.Exists (Version.Files.To_Native_Path (Work_Path))
       then
          Version.Clone.Clone (Source => Url, Target => Work_Path);
-         Absorb_Clone_Gitdir (Repo, Path);
+         --  The administrative directory is named after the submodule, and
+         --  the submodule's name is its .gitmodules section, not its path.
+         Absorb_Clone_Gitdir (Repo, Path, To_String (Item.Name));
       end if;
 
       Require_Submodule_Repository (Repo, Path);
@@ -1625,12 +1636,70 @@ package body Version.Submodules is
       Deinit (Version.Repository.Open, Paths, All_Submodules, Force);
    end Deinit;
 
+   --  `submodule add -b <branch>` leaves the submodule ON that branch, not on
+   --  the clone's default one. The clone has already fetched every branch, so
+   --  this only has to pick one: reuse the local branch when the clone made it
+   --  (it does for the remote's HEAD) and otherwise create it from the remote
+   --  tracking ref, which is the only place the other branches exist yet.
+   procedure Checkout_Branch_After_Clone
+     (Repo   : Version.Repository.Repository_Handle;
+      Path   : String;
+      Branch : String)
+   is
+      Work_Path : constant String := Submodule_Worktree_Path (Repo, Path);
+
+      procedure Do_Checkout is
+         Sub_Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Local    : constant String := "refs/heads/" & Branch;
+         Remote   : constant String := "refs/remotes/origin/" & Branch;
+      begin
+         if not Version.Refs.Ref_Exists (Sub_Repo, Local) then
+            if not Version.Refs.Ref_Exists (Sub_Repo, Remote) then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "remote branch '" & Branch & "' not found in upstream"
+                 & " origin";
+            end if;
+
+            Version.Branch.Create_Branch
+              (Name      => Branch,
+               Commit_Id =>
+                 Version.Objects.To_String
+                   (Version.Refs.Resolve_Ref (Sub_Repo, Remote)));
+         end if;
+
+         declare
+            Commit : constant Version.Objects.Hex_Object_Id :=
+              Version.Refs.Resolve_Ref (Sub_Repo, Local);
+         begin
+            Version.Refs.Write_Symbolic_HEAD (Sub_Repo, Local);
+            Version.Restore.Restore_Working_Tree (Sub_Repo);
+            Version.Staging.Write_From_Tree
+              (Repo    => Sub_Repo,
+               Tree_Id =>
+                 Version.Objects.Commit_Tree_Id
+                   (Version.Objects.Read_Object (Sub_Repo, Commit)));
+         end;
+      end Do_Checkout;
+   begin
+      Version.Files.With_Directory
+        (Path => Work_Path, Action => Do_Checkout'Access);
+   end Checkout_Branch_After_Clone;
+
    procedure Add
-     (Repo : Version.Repository.Repository_Handle;
-      Url  : String;
-      Path : String)
+     (Repo   : Version.Repository.Repository_Handle;
+      Url    : String;
+      Path   : String;
+      Branch : String := "";
+      Name   : String := "";
+      Force  : Boolean := False)
    is
       Safe_Path : constant String := Canonical_Submodule_Path (Path);
+      --  git names the submodule after its path unless told otherwise. The
+      --  name -- not the path -- is what keys the config and the
+      --  administrative directory, so the two part company under `--name`.
+      Safe_Name : constant String :=
+        (if Name'Length = 0 then Safe_Path else Canonical_Submodule_Path (Name));
       Work_Path : constant String := Submodule_Worktree_Path (Repo, Safe_Path);
       Resolved  : constant String := Resolve_Relative_Submodule_Url (Url);
       Items     : Version.Gitmodules.Submodule_Config_Vectors.Vector :=
@@ -1641,33 +1710,70 @@ package body Version.Submodules is
            with "submodule url must not be empty";
       end if;
 
-      if Version.Gitmodules.Find_By_Path (Items, Safe_Path) /= Natural'Last then
-         raise Ada.IO_Exceptions.Data_Error
-           with "'" & Safe_Path & "' already exists in the index";
-      end if;
+      declare
+         Registered : constant Boolean :=
+           Version.Gitmodules.Find_By_Path (Items, Safe_Path) /= Natural'Last;
+         Native_Work : constant String :=
+           Version.Files.To_Native_Path (Work_Path);
+         Present : constant Boolean := Ada.Directories.Exists (Native_Work);
+         --  A directory that is already a repository is not an obstacle: git
+         --  adopts it ("Adding existing repo at ... to the index") instead of
+         --  cloning over it, which is how a clone-first-register-later
+         --  workflow gets recorded. Only a non-repository directory is fatal.
+         Adopt : constant Boolean :=
+           Present
+             and then Ada.Directories.Exists
+                        (Version.Files.To_Native_Path
+                           (Join (Work_Path, ".git")));
+      begin
+         if Registered and then not Force then
+            raise Ada.IO_Exceptions.Data_Error
+              with "'" & Safe_Path & "' already exists in the index";
+         end if;
 
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Work_Path)) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "'" & Safe_Path & "' already exists and is not a valid"
-           & " git repository";
-      end if;
+         if Present and then not Adopt then
+            raise Ada.IO_Exceptions.Data_Error
+              with "'" & Safe_Path & "' already exists and is not a valid"
+              & " git repo";
+         end if;
 
-      Version.Filesystem_Guard.Require_Safe_Write_Target
-        (Repo_Root     => Version.Repository.Root_Path (Repo),
-         Relative_Path => Safe_Path,
-         Is_Directory  => True);
+         if not Adopt then
+            Version.Filesystem_Guard.Require_Safe_Write_Target
+              (Repo_Root     => Version.Repository.Root_Path (Repo),
+               Relative_Path => Safe_Path,
+               Is_Directory  => True);
 
-      Version.Clone.Clone (Source => Resolved, Target => Work_Path);
-      Absorb_Clone_Gitdir (Repo, Safe_Path);
-      Require_Submodule_Repository (Repo, Safe_Path);
+            Version.Clone.Clone (Source => Resolved, Target => Work_Path);
+
+            if Branch'Length > 0 then
+               Checkout_Branch_After_Clone (Repo, Safe_Path, Branch);
+            end if;
+
+            Absorb_Clone_Gitdir (Repo, Safe_Path, Safe_Name);
+         end if;
+
+         Require_Submodule_Repository (Repo, Safe_Path);
+      end;
 
       --  .gitmodules keeps the URL exactly as the caller wrote it: a relative
       --  one has to stay relative or the superproject stops being portable.
-      Items.Append
-        (Version.Gitmodules.Submodule_Config'
-           (Name => To_Unbounded_String (Safe_Path),
-            Path => To_Unbounded_String (Safe_Path),
-            Url  => To_Unbounded_String (Url)));
+      declare
+         Section : constant Version.Gitmodules.Submodule_Config :=
+           (Name   => To_Unbounded_String (Safe_Name),
+            Path   => To_Unbounded_String (Safe_Path),
+            Url    => To_Unbounded_String (Url),
+            Branch => To_Unbounded_String (Branch));
+         At_Index : constant Natural :=
+           Version.Gitmodules.Find_By_Path (Items, Safe_Path);
+      begin
+         --  Under --force the path may already have a section; two sections
+         --  for one path is not a file git would write, so replace it.
+         if At_Index = Natural'Last then
+            Items.Append (Section);
+         else
+            Items.Replace_Element (At_Index, Section);
+         end if;
+      end;
       Version.Gitmodules.Write (Repo, Items);
 
       --  Stage the gitlink and .gitmodules together, as git does: a
@@ -1701,10 +1807,12 @@ package body Version.Submodules is
          Version.Staging.Write (Repo, Entries);
       end;
 
+      --  Config is keyed on the submodule NAME, which is the path only when
+      --  --name did not override it.
       Version.Config.Set_Key
-        (Repo, "submodule." & Safe_Path & ".url", Resolved);
+        (Repo, "submodule." & Safe_Name & ".url", Resolved);
       Version.Config.Set_Key
-        (Repo, "submodule." & Safe_Path & ".active", "true");
+        (Repo, "submodule." & Safe_Name & ".active", "true");
    end Add;
 
    procedure Stage_Submodule

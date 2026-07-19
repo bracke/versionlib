@@ -1,5 +1,4 @@
 with Ada.IO_Exceptions;
-with Ada.Strings.Unbounded;
 
 with Version.Ref_Transaction;
 with Version.Refs;
@@ -189,7 +188,7 @@ package body Version.Notes is
       Commit : Version.Objects.Hex_Object_Id;
       Ref    : String := Default_Ref)
    is
-      Entries : Version.Staging.Index_Entry_Vectors.Vector :=
+      Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
         Notes_Tree_Entries (Repo, Ref);
       Target  : constant String := To_String (Commit);
       Kept    : Version.Staging.Index_Entry_Vectors.Vector;

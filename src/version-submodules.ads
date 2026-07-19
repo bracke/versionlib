@@ -31,14 +31,26 @@ package Version.Submodules is
       Element_Type => Submodule_Status);
 
    procedure Add
-     (Repo : Version.Repository.Repository_Handle;
-      Url  : String;
-      Path : String);
+     (Repo   : Version.Repository.Repository_Handle;
+      Url    : String;
+      Path   : String;
+      Branch : String := "";
+      Name   : String := "";
+      Force  : Boolean := False);
    --  git's `submodule add`: clone Url into Path, record it in .gitmodules,
    --  stage both that file and the gitlink, and register the resolved URL in
    --  the local config. The URL is stored in .gitmodules exactly as given --
    --  a relative one stays relative, which is what makes the superproject
    --  portable -- while the config holds the resolved form used to fetch.
+   --
+   --  Branch is `-b`: the submodule is left on that branch and it is recorded
+   --  in .gitmodules. Name is `--name`: the submodule's logical name, which
+   --  defaults to Path and keys both the config and the administrative
+   --  directory, so the two part company once it is given. Force is `-f`,
+   --  which lets an already-registered path be recorded again.
+   --
+   --  A Path that is already a repository is adopted rather than cloned over,
+   --  as git does; only a non-repository directory in the way is an error.
 
    procedure Init;
 

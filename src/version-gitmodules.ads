@@ -8,9 +8,13 @@ package Version.Gitmodules is
    use Ada.Strings.Unbounded;
 
    type Submodule_Config is record
-      Name : Unbounded_String;
-      Path : Unbounded_String;
-      Url  : Unbounded_String;
+      Name   : Unbounded_String;
+      Path   : Unbounded_String;
+      Url    : Unbounded_String;
+      Branch : Unbounded_String := Null_Unbounded_String;
+      --  `submodule add -b`. Empty when the section names no branch, which is
+      --  the usual case. Carrying it explicitly is what stops a rewrite of
+      --  .gitmodules from dropping a branch git put there.
    end record;
 
    package Submodule_Config_Vectors is new Ada.Containers.Vectors
