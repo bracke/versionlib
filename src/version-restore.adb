@@ -637,11 +637,24 @@ package body Version.Restore is
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
       Objects   : in out Version.Object_Cache.Object_Cache;
-      Trees     : in out Version.Tree_Cache.Tree_Cache)
+      Trees     : in out Version.Tree_Cache.Tree_Cache;
+      Keep      : Version.Path_Safety.Path_Vector :=
+        Version.Path_Safety.Path_Vectors.Empty_Vector)
    is
       Tree_Items     : Version.Objects.Tree_Entry_Vectors.Vector;
       Existing_Index : Version.Staging.Index_Entry_Vectors.Vector;
       Tree_Positions : Path_Position_Maps.Map;
+
+      function Kept (Path : String) return Boolean is
+      begin
+         for K of Keep loop
+            if K = Path then
+               return True;
+            end if;
+         end loop;
+
+         return False;
+      end Kept;
    begin
       Build_Working_Tree_Preflight
         (Repo           => Repo,
@@ -680,7 +693,9 @@ package body Version.Restore is
                  Version.Path_Safety.Normalize_Relative_Path
                    (To_String (Tree_Item.Path));
             begin
-               if Version.Sparse.Included (Repo, Relative_Path) then
+               if Version.Sparse.Included (Repo, Relative_Path)
+                 and then not Kept (Relative_Path)
+               then
                   Write_Tree_Item_To_Working_Tree
                     (Repo, Objects, Tree_Item, Relative_Path);
                end if;
@@ -691,7 +706,9 @@ package body Version.Restore is
 
    procedure Restore_Working_Tree_For_Commit
      (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id)
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Keep      : Version.Path_Safety.Path_Vector :=
+        Version.Path_Safety.Path_Vectors.Empty_Vector)
    is
       Objects : Version.Object_Cache.Object_Cache;
       Trees   : Version.Tree_Cache.Tree_Cache;
@@ -700,7 +717,8 @@ package body Version.Restore is
         (Repo      => Repo,
          Commit_Id => Commit_Id,
          Objects   => Objects,
-         Trees     => Trees);
+         Trees     => Trees,
+         Keep      => Keep);
    end Restore_Working_Tree_For_Commit;
 
    procedure Restore_Working_Tree (Repo : Version.Repository.Repository_Handle)

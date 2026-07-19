@@ -12,6 +12,8 @@ with Ada.Containers.Indefinite_Ordered_Sets;
 
 with Version.Working_Tree;
 with Version.Restore;
+with Version.Path_Safety;
+with Version.Checkout;
 with Version.Status;
 with Version.Staging;
 with Version.Objects; use Version.Objects;
@@ -795,11 +797,14 @@ package body Version.Branch is
       end if;
 
       Require_No_Rebase_State ("cannot switch branch", Repo);
-      Require_Clean_Status (Allow_Untracked => True);
 
       declare
          New_Id : constant Version.Objects.Hex_Object_Id :=
            Branch_Commit_Id (Repo => Repo, Name => Name);
+         --  A switch is a checkout with the branch attached, so it obeys the
+         --  same rule: only a path the target would write over blocks it, and
+         --  every other local edit rides across untouched.
+         Carried : Version.Path_Safety.Path_Vector;
          Object_Cache : Version.Object_Cache.Object_Cache;
          Tree_Cache   : Version.Tree_Cache.Tree_Cache;
          Target_Obj   : constant Version.Objects.Git_Object :=
@@ -809,6 +814,8 @@ package body Version.Branch is
          Entries      : constant Version.Objects.Tree_Entry_Vectors.Vector :=
            Version.Tree_Cache.Flatten_Tree (Repo, Tree_Cache, Target_Tree);
       begin
+         Version.Checkout.Require_Switch_Safe (Repo, New_Id, Carried);
+
          if not Entries.Is_Empty then
             for I in Entries.First_Index .. Entries.Last_Index loop
                declare
@@ -846,7 +853,8 @@ package body Version.Branch is
          begin
             Version.Restore.Restore_Working_Tree_For_Commit
               (Repo      => Repo,
-               Commit_Id => New_Id);
+               Commit_Id => New_Id,
+               Keep      => Carried);
             Version.Restore.Write_Index_For_Commit
               (Repo      => Repo,
                Commit_Id => New_Id);

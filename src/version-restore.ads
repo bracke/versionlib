@@ -3,6 +3,7 @@ with Version.Objects;
 with Version.Pathspec;
 with Version.Object_Cache;
 with Version.Tree_Cache;
+with Version.Path_Safety;
 
 package Version.Restore is
 
@@ -21,13 +22,21 @@ package Version.Restore is
 
    procedure Restore_Working_Tree_For_Commit
      (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id);
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Keep      : Version.Path_Safety.Path_Vector :=
+        Version.Path_Safety.Path_Vectors.Empty_Vector);
 
    procedure Restore_Working_Tree_For_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
       Objects   : in out Version.Object_Cache.Object_Cache;
-      Trees     : in out Version.Tree_Cache.Tree_Cache);
+      Trees     : in out Version.Tree_Cache.Tree_Cache;
+      Keep      : Version.Path_Safety.Path_Vector :=
+        Version.Path_Safety.Path_Vectors.Empty_Vector);
+   --  Keep names working files to leave exactly as they are. A branch switch
+   --  uses it for paths the target commit stores identically to the one being
+   --  left: git carries a local edit to such a path across the switch, and
+   --  rewriting it from the object store would silently discard the edit.
 
    procedure Write_Index_For_Commit
      (Repo      : Version.Repository.Repository_Handle;

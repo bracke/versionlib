@@ -495,7 +495,55 @@ package body Version.Branch.Tests is
          raise;
    end Update_Current_Branch_Rejects_Diverged_History;
 
-   procedure Switch_Branch_Rejects_Modified_Working_Tree
+   --  git refuses a switch only for paths the target commit would write
+   --  over. A path stored identically on both sides carries its local edit
+   --  across untouched, so a blanket "working tree is dirty" refusal is not
+   --  git's rule -- and rewriting such a path from the object store would
+   --  discard the edit.
+   procedure Switch_Branch_Carries_Unaffected_Modification
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
+
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+
+      File_Path : constant String := Version.Test_Support.Join (Root, "a.txt");
+   begin
+      Version.Init.Init (Root);
+      Version.Git_Fixtures.Run
+        (Root, "git config user.email test@example.com");
+      Version.Git_Fixtures.Run (Root, "git config user.name Test");
+
+      Ada.Directories.Set_Directory (Root);
+
+      Version.Test_Support.Write_Text_File
+        (File_Path, "clean" & Character'Val (10));
+
+      Version.Git_Fixtures.Run (Root, "git add a.txt");
+      Version.Write.Save ("initial");
+
+      --  feature holds a.txt exactly as HEAD does.
+      Version.Branch.Create_Branch ("feature");
+
+      Version.Test_Support.Write_Text_File
+        (File_Path, "dirty" & Character'Val (10));
+
+      Version.Branch.Switch_Branch ("feature");
+
+      Assert
+        (Version.Test_Support.Read_Text_File (File_Path) = "dirty",
+         "switch must carry a modification the target does not touch");
+
+      Ada.Directories.Set_Directory (Old_Dir);
+
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Switch_Branch_Carries_Unaffected_Modification;
+
+   procedure Switch_Branch_Rejects_Overwriting_Modification
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       Root : constant String :=
@@ -521,6 +569,15 @@ package body Version.Branch.Tests is
       Version.Write.Save ("initial");
 
       Version.Branch.Create_Branch ("feature");
+
+      --  Give feature a different a.txt, so switching to it must write the
+      --  path -- and therefore must not run over a local edit.
+      Version.Branch.Switch_Branch ("feature");
+      Version.Test_Support.Write_Text_File
+        (File_Path, "feature" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add a.txt");
+      Version.Write.Save ("feature change");
+      Version.Branch.Switch_Branch ("main");
 
       Version.Test_Support.Write_Text_File
         (File_Path, "dirty" & Character'Val (10));
@@ -532,11 +589,11 @@ package body Version.Branch.Tests is
             Raised := True;
       end;
 
-      Assert (Raised, "branch switch must reject modified working tree");
+      Assert (Raised, "switch must reject an overwriting modification");
 
       Assert
         (Version.Test_Support.Read_Text_File (File_Path) = "dirty",
-         "failed switch must leave modified file untouched");
+         "failed switch must leave the modified file untouched");
 
       Ada.Directories.Set_Directory (Old_Dir);
 
@@ -544,9 +601,11 @@ package body Version.Branch.Tests is
       when others =>
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
-   end Switch_Branch_Rejects_Modified_Working_Tree;
+   end Switch_Branch_Rejects_Overwriting_Modification;
 
-   procedure Switch_Branch_Rejects_Staged_Changes
+   --  The same rule for a staged change: harmless when the target stores the
+   --  path identically, fatal when it does not.
+   procedure Switch_Branch_Rejects_Overwriting_Staged_Change
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       Root : constant String :=
@@ -572,10 +631,15 @@ package body Version.Branch.Tests is
       Version.Write.Save ("initial");
 
       Version.Branch.Create_Branch ("feature");
+      Version.Branch.Switch_Branch ("feature");
+      Version.Test_Support.Write_Text_File
+        (File_Path, "feature" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "git add a.txt");
+      Version.Write.Save ("feature change");
+      Version.Branch.Switch_Branch ("main");
 
       Version.Test_Support.Write_Text_File
         (File_Path, "staged" & Character'Val (10));
-
       Version.Git_Fixtures.Run (Root, "git add a.txt");
 
       begin
@@ -585,11 +649,11 @@ package body Version.Branch.Tests is
             Raised := True;
       end;
 
-      Assert (Raised, "branch switch must reject staged changes");
+      Assert (Raised, "switch must reject an overwriting staged change");
 
       Assert
         (Version.Test_Support.Read_Text_File (File_Path) = "staged",
-         "failed switch must leave staged file content untouched");
+         "failed switch must leave the staged file content untouched");
 
       Ada.Directories.Set_Directory (Old_Dir);
 
@@ -597,7 +661,7 @@ package body Version.Branch.Tests is
       when others =>
          Ada.Directories.Set_Directory (Old_Dir);
          raise;
-   end Switch_Branch_Rejects_Staged_Changes;
+   end Switch_Branch_Rejects_Overwriting_Staged_Change;
 
    procedure Switch_Branch_Rejects_Untracked_File
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -8662,13 +8726,18 @@ package body Version.Branch.Tests is
 
       Register_Routine
         (T,
-         Switch_Branch_Rejects_Modified_Working_Tree'Access,
-         "Branch: switch rejects modified working tree");
+         Switch_Branch_Carries_Unaffected_Modification'Access,
+         "Branch: switch carries a modification the target does not touch");
 
       Register_Routine
         (T,
-         Switch_Branch_Rejects_Staged_Changes'Access,
-         "Branch: switch rejects staged changes");
+         Switch_Branch_Rejects_Overwriting_Modification'Access,
+         "Branch: switch rejects an overwriting modification");
+
+      Register_Routine
+        (T,
+         Switch_Branch_Rejects_Overwriting_Staged_Change'Access,
+         "Branch: switch rejects an overwriting staged change");
 
       Register_Routine
         (T,

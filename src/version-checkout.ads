@@ -1,6 +1,19 @@
 with Version.Objects;
+with Version.Repository;
+with Version.Path_Safety;
 
 package Version.Checkout is
+
+   procedure Require_Switch_Safe
+     (Repo      : Version.Repository.Repository_Handle;
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Carried   : out Version.Path_Safety.Path_Vector);
+   --  git's rule for moving HEAD to Commit_Id with work in progress: refuse
+   --  only for paths the move would write over -- those whose content differs
+   --  between HEAD and Commit_Id -- and carry every other local edit across
+   --  untouched. Carried returns those paths, which the caller must exclude
+   --  when materializing the target tree, or the edit is silently lost.
+   --  Raises git's "Your local changes ... would be overwritten" otherwise.
 
    procedure Checkout_Commit
      (Commit_Id : Version.Objects.Hex_Object_Id;

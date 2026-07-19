@@ -284,6 +284,22 @@ package body Version.Archive is
       return Output & ".version-archive-tmp";
    end Temp_Output_Path;
 
+   function Writes_In_Place (Output : String) return Boolean is
+      --  Building beside the target and renaming into place keeps a failed
+      --  archive from leaving a truncated file behind. It cannot work when
+      --  the target is not a regular file: `-o /dev/null` -- the standard way
+      --  to time an archive or check that one builds -- would need to create
+      --  /dev/null.version-archive-tmp in /dev, and the rename would replace
+      --  the device node. Write straight to those, as git does.
+      Native : constant String := Version.Files.To_Native_Path (Output);
+   begin
+      return Ada.Directories.Exists (Native)
+        and then Ada.Directories.Kind (Native) /= Ada.Directories.Ordinary_File;
+   exception
+      when others =>
+         return False;
+   end Writes_In_Place;
+
    --------------------------------------------------------------------------
    --  export-subst: keyword substitution in archived blobs
    --------------------------------------------------------------------------
@@ -801,7 +817,9 @@ package body Version.Archive is
       Object_Cache : Version.Object_Cache.Object_Cache;
       Tree_Cache   : Version.Tree_Cache.Tree_Cache;
       Archive_Prefix : constant String := Normalize_Prefix (Prefix);
-      Work_Output    : constant String := Temp_Output_Path (Output);
+      In_Place       : constant Boolean := Writes_In_Place (Output);
+      Work_Output    : constant String :=
+        (if In_Place then Output else Temp_Output_Path (Output));
       Subst          : Subst_Context;
    begin
       Validate_Output_Path (Output);
@@ -978,7 +996,7 @@ package body Version.Archive is
                        (Output, Version.Compression.Gzip (Tar_Bytes));
                      Remove_Partial_Output (Work_Output);
                   end;
-               else
+               elsif not In_Place then
                   Version.Files.Atomic_Replace (Work_Output, Output);
                end if;
             exception
@@ -1045,7 +1063,9 @@ package body Version.Archive is
                end loop;
 
                Version.Zip.Close (Writer);
-               Version.Files.Atomic_Replace (Work_Output, Output);
+               if not In_Place then
+                  Version.Files.Atomic_Replace (Work_Output, Output);
+               end if;
             exception
                when others =>
                   Version.Zip.Close (Writer);
