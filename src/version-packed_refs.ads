@@ -33,7 +33,12 @@ package Version.Packed_Refs is
      (Repo          : Version.Repository.Repository_Handle;
       Include_Heads : Boolean := True;
       Include_Tags  : Boolean := True;
+      Include_All   : Boolean := False;
       Prune_Loose   : Boolean := False);
+   --  Include_All is git's `--all`: pack every ref under refs/, not just the
+   --  branches and tags. Remote-tracking refs are the common case, and a
+   --  repository can hold refs/notes, refs/stash or a third party's
+   --  hierarchy besides -- none of which "heads and tags" reaches.
 
    procedure Remove
      (Repo : Version.Repository.Repository_Handle;

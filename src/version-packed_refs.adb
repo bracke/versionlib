@@ -241,9 +241,44 @@ package body Version.Packed_Refs is
       Lock_Path : constant String := Path & ".lock";
       Sorted       : constant Packed_Ref_Vectors.Vector := Normalized (Refs);
       Lock_Created : Boolean := False;
+      --  git advertises which optional records the file carries. "peeled"
+      --  means annotated tags may have a "^<target>" line; "fully-peeled"
+      --  promises every one of them does, so a reader may trust the absence
+      --  of a line rather than re-inflating the tag to find out. The trailing
+      --  space is git's own.
       Content      : Unbounded_String :=
         To_Unbounded_String
-          ("# pack-refs with: sorted" & Character'Val (10));
+          ("# pack-refs with: peeled fully-peeled sorted "
+           & Character'Val (10));
+
+      --  The object an annotated tag ultimately names, or "" for anything
+      --  else. Chained tags peel through to the first non-tag object.
+      function Peeled (Id : Version.Objects.Hex_Object_Id) return String is
+         Current : Version.Objects.Object_Id_Storage := Id;
+         Peeled_Any : Boolean := False;
+      begin
+         --  Bounded, so a cycle of tags cannot spin here.
+         for Hop in 1 .. 10 loop
+            declare
+               Obj : constant Version.Objects.Git_Object :=
+                 Version.Objects.Read_Object (Repo, Current);
+            begin
+               exit when Version.Objects.Kind (Obj)
+                         /= Version.Objects.Tag_Object;
+               Current := Version.Objects.Tag_Target_Id (Obj);
+               Peeled_Any := True;
+            end;
+         end loop;
+
+         --  Only an annotated tag has anything to peel to.
+         return (if Peeled_Any then Version.Objects.To_String (Current)
+                 else "");
+      exception
+         when others =>
+            --  An unreadable or absent target is not worth failing the whole
+            --  rewrite over; the file is still valid without the peel line.
+            return "";
+      end Peeled;
    begin
       if Ada.Directories.Exists (Lock_Path) then
          raise Ada.IO_Exceptions.Data_Error with
@@ -257,6 +292,13 @@ package body Version.Packed_Refs is
               & " "
               & To_String (Sorted.Element (I).Name)
               & Character'Val (10);
+            declare
+               Target : constant String := Peeled (Sorted.Element (I).Id);
+            begin
+               if Target'Length > 0 then
+                  Content := Content & "^" & Target & Character'Val (10);
+               end if;
+            end;
          end loop;
       end if;
 
@@ -374,19 +416,29 @@ package body Version.Packed_Refs is
      (Repo          : Version.Repository.Repository_Handle;
       Include_Heads : Boolean := True;
       Include_Tags  : Boolean := True;
+      Include_All   : Boolean := False;
       Prune_Loose   : Boolean := False)
    is
       Refs : Packed_Ref_Vectors.Vector := Read_All (Repo);
       Packed : Packed_Ref_Vectors.Vector;
    begin
-      if Include_Heads then
+      if Include_All then
+         --  Everything under refs/, in one walk.
+         Append_Loose_Refs
+           (Root_Dir   =>
+              Join (Version.Repository.Common_Git_Dir (Repo), "refs"),
+            Ref_Prefix => "refs",
+            Result     => Refs);
+      end if;
+
+      if Include_Heads and then not Include_All then
          Append_Loose_Refs
            (Root_Dir   => Join (Version.Repository.Common_Git_Dir (Repo), "refs/heads"),
             Ref_Prefix => "refs/heads",
             Result     => Refs);
       end if;
 
-      if Include_Tags then
+      if Include_Tags and then not Include_All then
          Append_Loose_Refs
            (Root_Dir   => Join (Version.Repository.Common_Git_Dir (Repo), "refs/tags"),
             Ref_Prefix => "refs/tags",
