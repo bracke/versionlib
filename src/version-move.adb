@@ -11,10 +11,11 @@ package body Version.Move is
    use Ada.Strings.Unbounded;
 
    procedure Move_Path
-     (Repo        : Version.Repository.Repository_Handle;
-      Source      : String;
-      Destination : String;
-      Force       : Boolean := False)
+     (Repo           : Version.Repository.Repository_Handle;
+      Source         : String;
+      Destination    : String;
+      Force          : Boolean := False;
+      Create_Parents : Boolean := False)
    is
       Src_Norm : constant String :=
         Version.Path_Safety.Normalize_Relative_Path (Source);
@@ -39,6 +40,22 @@ package body Version.Move is
          raise Ada.IO_Exceptions.Data_Error with
            "source and destination are the same: " & Src_Norm;
       end if;
+
+      --  A conflicted path has three entries -- stages 1, 2 and 3 -- and the
+      --  first of them is the merge base. Taking it as "the" entry would
+      --  restage the move as a stage-0 entry holding the base blob: an index
+      --  claiming a resolution nobody made, with the other two sides dropped.
+      --  git refuses to move a conflicted path at all, and -f does not
+      --  override it.
+      for I in Entries.First_Index .. Entries.Last_Index loop
+         if To_String (Entries.Element (I).Path) = Src_Norm
+           and then Entries.Element (I).Stage /= 0
+         then
+            raise Ada.IO_Exceptions.Data_Error with
+              "conflicted, source=" & Src_Norm
+              & ", destination=" & Dst_Norm;
+         end if;
+      end loop;
 
       --  Source must be tracked.
       for I in Entries.First_Index .. Entries.Last_Index loop
@@ -77,8 +94,27 @@ package body Version.Move is
          end if;
       end if;
 
+      --  git renames into an existing directory only; it does not create the
+      --  destination's parent, and reports the rename(2) failure when it is
+      --  missing. Creating it silently turns a typo'd destination into a new
+      --  directory tree the caller never asked for.
+      if Create_Parents then
+         Version.Files.Create_Parent_Directories (Dst_Full);
+      else
+         declare
+            Parent : constant String :=
+              Ada.Directories.Containing_Directory
+                (Version.Files.To_Native_Path (Dst_Full));
+         begin
+            if not Ada.Directories.Exists (Parent) then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "renaming '" & Src_Norm
+                 & "' failed: No such file or directory";
+            end if;
+         end;
+      end if;
+
       --  Move the working-tree file (Rename preserves the executable bit).
-      Version.Files.Create_Parent_Directories (Dst_Full);
       Ada.Directories.Rename
         (Old_Name => Version.Files.To_Native_Path (Src_Full),
          New_Name => Version.Files.To_Native_Path (Dst_Full));

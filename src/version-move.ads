@@ -17,10 +17,17 @@ package Version.Move is
    --  @param Force Overwrite an existing destination.
 
    procedure Move_Path
-     (Repo        : Version.Repository.Repository_Handle;
-      Source      : String;
-      Destination : String;
-      Force       : Boolean := False);
+     (Repo           : Version.Repository.Repository_Handle;
+      Source         : String;
+      Destination    : String;
+      Force          : Boolean := False;
+      Create_Parents : Boolean := False);
+   --  Create_Parents allows the destination's parent directories to be made
+   --  rather than required. git renames a directory with a single rename(2),
+   --  so the new directory appears even though no parent was created for it;
+   --  a caller replaying that as a file-by-file move needs this. For a plain
+   --  file destination it stays off, because git reports the rename(2)
+   --  failure rather than inventing the directory the caller mistyped.
    --  As above, using an already-open repository handle (so the CLI can move
    --  several sources into a directory under one handle).
 

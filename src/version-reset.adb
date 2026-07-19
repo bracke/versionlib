@@ -1,4 +1,7 @@
 with Version.Objects;
+with Version.Merge_State;
+with Version.Cherry_Pick_State;
+with Version.Revert_State;
 with Version.Ref_Names;
 with Version.Ref_Transaction;
 with Version.Reflog;
@@ -111,6 +114,17 @@ package body Version.Reset is
 
       if Mode = Mixed or else Mode = Hard then
          Version.Restore.Write_Index_For_Commit (Repo, Commit);
+      end if;
+
+      --  git's reset drops the in-progress merge/cherry-pick/revert state
+      --  for every mode but --soft, which keeps it deliberately. Leaving it
+      --  behind means the replay outlives the reset that discarded it: a
+      --  later `--continue` resumes a pick that is no longer there, and git
+      --  itself still reports "You are currently cherry-picking".
+      if Mode /= Soft then
+         Version.Merge_State.Clear_State (Repo);
+         Version.Cherry_Pick_State.Clear_State (Repo);
+         Version.Revert_State.Clear_State (Repo);
       end if;
    end Reset_To_Commit;
 

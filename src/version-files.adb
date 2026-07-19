@@ -306,6 +306,47 @@ package body Version.Files is
          raise;
    end Read_Binary_File;
 
+   procedure Write_Symlink (Path : String; Target : String) is
+      function C_Symlink
+        (Target_Name : Interfaces.C.char_array;
+         Link_Name   : Interfaces.C.char_array)
+         return Interfaces.C.int
+        with Import, Convention => C, External_Name => "symlink";
+      function C_Unlink (Name : Interfaces.C.char_array)
+        return Interfaces.C.int
+        with Import, Convention => C, External_Name => "unlink";
+
+      Native : constant String := To_Native_Path (Path);
+      Ignored : Interfaces.C.int;
+   begin
+      if Version.Platform.Current /= Version.Platform.POSIX_Platform then
+         raise Ada.IO_Exceptions.Data_Error with
+           "symlinks are not supported on this platform: " & Path;
+      elsif Target'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error with
+           "empty symlink target for " & Path;
+      end if;
+
+      for C of Target loop
+         if C = Character'Val (0) then
+            raise Ada.IO_Exceptions.Data_Error with
+              "symlink target contains NUL: " & Path;
+         end if;
+      end loop;
+
+      --  symlink() refuses to replace an existing name, so clear it first.
+      Ignored := C_Unlink (Interfaces.C.To_C (Native));
+
+      if Interfaces.C."/="
+           (C_Symlink
+              (Interfaces.C.To_C (Target), Interfaces.C.To_C (Native)),
+            0)
+      then
+         raise Ada.IO_Exceptions.Use_Error with
+           "could not create symlink: " & Path;
+      end if;
+   end Write_Symlink;
+
    procedure Set_Executable (Path : String; Executable : Boolean) is
       function C_Chmod
         (Name : Interfaces.C.char_array; Mode : Interfaces.C.int)

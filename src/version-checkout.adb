@@ -5,7 +5,6 @@ with Version.Objects; use Version.Objects;
 with Version.Object_Cache;
 with Version.Tree_Cache;
 with Version.Refs;
-with Version.Repository;
 with Version.Restore;
 with Version.Status;
 with Version.Reflog;
@@ -14,7 +13,6 @@ with Version.Cherry_Pick_State;
 with Version.Revert_State;
 with Version.Hooks;
 with Version.Files;
-with Version.Path_Safety;
 
 package body Version.Checkout is
 

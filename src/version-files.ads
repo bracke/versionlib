@@ -69,6 +69,16 @@ package Version.Files is
    --  Set (Executable) or clear the executable bits of Path via POSIX chmod
    --  (mode 0755 vs 0644). A no-op on platforms without an executable bit.
 
+   procedure Write_Symlink
+     (Path : String; Target : String);
+   --  Create Path as a symbolic link to Target, replacing whatever is already
+   --  there. A mode 120000 index or tree entry stores its target as the blob
+   --  content, so anything materialising such an entry must come through here
+   --  -- writing the content as a regular file instead silently turns the
+   --  link into a file whose text happens to be a path. Raises Use_Error if
+   --  the link cannot be created, and Data_Error on a platform without
+   --  symbolic links or for a target that cannot be one.
+
    function Is_Ordinary_File
      (Path : String)
       return Boolean;
