@@ -406,6 +406,7 @@ package body Version.Worktrees.Tests is
          Detached => False,
          Current  => True,
          Missing  => False,
+         Locked   => False,
          Head     => Null_Unbounded_String);
       Linked   : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-feature"),
@@ -413,6 +414,7 @@ package body Version.Worktrees.Tests is
          Detached => False,
          Current  => False,
          Missing  => False,
+         Locked   => False,
          Head     => Null_Unbounded_String);
       Missing  : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-missing"),
@@ -420,6 +422,7 @@ package body Version.Worktrees.Tests is
          Detached => False,
          Current  => False,
          Missing  => True,
+         Locked   => False,
          Head     => Null_Unbounded_String);
       Detached : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-detached"),
@@ -427,6 +430,7 @@ package body Version.Worktrees.Tests is
          Detached => True,
          Current  => False,
          Missing  => False,
+         Locked   => False,
          Head     => Null_Unbounded_String);
    begin
       Assert

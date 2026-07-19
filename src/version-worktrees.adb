@@ -205,6 +205,7 @@ package body Version.Worktrees is
             Detached => False,
             Current  => False,
             Missing  => False,
+            Locked   => False,
             Head     => Null_Unbounded_String);
       else
          return
@@ -213,6 +214,7 @@ package body Version.Worktrees is
             Detached => True,
             Current  => False,
             Missing  => False,
+            Locked   => False,
             Head     => To_Unbounded_String (Line));
       end if;
    end Head_Branch_Or_Detached;
@@ -231,6 +233,7 @@ package body Version.Worktrees is
         Version.Files.Normalize_Separators (Git_Dir)
         = Version.Files.Normalize_Separators (Current_Git_Dir);
       Info.Missing := not Ada.Directories.Exists (Native (Path));
+      Info.Locked  := Version.Files.Is_Ordinary_File (Join (Git_Dir, "locked"));
 
       --  An attached worktree's HEAD is whatever its branch points at; the
       --  branch itself lives in the common git dir, so the caller's handle
@@ -762,6 +765,69 @@ package body Version.Worktrees is
       end if;
    end Require_Linked_Common_Dir;
 
+   --  The admin directory .git/worktrees/<name> that belongs to a worktree
+   --  path, or "" when the path is not a linked worktree.
+   function Admin_Dir_Of (Path : String) return String is
+      Caller    : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Work_Path : constant String := Abs_Path (Path);
+      Resolved  : constant String :=
+        Version.Repository.Resolve_Git_Dir (Work_Path);
+   begin
+      if Resolved'Length = 0
+        or else Same_Path
+                  (Resolved, Version.Repository.Common_Git_Dir (Caller))
+      then
+         return "";
+      end if;
+      return Resolved;
+   exception
+      when others =>
+         return "";
+   end Admin_Dir_Of;
+
+   function Lock_File_Of (Path : String) return String is
+      Admin : constant String := Admin_Dir_Of (Path);
+   begin
+      return (if Admin'Length = 0 then "" else Join (Admin, "locked"));
+   end Lock_File_Of;
+
+   function Is_Locked (Path : String) return Boolean is
+      File : constant String := Lock_File_Of (Path);
+   begin
+      return File'Length > 0 and then Version.Files.Is_Ordinary_File (File);
+   end Is_Locked;
+
+   procedure Lock (Path : String; Reason : String := "") is
+      File : constant String := Lock_File_Of (Path);
+   begin
+      if File'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error
+           with "not a linked worktree: " & Path;
+      elsif Version.Files.Is_Ordinary_File (File) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "'" & Path & "' is already locked";
+      end if;
+
+      Version.Files.Write_Binary_File
+        (File,
+         (if Reason'Length = 0 then "" else Reason & Character'Val (10)));
+   end Lock;
+
+   procedure Unlock (Path : String) is
+      File : constant String := Lock_File_Of (Path);
+   begin
+      if File'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error
+           with "not a linked worktree: " & Path;
+      elsif not Version.Files.Is_Ordinary_File (File) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "'" & Path & "' is not locked";
+      end if;
+
+      Version.Files.Delete_File_If_Exists (File);
+   end Unlock;
+
    function Prunable return Prunable_Vectors.Vector is
       Repo      : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -921,6 +987,17 @@ package body Version.Worktrees is
       end if;
 
       Require_Linked_Common_Dir (Caller, Work_Path);
+
+      --  A locked worktree is one the user asked not to be touched; saying
+      --  the tree is unclean instead names the wrong reason and points at
+      --  the wrong remedy.
+      if Is_Locked (Work_Path) then
+         raise Ada.IO_Exceptions.Data_Error with
+           "cannot remove a locked working tree;"
+           & Character'Val (10)
+           & "use 'remove -f -f' to override or unlock first";
+      end if;
+
       Require_Clean (Work_Path);
       Version.Files.Delete_Directory_Tree_If_Exists (Work_Path);
       if Ada.Directories.Exists (Native (To_String (Git_Dir_Value))) then

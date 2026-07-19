@@ -8,6 +8,7 @@ package Version.Worktrees is
       Detached  : Boolean := False;
       Current   : Boolean := False;
       Missing   : Boolean := False;
+      Locked    : Boolean := False;
       Head      : Ada.Strings.Unbounded.Unbounded_String;
       --  The commit this worktree has checked out. git's `worktree list`
       --  reports it for every entry, attached or not, so it cannot be read
@@ -48,6 +49,18 @@ package Version.Worktrees is
    package Prunable_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Natural,
       Element_Type => Prunable_Entry);
+
+   procedure Lock
+     (Path   : String;
+      Reason : String := "");
+   --  Mark the worktree locked so `remove` and `prune` leave it alone -- what
+   --  git offers for a worktree on removable media. Raises when it is already
+   --  locked.
+
+   procedure Unlock (Path : String);
+   --  Raises when the worktree is not locked, as git does.
+
+   function Is_Locked (Path : String) return Boolean;
 
    function Prunable
       return Prunable_Vectors.Vector;
