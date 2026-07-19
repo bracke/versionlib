@@ -1,3 +1,4 @@
+- Fix: `Version.Bundle` checks that a bundle path is a regular file before reading it. Reading a directory never ends, so `bundle verify <dir>` exhausted the heap and died with STORAGE_ERROR where git simply says the file is not a bundle.
 - Add: `Version.Grep.Line_Matcher` with `Compile`/`Matches`, a pattern compiled once and applied to many lines. `log --author=`/`--grep=` filter every commit in a walk, and both are regular expressions in git, so neither per-line recompilation nor a substring approximation would do.
 - Add: `Version.Show.Show_Commit` takes `No_Patch`, `Oneline` and `Format`, so a caller can shape the header (git's `show -s`, `--oneline`, `--format=<fmt>`) instead of always emitting the full one.
 - Add: `Version.Mailbox.Parse` takes `Keep_Subject`, git's `mailinfo -k`, leaving the Subject header exactly as it arrived instead of stripping bracket prefixes and a leading "Re:".

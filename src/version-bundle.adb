@@ -161,12 +161,26 @@ package body Version.Bundle is
          raise;
    end Create;
 
+   --  A bundle is a regular file. Handing anything else to the whole-file
+   --  read below is not merely wrong but fatal: reading a directory yields no
+   --  end and exhausts the heap, so `bundle verify` on one used to abort with
+   --  STORAGE_ERROR instead of saying the file is not a bundle.
+   procedure Require_Bundle_File (Bundle_Path : String) is
+   begin
+      if not Version.Files.Is_Ordinary_File (Bundle_Path) then
+         raise Ada.IO_Exceptions.Data_Error with
+           "not a git bundle: " & Bundle_Path;
+      end if;
+   end Require_Bundle_File;
+
    function Read_Header (Bundle_Path : String) return Bundle_Info is
       Content    : constant String :=
-        Version.Files.Read_Binary_File (Bundle_Path);
+        (if Version.Files.Is_Ordinary_File (Bundle_Path)
+         then Version.Files.Read_Binary_File (Bundle_Path) else "");
       Info       : Bundle_Info;
       Pack_Start : Positive;
    begin
+      Require_Bundle_File (Bundle_Path);
       Scan_Header (Content, Bundle_Path, Info, Pack_Start);
       return Info;
    end Read_Header;
@@ -177,7 +191,8 @@ package body Version.Bundle is
       Info        : out Bundle_Info)
    is
       Content    : constant String :=
-        Version.Files.Read_Binary_File (Bundle_Path);
+        (if Version.Files.Is_Ordinary_File (Bundle_Path)
+         then Version.Files.Read_Binary_File (Bundle_Path) else "");
       Pack_Start : Positive;
       Pack_Dir   : constant String :=
         Version.Files.Join
@@ -201,6 +216,7 @@ package body Version.Bundle is
             return False;
       end Object_Present;
    begin
+      Require_Bundle_File (Bundle_Path);
       Scan_Header (Content, Bundle_Path, Info, Pack_Start);
 
       if Pack_Start > Content'Last then
