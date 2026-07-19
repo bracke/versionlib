@@ -234,7 +234,21 @@ package body Version.Bisect is
       Version.Files.Write_Binary_File_Atomic
         (Path (Repo, "BISECT_TERMS"),
          Term_Bad & ASCII.LF & Term_Good & ASCII.LF);
+
+      --  git records that it has checked the good revs are ancestors of the
+      --  bad one, so the check is not repeated on every step.
+      Version.Files.Write_Binary_File_Atomic
+        (Path (Repo, "BISECT_ANCESTORS_OK"), "");
    end Start;
+
+   procedure Record_Expected
+     (Repo   : Version.Repository.Repository_Handle;
+      Commit : Version.Objects.Hex_Object_Id) is
+   begin
+      Version.Files.Write_Binary_File_Atomic
+        (Path (Repo, "BISECT_EXPECTED_REV"),
+         Version.Objects.To_String (Commit) & ASCII.LF);
+   end Record_Expected;
 
    procedure Set_Terms
      (Repo      : Version.Repository.Repository_Handle;

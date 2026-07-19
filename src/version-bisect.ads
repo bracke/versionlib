@@ -115,6 +115,16 @@ package Version.Bisect is
      (Repo : Version.Repository.Repository_Handle) return String;
 
    --  Remove all session state (state files + refs/bisect/).
+   procedure Record_Expected
+     (Repo   : Version.Repository.Repository_Handle;
+      Commit : Version.Objects.Hex_Object_Id);
+   --  BISECT_EXPECTED_REV: the commit the bisection just handed out for
+   --  testing. git writes it at every step and compares it against HEAD, so
+   --  that a verdict given after checking out something else is caught rather
+   --  than folded into the search. Clear already removed this file; nothing
+   --  ever wrote it, so a bisect state left by version was one git could not
+   --  reason about.
+
    procedure Clear (Repo : Version.Repository.Repository_Handle);
 
    --  Number of steps git would report for a candidate set of size All_N.
