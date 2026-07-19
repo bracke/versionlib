@@ -97,6 +97,63 @@ package body Version.Describe is
 
       --  A tag is annotated when refs/tags/<name> points at a tag object
       --  rather than directly at the commit.
+      --  The tagger timestamp of an annotated tag, 0 for anything else. git
+      --  breaks a distance tie by tag date, newest first, so two tags on the
+      --  same commit do not resolve alphabetically -- which is how a release
+      --  tag could lose to an older one that merely sorts earlier.
+      function Tag_Time (Tag_Name : String) return Long_Long_Integer is
+         Ref_Id : constant Version.Objects.Hex_Object_Id :=
+           Version.Refs.Resolve_Ref (Repo, "refs/tags/" & Tag_Name);
+         Obj    : constant Version.Objects.Git_Object :=
+           Version.Objects.Read_Object (Repo, Ref_Id);
+      begin
+         if Version.Objects.Kind (Obj) /= Version.Objects.Tag_Object then
+            return 0;
+         end if;
+
+         declare
+            Content : constant String := Version.Objects.Content (Obj);
+            Start   : constant Natural :=
+              Ada.Strings.Fixed.Index (Content, "tagger ");
+            Stop    : Natural;
+            Last_Sp : Natural := 0;
+            Prev_Sp : Natural := 0;
+         begin
+            if Start = 0 then
+               return 0;
+            end if;
+
+            Stop := Ada.Strings.Fixed.Index
+              (Content (Start .. Content'Last), "" & Character'Val (10));
+            if Stop = 0 then
+               Stop := Content'Last;
+            else
+               Stop := Stop - 1;
+            end if;
+
+            --  "tagger Name <mail> <unix-seconds> <zone>": the timestamp is
+            --  the second-to-last whitespace-separated token.
+            for I in Start .. Stop loop
+               if Content (I) = ' ' then
+                  Prev_Sp := Last_Sp;
+                  Last_Sp := I;
+               end if;
+            end loop;
+
+            if Prev_Sp = 0 or else Last_Sp <= Prev_Sp + 1 then
+               return 0;
+            end if;
+
+            return Long_Long_Integer'Value
+              (Content (Prev_Sp + 1 .. Last_Sp - 1));
+         end;
+      exception
+         when others =>
+            return 0;
+      end Tag_Time;
+
+      Best_Time : Long_Long_Integer := Long_Long_Integer'First;
+
       function Is_Annotated (Tag_Name : String) return Boolean is
          Ref_Id : constant Version.Objects.Hex_Object_Id :=
            Version.Refs.Resolve_Ref (Repo, "refs/tags/" & Tag_Name);
@@ -133,16 +190,28 @@ package body Version.Describe is
                         else Distance (Repo, Tag_Commit, Commit));
                   begin
                      --  Nearest tag wins; at equal distance git prefers an
-                     --  annotated tag over a lightweight one.
-                     if Dist < Best_Dist
-                       or else (Dist = Best_Dist
-                                and then Annotated and then not Best_Annotated)
-                     then
-                        Best_Dist      := Dist;
-                        Best_Tag       := Tag;
-                        Best_Exact     := Exact;
-                        Best_Annotated := Annotated;
-                     end if;
+                     --  annotated tag over a lightweight one, and between two
+                     --  of the same kind the more recently tagged one.
+                     declare
+                        This_Time : constant Long_Long_Integer :=
+                          Tag_Time (Name);
+                        Better : constant Boolean :=
+                          Dist < Best_Dist
+                          or else (Dist = Best_Dist
+                                   and then Annotated
+                                   and then not Best_Annotated)
+                          or else (Dist = Best_Dist
+                                   and then Annotated = Best_Annotated
+                                   and then This_Time > Best_Time);
+                     begin
+                        if Better then
+                           Best_Dist      := Dist;
+                           Best_Tag       := Tag;
+                           Best_Exact     := Exact;
+                           Best_Annotated := Annotated;
+                           Best_Time      := This_Time;
+                        end if;
+                     end;
                   end;
                end if;
             end if;

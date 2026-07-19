@@ -62,44 +62,35 @@ package body Version.Shortlog is
       Tip  : Version.Objects.Hex_Object_Id)
       return Group_Vectors.Vector
    is
-      Seen   : Id_Sets.Set;
-      Queue  : Version.History.Commit_Id_Vectors.Vector;
       Groups : Group_Maps.Map;
       Result : Group_Vectors.Vector;
-   begin
-      Queue.Append (Tip);
-      while not Queue.Is_Empty loop
-         declare
-            C : constant Version.Objects.Hex_Object_Id := Queue.Last_Element;
-         begin
-            Queue.Delete_Last;
-            if not Seen.Contains (C) then
-               Seen.Insert (C);
-               declare
-                  Obj  : constant Version.Objects.Git_Object :=
-                    Version.Objects.Read_Object (Repo, C);
-                  Name : constant String :=
-                    Author_Name (Version.Objects.Content (Obj));
-                  Subj : constant String :=
-                    Version.Objects.Commit_Message_First_Line (Obj);
-               begin
-                  if not Groups.Contains (Name) then
-                     Groups.Insert (Name, Subject_Vectors.Empty_Vector);
-                  end if;
-                  declare
-                     V : Subject_Vectors.Vector := Groups.Element (Name);
-                  begin
-                     V.Append (To_Unbounded_String (Subj));
-                     Groups.Replace (Name, V);
-                  end;
 
-                  for P of Version.History.Parent_Commits (Repo, C) loop
-                     if not Seen.Contains (P) then
-                        Queue.Append (P);
-                     end if;
-                  end loop;
-               end;
+      --  The same walk `log` and `rev-list` use: newest first in committer-
+      --  date order, which is git's default and what the per-group reversal
+      --  below relies on. A depth-first walk of the parent links visits the
+      --  same commits in an order that is neither git's nor reversible into
+      --  it, so reversing one does not yield chronological order.
+      Include : Version.History.Commit_Id_Vectors.Vector;
+   begin
+      Include.Append (Tip);
+      for C of Version.History.Rev_List (Repo => Repo, Include => Include) loop
+         declare
+            Obj  : constant Version.Objects.Git_Object :=
+              Version.Objects.Read_Object (Repo, C);
+            Name : constant String :=
+              Author_Name (Version.Objects.Content (Obj));
+            Subj : constant String :=
+              Version.Objects.Commit_Message_First_Line (Obj);
+         begin
+            if not Groups.Contains (Name) then
+               Groups.Insert (Name, Subject_Vectors.Empty_Vector);
             end if;
+            declare
+               V : Subject_Vectors.Vector := Groups.Element (Name);
+            begin
+               V.Append (To_Unbounded_String (Subj));
+               Groups.Replace (Name, V);
+            end;
          end;
       end loop;
 

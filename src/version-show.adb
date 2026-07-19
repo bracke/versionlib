@@ -36,6 +36,16 @@ package body Version.Show is
       Append (Result, Version.Log.Format_Commit (Repo, Commit_Id, Full_Message => True));
       Append (Result, Character'Val (10));
 
+      --  git shows no patch for a merge unless asked with -m/-c/--cc: with
+      --  more than one parent there is no single "the" diff, and picking the
+      --  first parent silently presents one side's changes as the commit's.
+      --  A --stat is still produced, and matches git's combined stat.
+      if Natural (Version.Objects.Commit_Parent_Ids (Obj).Length) > 1
+        and then not Options.Stat
+      then
+         return To_String (Result);
+      end if;
+
       if Parent'Length = 0 then
          Append
            (Result, Version.Diff.Diff_Root_Commit (Repo, Commit_Id, Options));
