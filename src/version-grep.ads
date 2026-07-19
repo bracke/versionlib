@@ -1,6 +1,8 @@
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
+with Regexp;
+
 with Version.Pathspec;
 with Version.Repository;
 
@@ -36,6 +38,21 @@ package Version.Grep is
       Invert      : Boolean := False;              --  -v
    end record;
 
+   --  A pattern compiled once and applied to many lines. `log --author=` and
+   --  `--grep=` filter every commit in a walk, so compiling per line would
+   --  redo the work for each; more importantly these are regular expressions
+   --  in git, and matching them by substring would answer plausibly but
+   --  wrongly the moment a pattern carried a metacharacter.
+   type Line_Matcher is private;
+
+   function Compile
+     (Pattern : String;
+      Opts    : Options := (others => <>))
+      return Line_Matcher;
+   --  Raises Ada.IO_Exceptions.Data_Error on a pattern the engine rejects.
+
+   function Matches (M : Line_Matcher; Text : String) return Boolean;
+
    function Search
      (Repo      : Version.Repository.Repository_Handle;
       Pattern   : String;
@@ -53,5 +70,12 @@ package Version.Grep is
       Pattern     : String;
       Ignore_Case : Boolean)
       return Match_Vectors.Vector;
+
+private
+
+   type Line_Matcher is record
+      Expr  : Regexp.Regexp;
+      M_Opt : Regexp.Match_Options;
+   end record;
 
 end Version.Grep;

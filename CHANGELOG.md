@@ -1,3 +1,4 @@
+- Add: `Version.Grep.Line_Matcher` with `Compile`/`Matches`, a pattern compiled once and applied to many lines. `log --author=`/`--grep=` filter every commit in a walk, and both are regular expressions in git, so neither per-line recompilation nor a substring approximation would do.
 - Add: `Version.Show.Show_Commit` takes `No_Patch`, `Oneline` and `Format`, so a caller can shape the header (git's `show -s`, `--oneline`, `--format=<fmt>`) instead of always emitting the full one.
 - Add: `Version.Mailbox.Parse` takes `Keep_Subject`, git's `mailinfo -k`, leaving the Subject header exactly as it arrived instead of stripping bracket prefixes and a leading "Re:".
 - Fix: `Version.Ref_Format` implements `%(upstream:track)` and `:trackshort` via `Version.Tracking.Count_Ahead_Behind` instead of falling through to the upstream refname, and shortens `refs/remotes/<remote>/HEAD` to `<remote>` as git does.

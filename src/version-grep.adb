@@ -78,6 +78,27 @@ package body Version.Grep is
       return Result.Expression;
    end Compile_Pattern;
 
+   function Compile
+     (Pattern : String;
+      Opts    : Options := (others => <>))
+      return Line_Matcher is
+   begin
+      return
+        (Expr  => Compile_Pattern (Pattern, Opts.Kind),
+         M_Opt =>
+           (Case_Sensitive => not Opts.Ignore_Case,
+            Whole_Word     => Opts.Word_Match,
+            others         => <>));
+   end Compile;
+
+   function Matches (M : Line_Matcher; Text : String) return Boolean is
+      use type Regexp.Match_Status;
+      Found : constant Regexp.Match_Result :=
+        Regexp.Find_First (M.Expr, Text, M.M_Opt);
+   begin
+      return Found.Status = Regexp.Match_Ok;
+   end Matches;
+
    function Search
      (Repo      : Version.Repository.Repository_Handle;
       Pattern   : String;
