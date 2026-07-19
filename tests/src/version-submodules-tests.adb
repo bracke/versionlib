@@ -497,7 +497,9 @@ package body Version.Submodules.Tests is
       Root   : constant String :=
         Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
       Remote : constant String := Join (Join (Root, "remotes"), "super.git");
-      Source : constant String := Join (Root, "libfoo.git");
+      --  "../libfoo.git" steps out of super.git, so the donor is its sibling
+      --  inside remotes/ -- not a sibling of remotes/ itself.
+      Source : constant String := Join (Join (Root, "remotes"), "libfoo.git");
    begin
       Ada.Directories.Create_Path (Join (Root, "remotes"));
       Assert_Submodule_Update_Resolves_Relative_Url
@@ -515,7 +517,7 @@ package body Version.Submodules.Tests is
         Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
       Remote : constant String :=
         "file://" & Join (Join (Root, "remotes"), "super.git");
-      Source : constant String := Join (Root, "libfoo.git");
+      Source : constant String := Join (Join (Root, "remotes"), "libfoo.git");
    begin
       Ada.Directories.Create_Path (Join (Root, "remotes"));
       Assert_Submodule_Update_Resolves_Relative_Url
@@ -532,8 +534,11 @@ package body Version.Submodules.Tests is
       Root   : constant String :=
         Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
       Remote : constant String := Join (Join (Root, "remotes"), "super.git");
+      --  "./deps/..." is relative to super.git itself, so the donor lives
+      --  under it rather than beside it.
       Source : constant String :=
-        Join (Join (Join (Root, "remotes"), "deps"), "libfoo.git");
+        Join (Join (Join (Join (Root, "remotes"), "super.git"), "deps"),
+              "libfoo.git");
    begin
       Ada.Directories.Create_Path (Join (Root, "remotes"));
       Assert_Submodule_Update_Resolves_Relative_Url
@@ -553,7 +558,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "https://example.com/group/super.git")
-         = "https://example.com/libfoo.git",
+         = "https://example.com/group/libfoo.git",
          "https relative submodule URLs must resolve against remote directory");
    end Submodule_Resolver_Handles_Https_Relative_Url;
 
@@ -566,7 +571,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "ssh://git@example.com/group/super.git")
-         = "ssh://git@example.com/libfoo.git",
+         = "ssh://git@example.com/group/libfoo.git",
          "ssh:// relative submodule URLs must resolve against remote directory");
    end Submodule_Resolver_Handles_Ssh_Relative_Url;
 
@@ -579,7 +584,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "git@example.com:group/super.git")
-         = "git@example.com:libfoo.git",
+         = "git@example.com:group/libfoo.git",
          "scp-like relative submodule URLs must resolve against remote directory");
    end Submodule_Resolver_Handles_Scp_Like_Relative_Url;
 
@@ -592,7 +597,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../../shared/libfoo.git",
             Base_Url     => "ssh://git@example.com/company/group/super.git")
-         = "ssh://git@example.com/shared/libfoo.git",
+         = "ssh://git@example.com/company/shared/libfoo.git",
          "deeper legal relative traversal must remain inside the remote root");
    end Submodule_Resolver_Handles_Deeper_Legal_Traversal;
 
@@ -606,7 +611,7 @@ package body Version.Submodules.Tests is
          declare
             Ignored : constant String :=
               Version.Submodules.Resolve_Relative_Submodule_Url
-                (Relative_Url => "../../evil.git",
+                (Relative_Url => "../../../evil.git",
                  Base_Url     => "git@example.com:group/super.git");
          begin
             Assert (Ignored'Length = 0, "unreachable resolved escaped URL");
@@ -649,7 +654,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "https://example.com/group/super")
-         = "https://example.com/libfoo.git",
+         = "https://example.com/group/libfoo.git",
          "https bases without .git suffix must resolve against remote directory");
    end Submodule_Resolver_Handles_Https_Base_Without_Git_Suffix;
 
@@ -662,7 +667,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "https://example.com/group/super.git/")
-         = "https://example.com/libfoo.git",
+         = "https://example.com/group/libfoo.git",
          "trailing slash on https base must not make the repo name a directory base");
    end Submodule_Resolver_Handles_Https_Base_With_Trailing_Slash;
 
@@ -675,7 +680,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "ssh://git@example.com/group/super")
-         = "ssh://git@example.com/libfoo.git",
+         = "ssh://git@example.com/group/libfoo.git",
          "ssh bases without .git suffix must resolve against remote directory");
    end Submodule_Resolver_Handles_Ssh_Base_Without_Git_Suffix;
 
@@ -688,7 +693,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "git@example.com:group/super")
-         = "git@example.com:libfoo.git",
+         = "git@example.com:group/libfoo.git",
          "scp-like bases without .git suffix must resolve against remote directory");
    end Submodule_Resolver_Handles_Scp_Base_Without_Git_Suffix;
 
@@ -701,7 +706,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "./../libfoo.git",
             Base_Url     => "https://example.com/group/super.git")
-         = "https://example.com/libfoo.git",
+         = "https://example.com/group/libfoo.git",
          "./../ relative URLs must normalize safely inside the remote root");
    end Submodule_Resolver_Normalizes_Dot_Then_Dot_Dot;
 
@@ -711,19 +716,19 @@ package body Version.Submodules.Tests is
       pragma Unreferenced (T);
    begin
       Assert_Resolver_Raises
-        (Relative_Url => "../../../evil.git",
+        (Relative_Url => "../../../../evil.git",
          Base_Url     => "https://example.com/group/super.git",
          Message      => "excessive https traversal must be rejected");
       Assert_Resolver_Raises
-        (Relative_Url => "../../../evil.git",
+        (Relative_Url => "../../../../evil.git",
          Base_Url     => "ssh://git@example.com/group/super.git",
          Message      => "excessive ssh traversal must be rejected");
       Assert_Resolver_Raises
-        (Relative_Url => "../../../../evil.git",
+        (Relative_Url => "../../../../../evil.git",
          Base_Url     => "file:///srv/git/group/super.git",
          Message      => "excessive file traversal must be rejected");
       Assert_Resolver_Raises
-        (Relative_Url => "../../../../evil.git",
+        (Relative_Url => "../../../../../evil.git",
          Base_Url     => "/srv/git/group/super.git",
          Message      => "excessive local traversal must be rejected");
    end Submodule_Resolver_Rejects_Excessive_Traversal_By_Scheme;
@@ -809,7 +814,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => ".\deps\libfoo.git",
             Base_Url     => "https://example.com/group/super.git")
-         = "https://example.com/group/deps/libfoo.git",
+         = "https://example.com/group/super.git/deps/libfoo.git",
          "backslash relative URL separators must normalize before resolution");
    end Submodule_Resolver_Handles_Backslash_Relative_Url;
 
@@ -819,7 +824,7 @@ package body Version.Submodules.Tests is
       pragma Unreferenced (T);
    begin
       Assert_Resolver_Raises
-        (Relative_Url => "..\..\evil.git",
+        (Relative_Url => "..\..\..\evil.git",
          Base_Url     => "git@example.com:group/super.git",
          Message      =>
            "backslash traversal must be treated as relative traversal");
@@ -866,7 +871,7 @@ package body Version.Submodules.Tests is
         (Version.Submodules.Resolve_Relative_Submodule_Url
            (Relative_Url => "../libfoo.git",
             Base_Url     => "ssh://git@example.com:2222/group/super.git")
-         = "ssh://git@example.com:2222/libfoo.git",
+         = "ssh://git@example.com:2222/group/libfoo.git",
          "ssh bases with explicit ports must preserve authority while resolving path");
    end Submodule_Resolver_Handles_Ssh_Base_With_Port;
 

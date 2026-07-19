@@ -455,6 +455,10 @@ package body Version.Submodules is
       return Normalized;
    end Normalized_Relative_Submodule_Url;
 
+   --  Not used when resolving a relative submodule URL: git resolves those
+   --  against the base treated as a DIRECTORY, so "…/hub/super.git" with
+   --  "../donor" is "…/hub/donor". Stripping the repository name first and
+   --  then applying the "../" removed one component too many.
    function Directory_Name_For_Url_Path (Path : String) return String is
       Last  : Natural := Path'Last;
       Slash : Natural := 0;
@@ -653,11 +657,11 @@ package body Version.Submodules is
                  Base_Url (After_Authority .. Base_Url'Last);
                Resolved_Path : constant String :=
                  Append_Relative_And_Normalize
-                   (Directory_Name_For_Url_Path (Base_Path),
+                   (Base_Path,
                     Normalized_Relative);
             begin
                if Relative_Path_Escapes_Base
-                    (Directory_Name_For_Url_Path (Base_Path),
+                    (Base_Path,
                      Normalized_Relative)
                  or else Resolved_Path'Length = 0
                  or else Resolved_Path (Resolved_Path'First) /= '/'
@@ -677,7 +681,7 @@ package body Version.Submodules is
             Base_Path     : constant String :=
               Base_Url (Colon + 1 .. Base_Url'Last);
             Base_Dir      : constant String :=
-              Directory_Name_For_Url_Path (Base_Path);
+              Base_Path;
             Resolved_Path : constant String :=
               Append_Relative_And_Normalize (Base_Dir, Normalized_Relative);
          begin
@@ -698,7 +702,7 @@ package body Version.Submodules is
             Base_Path     : constant String :=
               Version.Transport.Strip_File_Scheme (Base_Url);
             Base_Dir      : constant String :=
-              Directory_Name_For_Url_Path (Base_Path);
+              Base_Path;
             Resolved_Path : constant String :=
               Append_Relative_And_Normalize (Base_Dir, Normalized_Relative);
          begin
@@ -732,29 +736,16 @@ package body Version.Submodules is
       --  remote -- which is the ordinary case for a repository that has never
       --  been pushed. Refusing there made relative URLs, the normal spelling
       --  in a real project, unusable locally.
+      --  git falls back to the superproject's own location when there is no
+      --  remote to resolve against -- the ordinary case for a repository that
+      --  has never been pushed.
+      Base : constant String :=
+        (if Remote'Length > 0 then Remote
+         else Version.Repository.Root_Path (Version.Repository.Open));
    begin
-      if Remote'Length = 0 then
-         --  No remote to resolve against. git falls back to the
-         --  superproject's own location, and that location IS the directory
-         --  the relative URL is relative to -- there is no repository name to
-         --  strip off first, as there is in a remote URL.
-         declare
-            Normalized : constant String :=
-              Normalized_Relative_Submodule_Url (Relative_Url);
-         begin
-            if not Is_Relative_Submodule_Url (Normalized) then
-               return Normalized;
-            end if;
-
-            return Append_Relative_And_Normalize
-              (Version.Repository.Root_Path (Version.Repository.Open),
-               Normalized);
-         end;
-      end if;
-
       return
         Resolve_Relative_Submodule_Url
-          (Relative_Url => Relative_Url, Base_Url => Remote);
+          (Relative_Url => Relative_Url, Base_Url => Base);
    end Resolve_Relative_Submodule_Url;
 
    function Is_Unsupported_Relative_Submodule_Url (Url : String) return Boolean
