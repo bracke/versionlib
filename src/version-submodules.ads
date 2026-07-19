@@ -30,6 +30,16 @@ package Version.Submodules is
      (Index_Type   => Natural,
       Element_Type => Submodule_Status);
 
+   procedure Add
+     (Repo : Version.Repository.Repository_Handle;
+      Url  : String;
+      Path : String);
+   --  git's `submodule add`: clone Url into Path, record it in .gitmodules,
+   --  stage both that file and the gitlink, and register the resolved URL in
+   --  the local config. The URL is stored in .gitmodules exactly as given --
+   --  a relative one stays relative, which is what makes the superproject
+   --  portable -- while the config holds the resolved form used to fetch.
+
    procedure Init;
 
    procedure Init (Repo : Version.Repository.Repository_Handle);

@@ -8,6 +8,7 @@ with Ada.Text_IO;
 with GNAT.OS_Lib;
 
 with Version.Clone;
+with Version.Write;
 with Version.Config;
 with Version.Fetch;
 with Version.Files;
@@ -722,11 +723,38 @@ package body Version.Submodules is
    end Resolve_Relative_Submodule_Url;
 
    function Resolve_Relative_Submodule_Url
-     (Relative_Url : String) return String is
+     (Relative_Url : String) return String
+   is
+      Remote : constant String := Default_Remote_Url;
+
+      --  git resolves a relative submodule URL against the superproject's
+      --  remote, and against the superproject's own location when it has no
+      --  remote -- which is the ordinary case for a repository that has never
+      --  been pushed. Refusing there made relative URLs, the normal spelling
+      --  in a real project, unusable locally.
    begin
+      if Remote'Length = 0 then
+         --  No remote to resolve against. git falls back to the
+         --  superproject's own location, and that location IS the directory
+         --  the relative URL is relative to -- there is no repository name to
+         --  strip off first, as there is in a remote URL.
+         declare
+            Normalized : constant String :=
+              Normalized_Relative_Submodule_Url (Relative_Url);
+         begin
+            if not Is_Relative_Submodule_Url (Normalized) then
+               return Normalized;
+            end if;
+
+            return Append_Relative_And_Normalize
+              (Version.Repository.Root_Path (Version.Repository.Open),
+               Normalized);
+         end;
+      end if;
+
       return
         Resolve_Relative_Submodule_Url
-          (Relative_Url => Relative_Url, Base_Url => Default_Remote_Url);
+          (Relative_Url => Relative_Url, Base_Url => Remote);
    end Resolve_Relative_Submodule_Url;
 
    function Is_Unsupported_Relative_Submodule_Url (Url : String) return Boolean
@@ -1605,6 +1633,88 @@ package body Version.Submodules is
    begin
       Deinit (Version.Repository.Open, Paths, All_Submodules, Force);
    end Deinit;
+
+   procedure Add
+     (Repo : Version.Repository.Repository_Handle;
+      Url  : String;
+      Path : String)
+   is
+      Safe_Path : constant String := Canonical_Submodule_Path (Path);
+      Work_Path : constant String := Submodule_Worktree_Path (Repo, Safe_Path);
+      Resolved  : constant String := Resolve_Relative_Submodule_Url (Url);
+      Items     : Version.Gitmodules.Submodule_Config_Vectors.Vector :=
+        Version.Gitmodules.Read (Repo);
+   begin
+      if Url'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error
+           with "submodule url must not be empty";
+      end if;
+
+      if Version.Gitmodules.Find_By_Path (Items, Safe_Path) /= Natural'Last then
+         raise Ada.IO_Exceptions.Data_Error
+           with "'" & Safe_Path & "' already exists in the index";
+      end if;
+
+      if Ada.Directories.Exists (Version.Files.To_Native_Path (Work_Path)) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "'" & Safe_Path & "' already exists and is not a valid"
+           & " git repository";
+      end if;
+
+      Version.Filesystem_Guard.Require_Safe_Write_Target
+        (Repo_Root     => Version.Repository.Root_Path (Repo),
+         Relative_Path => Safe_Path,
+         Is_Directory  => True);
+
+      Version.Clone.Clone (Source => Resolved, Target => Work_Path);
+      Absorb_Clone_Gitdir (Repo, Safe_Path);
+      Require_Submodule_Repository (Repo, Safe_Path);
+
+      --  .gitmodules keeps the URL exactly as the caller wrote it: a relative
+      --  one has to stay relative or the superproject stops being portable.
+      Items.Append
+        (Version.Gitmodules.Submodule_Config'
+           (Name => To_Unbounded_String (Safe_Path),
+            Path => To_Unbounded_String (Safe_Path),
+            Url  => To_Unbounded_String (Url)));
+      Version.Gitmodules.Write (Repo, Items);
+
+      --  Stage the gitlink and .gitmodules together, as git does: a
+      --  superproject that records one without the other does not describe a
+      --  submodule anybody else can check out.
+      declare
+         Head    : constant String := Submodule_Head (Repo, Safe_Path);
+         Entries : Version.Staging.Index_Entry_Vectors.Vector :=
+           Version.Staging.Load (Repo);
+         Modules : constant String :=
+           Version.Files.Join
+             (Version.Repository.Root_Path (Repo), ".gitmodules");
+      begin
+         Version.Staging.Replace_Entry
+           (Entries,
+            (Path  => To_Unbounded_String (Safe_Path),
+             Id    => Version.Objects.To_Object_Id (Head),
+             Mode  => To_Unbounded_String ("160000"),
+             Stage => 0, Skip_Worktree => False));
+
+         Version.Staging.Replace_Entry
+           (Entries,
+            (Path  => To_Unbounded_String (".gitmodules"),
+             Id    =>
+               Version.Write.Write_Blob
+                 (Repo, Version.Files.Read_Binary_File (Modules)),
+             Mode  => To_Unbounded_String ("100644"),
+             Stage => 0, Skip_Worktree => False));
+
+         Version.Staging.Sort_By_Path (Entries);
+         Version.Staging.Write (Repo, Entries);
+      end;
+
+      Version.Config.Set_Key
+        (Repo, "submodule." & Safe_Path & ".url", Resolved);
+      Version.Config.Set_Key
+        (Repo, "submodule." & Safe_Path & ".active", "true");
+   end Add;
 
    procedure Stage_Submodule
      (Repo : Version.Repository.Repository_Handle; Path : String)
