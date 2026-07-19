@@ -526,31 +526,18 @@ package body Version.Worktrees is
          return False;
    end Is_Admin_Dir_For_Linked_Worktree;
 
+   --  git places no restriction on where a worktree lives: inside the
+   --  repository and inside another linked worktree are both accepted, and
+   --  both work. Refusing them turned the ordinary `worktree add wt <branch>`
+   --  -- the spelling in git's own documentation -- into an error, so the
+   --  check is gone rather than narrowed.
    procedure Reject_Nested_Worktree
      (Repo : Version.Repository.Repository_Handle; Work_Path : String)
    is
-      Items : constant Worktree_Info_Vectors.Vector := List;
+      pragma Unreferenced (Repo);
+      pragma Unreferenced (Work_Path);
    begin
-      if Is_Inside_Path (Work_Path, Primary_Worktree_Path (Repo)) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "cannot add worktree inside another worktree";
-      end if;
-
-      if not Items.Is_Empty then
-         for I in Items.First_Index .. Items.Last_Index loop
-            declare
-               Existing : constant String :=
-                 To_String (Items.Element (I).Path);
-            begin
-               if Is_Inside_Path (Work_Path, Existing)
-                 or else Is_Inside_Path (Existing, Work_Path)
-               then
-                  raise Ada.IO_Exceptions.Data_Error
-                    with "cannot nest worktrees";
-               end if;
-            end;
-         end loop;
-      end if;
+      null;
    end Reject_Nested_Worktree;
 
    procedure Prepare_Target_Directory (Path : String) is
@@ -756,6 +743,93 @@ package body Version.Worktrees is
       end if;
    end Require_Linked_Common_Dir;
 
+   function Prunable return Prunable_Vectors.Vector is
+      Repo      : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Root      : constant String := Worktrees_Dir (Repo);
+      Result    : Prunable_Vectors.Vector;
+      Search    : Ada.Directories.Search_Type;
+      Dir_Entry : Ada.Directories.Directory_Entry_Type;
+      Opened    : Boolean := False;
+   begin
+      if not Ada.Directories.Exists (Native (Root)) then
+         return Result;
+      end if;
+
+      Ada.Directories.Start_Search
+        (Search    => Search,
+         Directory => Native (Root),
+         Pattern   => "*",
+         Filter    =>
+           [Ada.Directories.Ordinary_File => False,
+            Ada.Directories.Directory     => True,
+            Ada.Directories.Special_File  => False]);
+      Opened := True;
+
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Dir_Entry);
+         declare
+            Name  : constant String := Ada.Directories.Simple_Name (Dir_Entry);
+            Admin : constant String :=
+              Version.Files.Normalize_Separators
+                (Ada.Directories.Full_Name (Dir_Entry));
+         begin
+            if Name /= "." and then Name /= ".." then
+               declare
+                  Gitdir_File : constant String := Join (Admin, "gitdir");
+               begin
+                  if not Version.Files.Is_Ordinary_File (Gitdir_File) then
+                     Result.Append
+                       (Prunable_Entry'
+                          (Name   => To_Unbounded_String (Name),
+                           Reason =>
+                             To_Unbounded_String ("gitdir file does not exist")));
+                  else
+                     declare
+                        Dot_Git_Path : constant String :=
+                          Ada.Strings.Fixed.Trim
+                            (Version.Transport.Local.Read_First_Line
+                               (Gitdir_File),
+                             Ada.Strings.Both);
+                     begin
+                        if not Ada.Directories.Exists (Native (Dot_Git_Path))
+                        then
+                           Result.Append
+                             (Prunable_Entry'
+                                (Name   => To_Unbounded_String (Name),
+                                 Reason =>
+                                   To_Unbounded_String
+                                     ("gitdir file points to non-existent"
+                                      & " location")));
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+
+      Ada.Directories.End_Search (Search);
+      return Result;
+   exception
+      when others =>
+         if Opened then
+            Ada.Directories.End_Search (Search);
+         end if;
+         raise;
+   end Prunable;
+
+   procedure Prune is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Root : constant String := Worktrees_Dir (Repo);
+   begin
+      for Item of Prunable loop
+         Version.Files.Delete_Directory_Tree_If_Exists
+           (Join (Root, To_String (Item.Name)));
+      end loop;
+   end Prune;
+
    procedure Remove (Path : String) is
       Caller        : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -770,6 +844,42 @@ package body Version.Worktrees is
            with "cannot remove primary worktree";
       end if;
       if not Version.Files.Is_Ordinary_File (Dot_Git) then
+         --  The directory is gone. Its admin entry is still there holding the
+         --  branch checked out, and neither remove nor prune could clear it,
+         --  so the only way back was to delete .git/worktrees/<name> by hand.
+         if not Ada.Directories.Exists (Native (Work_Path)) then
+            declare
+               Root  : constant String := Worktrees_Dir (Caller);
+               Found : Boolean := False;
+            begin
+               for Item of Prunable loop
+                  declare
+                     Admin : constant String :=
+                       Join (Root, To_String (Item.Name));
+                     Gitdir_File : constant String := Join (Admin, "gitdir");
+                  begin
+                     if Version.Files.Is_Ordinary_File (Gitdir_File)
+                       and then Same_Path
+                                  (Ada.Directories.Containing_Directory
+                                     (Native
+                                        (Ada.Strings.Fixed.Trim
+                                           (Version.Transport.Local
+                                              .Read_First_Line (Gitdir_File),
+                                            Ada.Strings.Both))),
+                                   Work_Path)
+                     then
+                        Version.Files.Delete_Directory_Tree_If_Exists (Admin);
+                        Found := True;
+                     end if;
+                  end;
+               end loop;
+
+               if Found then
+                  return;
+               end if;
+            end;
+         end if;
+
          raise Ada.IO_Exceptions.Data_Error
            with "not a linked worktree: " & Path;
       end if;

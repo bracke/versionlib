@@ -36,8 +36,31 @@ package Version.Worktrees is
    function Current_Worktree_Text
       return String;
 
+   type Prunable_Entry is record
+      Name   : Ada.Strings.Unbounded.Unbounded_String;  --  worktrees/<name>
+      Reason : Ada.Strings.Unbounded.Unbounded_String;  --  git's wording
+   end record;
+
+   package Prunable_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Natural,
+      Element_Type => Prunable_Entry);
+
+   function Prunable
+      return Prunable_Vectors.Vector;
+   --  The administrative directories under .git/worktrees whose worktree is
+   --  gone. Deleting a linked worktree's directory leaves its admin entry
+   --  behind, and until it is cleared the branch it held stays checked out as
+   --  far as the repository is concerned.
+
+   procedure Prune;
+   --  Delete what Prunable reports.
+
    procedure Remove
      (Path : String);
+   --  Removes a linked worktree. A worktree whose directory has already been
+   --  deleted is reclaimed by dropping its admin entry, which is the only way
+   --  back: git accepts that, and refusing left the entry unreclaimable by
+   --  any command.
 
    function Branch_Checked_Out_Elsewhere
      (Branch : String)
