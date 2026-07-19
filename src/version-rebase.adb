@@ -634,6 +634,12 @@ package body Version.Rebase is
             Base_Id       => Base_Id,
             Target_Branch => "rebase",
             Conflicts     => Conflicts);
+         --  The merged index carries the conflicted paths at stages 1/2/3,
+         --  and writing it is what makes the conflict visible: left unwritten,
+         --  the index still holds the replay parent's tree at stage 0, so the
+         --  marked-up file reads as an ordinary modification and `commit`
+         --  would take the conflict markers without a word.
+         Version.Staging.Write (Repo => Repo, Entries => Merged_Index);
          return Replay_Result'(Kind => Replay_Conflict, Commit_Id => Zero_Id);
       end if;
 
@@ -1791,6 +1797,9 @@ package body Version.Rebase is
                         Base_Id       => Base,
                         Target_Branch => "rebase",
                         Conflicts     => Conflicts);
+                     --  Record the conflicted stages; see Replay_Commit.
+                     Version.Staging.Write
+                       (Repo => Repo, Entries => Merged_Index);
                      Persist (Paused => True, Cur => To_String (C));
                      raise Ada.IO_Exceptions.Data_Error with
                        "rebase paused: conflicts recorded";

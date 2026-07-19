@@ -1,3 +1,4 @@
+- Fix: a rebase that stops on a conflict now records the conflicted paths at stages 1/2/3. The merged index was computed but never written, so the index still held the replay parent'''s tree at stage 0 -- the marked-up file read as an ordinary modification, no git tool could see a conflict was in progress, and `commit` would have taken the conflict markers silently.
 - Fix: a submodule's `.git` file now points at the administrative directory relatively, as git's does. An absolute pointer survives only until the superproject is moved or cloned elsewhere, at which point every submodule in it breaks.
 - Fix: `.gitmodules` keeps a section's `branch` key. It was parsed as an unknown key and dropped, so rewriting a file git had written silently discarded it.
 - Add: `Version.Submodules.Add` takes Branch, Name and Force. Name is the submodule's logical name and keys both the config and the administrative directory, so it parts company with the path once `--name` is given.
