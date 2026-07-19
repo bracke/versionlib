@@ -798,6 +798,83 @@ package body Version.Worktrees is
       return File'Length > 0 and then Version.Files.Is_Ordinary_File (File);
    end Is_Locked;
 
+   procedure Move (From : String; To : String) is
+      Caller   : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Src      : constant String := Abs_Path (From);
+      Dst      : constant String := Abs_Path (To);
+      Admin    : constant String := Admin_Dir_Of (From);
+   begin
+      if Admin'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error
+           with "not a linked worktree: " & From;
+      end if;
+
+      if Same_Path (Src, Primary_Worktree_Path (Caller)) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "cannot move the main working tree";
+      end if;
+
+      if Ada.Directories.Exists (Native (Dst)) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "target '" & To & "' already exists";
+      end if;
+
+      if Is_Locked (Src) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "cannot move a locked working tree";
+      end if;
+
+      Ada.Directories.Rename
+        (Old_Name => Native (Src), New_Name => Native (Dst));
+
+      --  The admin directory keeps its name; its gitdir pointer is what says
+      --  where the worktree lives, so that is the only thing to rewrite.
+      Version.Files.Write_Binary_File_Atomic
+        (Join (Admin, "gitdir"), Join (Dst, ".git") & Character'Val (10));
+   end Move;
+
+   procedure Repair (Path : String) is
+      Work : constant String := Abs_Path (Path);
+      Dot  : constant String := Join (Work, ".git");
+   begin
+      if not Version.Files.Is_Ordinary_File (Dot) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "not a linked worktree: " & Path;
+      end if;
+
+      --  The worktree's own .git file still names its administrative
+      --  directory -- that link survives a move, and is what makes the
+      --  repair possible at all. Only the pointer back has gone stale.
+      declare
+         Line : constant String :=
+           Ada.Strings.Fixed.Trim
+             (Version.Transport.Local.Read_First_Line (Dot),
+              Ada.Strings.Both);
+         Tag  : constant String := "gitdir: ";
+      begin
+         if Line'Length <= Tag'Length
+           or else Line (Line'First .. Line'First + Tag'Length - 1) /= Tag
+         then
+            raise Ada.IO_Exceptions.Data_Error
+              with "not a linked worktree: " & Path;
+         end if;
+
+         declare
+            Admin : constant String :=
+              Line (Line'First + Tag'Length .. Line'Last);
+         begin
+            if not Ada.Directories.Exists (Native (Admin)) then
+               raise Ada.IO_Exceptions.Data_Error
+                 with "not a linked worktree: " & Path;
+            end if;
+
+            Version.Files.Write_Binary_File_Atomic
+              (Join (Admin, "gitdir"), Dot & Character'Val (10));
+         end;
+      end;
+   end Repair;
+
    procedure Lock (Path : String; Reason : String := "") is
       File : constant String := Lock_File_Of (Path);
    begin

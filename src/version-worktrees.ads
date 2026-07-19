@@ -50,6 +50,19 @@ package Version.Worktrees is
      (Index_Type   => Natural,
       Element_Type => Prunable_Entry);
 
+   procedure Move
+     (From : String;
+      To   : String);
+   --  Relocate a linked worktree. The administrative directory keeps its
+   --  name; only its `gitdir` pointer moves, since that is what records
+   --  where the worktree actually lives.
+
+   procedure Repair
+     (Path : String);
+   --  Re-point a worktree and its administrative entry at each other after
+   --  the directory was moved by hand -- the state `move` avoids creating and
+   --  the only way out of it once it exists.
+
    procedure Lock
      (Path   : String;
       Reason : String := "");
