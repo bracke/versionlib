@@ -8,6 +8,10 @@ package Version.Worktrees is
       Detached  : Boolean := False;
       Current   : Boolean := False;
       Missing   : Boolean := False;
+      Head      : Ada.Strings.Unbounded.Unbounded_String;
+      --  The commit this worktree has checked out. git's `worktree list`
+      --  reports it for every entry, attached or not, so it cannot be read
+      --  off Branch alone.
    end record;
 
    package Worktree_Info_Vectors is new Ada.Containers.Vectors

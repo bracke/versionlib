@@ -204,14 +204,16 @@ package body Version.Worktrees is
                 (Line (Line'First + Prefix'Length .. Line'Last)),
             Detached => False,
             Current  => False,
-            Missing  => False);
+            Missing  => False,
+            Head     => Null_Unbounded_String);
       else
          return
            (Path     => Null_Unbounded_String,
             Branch   => To_Unbounded_String (Line),
             Detached => True,
             Current  => False,
-            Missing  => False);
+            Missing  => False,
+            Head     => To_Unbounded_String (Line));
       end if;
    end Head_Branch_Or_Detached;
 
@@ -229,6 +231,23 @@ package body Version.Worktrees is
         Version.Files.Normalize_Separators (Git_Dir)
         = Version.Files.Normalize_Separators (Current_Git_Dir);
       Info.Missing := not Ada.Directories.Exists (Native (Path));
+
+      --  An attached worktree's HEAD is whatever its branch points at; the
+      --  branch itself lives in the common git dir, so the caller's handle
+      --  resolves it.
+      if not Info.Detached and then Length (Info.Branch) > 0 then
+         begin
+            Info.Head := To_Unbounded_String
+              (Version.Objects.To_String
+                 (Version.Refs.Resolve_Ref
+                    (Version.Repository.Open,
+                     "refs/heads/" & To_String (Info.Branch))));
+         exception
+            when others =>
+               null;
+         end;
+      end if;
+
       Result.Append (Info);
    exception
       when others =>

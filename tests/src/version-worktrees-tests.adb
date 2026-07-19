@@ -405,25 +405,29 @@ package body Version.Worktrees.Tests is
          Branch   => To_Unbounded_String ("main"),
          Detached => False,
          Current  => True,
-         Missing  => False);
+         Missing  => False,
+         Head     => Null_Unbounded_String);
       Linked   : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-feature"),
          Branch   => To_Unbounded_String ("feature"),
          Detached => False,
          Current  => False,
-         Missing  => False);
+         Missing  => False,
+         Head     => Null_Unbounded_String);
       Missing  : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-missing"),
          Branch   => To_Unbounded_String ("feature"),
          Detached => False,
          Current  => False,
-         Missing  => True);
+         Missing  => True,
+         Head     => Null_Unbounded_String);
       Detached : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-detached"),
          Branch   => To_Unbounded_String ("1234567890abcdef"),
          Detached => True,
          Current  => False,
-         Missing  => False);
+         Missing  => False,
+         Head     => Null_Unbounded_String);
    begin
       Assert
         (Version.Worktrees.Worktree_Status_Line (Primary)
