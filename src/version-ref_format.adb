@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;   use Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
@@ -416,6 +417,71 @@ package body Version.Ref_Format is
    --  Field access
    ----------------------------------------------------------------------
 
+   function Starts_With (S, Prefix : String) return Boolean is
+     (S'Length >= Prefix'Length
+      and then S (S'First .. S'First + Prefix'Length - 1) = Prefix);
+
+   --  git's %(refname:lstrip=N)/:rstrip=N. A positive N removes that many
+   --  components from the given end; a negative one keeps that many from the
+   --  opposite end. Stripping more components than there are yields the empty
+   --  string, as in git.
+   function Strip_Components
+     (Ref : String; Count_Text : String; From_Left : Boolean) return String
+   is
+      type Bound_Array is array (Positive range <>) of Natural;
+      Slashes : Bound_Array (1 .. Ref'Length + 1);
+      Parts   : Natural := 0;
+      N       : Integer;
+   begin
+      begin
+         N := Integer'Value (Count_Text);
+      exception
+         when others =>
+            raise Ada.IO_Exceptions.Data_Error with
+              "unrecognized %(refname) argument: " & Count_Text;
+      end;
+
+      --  Component boundaries: Slashes (I) is the index before component I.
+      Parts := 1;
+      Slashes (1) := Ref'First - 1;
+      for I in Ref'Range loop
+         if Ref (I) = '/' then
+            Parts := Parts + 1;
+            Slashes (Parts) := I;
+         end if;
+      end loop;
+
+      declare
+         --  Turn every form into "how many leading components to drop" and
+         --  "how many to keep".
+         Drop : Natural;
+         Keep : Natural;
+      begin
+         if From_Left then
+            Drop := (if N >= 0 then Natural'Min (N, Parts)
+                     else Natural'Max (Parts + N, 0));
+            Keep := Parts - Drop;
+         else
+            Keep := (if N >= 0 then Natural'Max (Parts - N, 0)
+                     else Natural'Min (-N, Parts));
+            Drop := 0;
+         end if;
+
+         if Keep = 0 then
+            return "";
+         end if;
+
+         declare
+            First : constant Natural := Slashes (Drop + 1) + 1;
+            Last  : constant Natural :=
+              (if Drop + Keep >= Parts then Ref'Last
+               else Slashes (Drop + Keep + 1) - 1);
+         begin
+            return Ref (First .. Last);
+         end;
+      end;
+   end Strip_Components;
+
    function Short_Name (Ref : String) return String is
       procedure Try (Prefix : String; Out_S : in out Unbounded_String) is
       begin
@@ -566,7 +632,24 @@ package body Version.Ref_Format is
            (if Colon = 0 then "" else Atom (Colon + 1 .. Atom'Last));
       begin
          if Head_A = "refname" then
-            return (if Arg = "short" then Short_Name (Ref) else Ref);
+            if Arg = "" then
+               return Ref;
+            elsif Arg = "short" then
+               return Short_Name (Ref);
+            elsif Starts_With (Arg, "lstrip=")
+              or else Starts_With (Arg, "rstrip=")
+            then
+               return Strip_Components
+                 (Ref,
+                  Arg (Arg'First + 7 .. Arg'Last),
+                  From_Left => Arg (Arg'First) = 'l');
+            else
+               --  Silently handing back the whole refname for a modifier we
+               --  do not know is worse than refusing: the caller gets a
+               --  plausible answer to a question we did not understand.
+               raise Ada.IO_Exceptions.Data_Error with
+                 "unrecognized %(refname) argument: " & Arg;
+            end if;
          elsif Head_A = "objectname" then
             if Arg = "short" then
                return Id (Id'First .. Id'First + 6);
