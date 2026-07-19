@@ -1185,6 +1185,26 @@ package body Version.Submodules is
       end;
    end Clone_Recursive;
 
+   --  True when the submodule's checked-out HEAD is not the commit the
+   --  superproject records for it. `submodule status` marks this with '+';
+   --  it is a local state the superproject cannot reproduce.
+   function Submodule_Head_Moved
+     (Repo : Version.Repository.Repository_Handle; Path : String)
+      return Boolean
+   is
+      Head : constant String := Submodule_Head (Repo, Path);
+   begin
+      if Head'Length = 0 then
+         return False;
+      end if;
+
+      return Head /= To_String (Gitlink_Commit (Repo, Path));
+   exception
+      when others =>
+         --  No recorded gitlink to compare against: nothing to protect.
+         return False;
+   end Submodule_Head_Moved;
+
    function Submodule_Is_Dirty
      (Repo : Version.Repository.Repository_Handle; Path : String)
       return Boolean
@@ -1541,7 +1561,16 @@ package body Version.Submodules is
                     Registered_Url (Name, To_String (Items.Element (I).Url));
                begin
                   if Submodule_Head (Repo, Path)'Length > 0 then
-                     if not Force and then Submodule_Is_Dirty (Repo, Path) then
+                     --  git refuses to clear a submodule whose checkout it
+                     --  could not reconstruct. That covers a dirty work tree
+                     --  and, just as importantly, a HEAD that has moved off
+                     --  the recorded gitlink: the superproject knows only the
+                     --  gitlink, so deleting the directory loses whatever
+                     --  else was checked out there with no way back.
+                     if not Force
+                       and then (Submodule_Is_Dirty (Repo, Path)
+                                 or else Submodule_Head_Moved (Repo, Path))
+                     then
                         raise Ada.IO_Exceptions.Data_Error with
                           "submodule work tree '" & Path
                           & "' contains local modifications;"
