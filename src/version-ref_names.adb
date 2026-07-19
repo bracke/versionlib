@@ -169,55 +169,18 @@ package body Version.Ref_Names is
       return Boolean
    is
    begin
-      if Name'Length = 0
-        or else Name (Name'First) = '/'
-        or else Name (Name'Last) = '/'
-      then
-         return False;
-      end if;
-
-      if Name = "refs/stash" then
-         return True;
-      end if;
-
-      if not (Starts_With (Name, "refs/heads/")
-              or else Starts_With (Name, "refs/tags/")
-              or else Starts_With (Name, "refs/remotes/")
-              or else Starts_With (Name, "refs/notes/")
-              or else Starts_With (Name, "refs/replace/")
-              --  filter-branch keeps the pre-rewrite tip under refs/original/.
-              or else Starts_With (Name, "refs/original/"))
-      then
-         return False;
-      end if;
-
-      if Ada.Strings.Fixed.Index (Name, "..") /= 0
-        or else Ada.Strings.Fixed.Index (Name, "@{") /= 0
-        or else Ada.Strings.Fixed.Index (Name, "//") /= 0
-        or else Ends_With (Name, ".")
-        or else Ends_With (Name, ".lock")
-      then
-         return False;
-      end if;
-
-      for C of Name loop
-         if C = Character'Val (0)
-           or else C = '\'
-           or else Is_Control (C)
-           or else C = ' '
-           or else C = '~'
-           or else C = '^'
-           or else C = ':'
-           or else C = '?'
-           or else C = '*'
-           or else C = '['
-           or else C = '"'
-         then
-            return False;
-         end if;
-      end loop;
-
-      return Components_Are_Safe (Name);
+      --  git puts no hierarchy restriction on a ref name: anything that
+      --  satisfies check-ref-format and has more than one component is a ref
+      --  it will store and list. An allowlist of the familiar hierarchies
+      --  looks harmless but is not -- it makes every ref-listing command fail
+      --  outright in a repository holding refs/bisect/*, refs/pull/*, or a
+      --  ref some other tool wrote, because one unrecognised name aborts the
+      --  whole enumeration rather than being skipped.
+      --
+      --  Deliberately not delegating the "refs/" prefix: git accepts a
+      --  two-level name anywhere, and callers here pass full ref names.
+      return Is_Valid_Check_Ref_Format (Name, Allow_Onelevel => False)
+        and then Components_Are_Safe (Name);
    end Is_Valid_Ref_Name;
 
    function Is_Valid_Branch_Name

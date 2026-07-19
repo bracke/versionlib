@@ -1152,7 +1152,6 @@ package body Version.Branch is
       return Rewrite_Subtree_Items (Items => Items, Prefix => Effective);
    end Shift_Subtree_Items;
 
-
    function Effective_Subtree_Prefix
      (Options       : Merge_Options;
       Current_Items : Version.Objects.Tree_Entry_Vectors.Vector;
