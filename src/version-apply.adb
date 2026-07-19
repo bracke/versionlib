@@ -114,7 +114,16 @@ package body Version.Apply is
                      exit;
                   end if;
                end loop;
-               exit when Slash = 0;
+               if Slash = 0 then
+                  --  git refuses rather than stripping as far as it can: a
+                  --  path with fewer components than -p<n> asks for means the
+                  --  caller named the wrong strip depth, and applying the
+                  --  remainder would touch a file they did not intend.
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "git diff header lacks filename information when removing"
+                    & Natural'Image (Strip)
+                    & " leading pathname components";
+               end if;
                First := Slash + 1;
             end;
          end loop;
@@ -136,6 +145,44 @@ package body Version.Apply is
       end loop;
       return Value;
    end Old_Start_Of;
+
+   --  The line counts a hunk header declares for each side: "@@ -a,b +c,d @@"
+   --  promises b old-side and d new-side lines, and a body that does not
+   --  deliver exactly those is a corrupt patch rather than one to apply as
+   --  far as it happens to match. A count is omitted when it is 1.
+   procedure Hunk_Counts
+     (Header : String; Old_Count : out Natural; New_Count : out Natural)
+   is
+      I : Natural := Header'First;
+
+      function Scan_Side (Sign : Character) return Natural is
+         Value  : Natural := 0;
+         Digits_Seen : Boolean := False;
+      begin
+         while I <= Header'Last and then Header (I) /= Sign loop
+            I := I + 1;
+         end loop;
+         I := I + 1;
+         --  Skip the start number.
+         while I <= Header'Last and then Header (I) in '0' .. '9' loop
+            I := I + 1;
+         end loop;
+         if I > Header'Last or else Header (I) /= ',' then
+            return 1;      --  ",n" omitted means one line
+         end if;
+         I := I + 1;
+         while I <= Header'Last and then Header (I) in '0' .. '9' loop
+            Value := Value * 10
+              + (Character'Pos (Header (I)) - Character'Pos ('0'));
+            I := I + 1;
+            Digits_Seen := True;
+         end loop;
+         return (if Digits_Seen then Value else 1);
+      end Scan_Side;
+   begin
+      Old_Count := Scan_Side ('-');
+      New_Count := Scan_Side ('+');
+   end Hunk_Counts;
 
    --  Reverse-transform a unified diff so the forward applier undoes it (-R):
    --  swap ---/+++ contents, hunk old/new ranges, +/- body lines, git rename
@@ -441,7 +488,11 @@ package body Version.Apply is
          while Idx <= PLines.Last_Index and then Starts (PLine (Idx), "@@") loop
             declare
                Old_Start : Natural := Old_Start_Of (PLine (Idx));
+               Want_Old, Want_New : Natural;
+               Saw_Old : Natural := 0;
+               Saw_New : Natural := 0;
             begin
+               Hunk_Counts (PLine (Idx), Want_Old, Want_New);
                --  Offset tolerance: if the recorded start does not line up,
                --  fall back to sequential copy from the current position.
                if Old_Start > Old_Lines.Last_Index + 1 then
@@ -468,6 +519,8 @@ package body Version.Apply is
                   begin
                      case Kind is
                         when ' ' =>
+                           Saw_Old := Saw_Old + 1;
+                           Saw_New := Saw_New + 1;
                            if Old_Pos > Old_Lines.Last_Index
                              or else To_String (Old_Lines.Element (Old_Pos))
                                      /= Txt
@@ -479,6 +532,7 @@ package body Version.Apply is
                            New_Lines.Append (To_Unbounded_String (Txt));
                            Old_Pos := Old_Pos + 1;
                         when '-' =>
+                           Saw_Old := Saw_Old + 1;
                            if Old_Pos > Old_Lines.Last_Index
                              or else To_String (Old_Lines.Element (Old_Pos))
                                      /= Txt
@@ -489,6 +543,7 @@ package body Version.Apply is
                            end if;
                            Old_Pos := Old_Pos + 1;
                         when '+' =>
+                           Saw_New := Saw_New + 1;
                            New_Lines.Append (To_Unbounded_String (Txt));
                         when '\' =>
                            if not New_Lines.Is_Empty then
@@ -500,6 +555,10 @@ package body Version.Apply is
                   end;
                   Idx := Idx + 1;
                end loop;
+
+               if Saw_Old /= Want_Old or else Saw_New /= Want_New then
+                  Bad_Patch ("corrupt patch in " & Target);
+               end if;
             end;
          end loop;
 
@@ -612,6 +671,18 @@ package body Version.Apply is
             begin
                exit when Starts (L, "--- ") or else Starts (L, "diff --git ")
                  or else Starts (L, "GIT binary patch");
+               --  "Binary files a/x and b/x differ" is what `diff` writes
+               --  without --binary: it records THAT the file changed, never
+               --  the new content. There is nothing to apply, and silently
+               --  succeeding leaves the file at its old bytes while claiming
+               --  the patch went in.
+               if Starts (L, "Binary files ")
+                 or else Starts (L, "Files ")
+               then
+                  Bad_Patch
+                    ("cannot apply binary patch to '"
+                     & Second_Path & "' without full index line");
+               end if;
                if Starts (L, "rename from ") then
                   Rename_Fr := To_Unbounded_String (L (L'First + 12 .. L'Last));
                elsif Starts (L, "rename to ") then
@@ -663,6 +734,13 @@ package body Version.Apply is
    begin
       Split_Lines (Text, PLines, Dummy);
       if PLines.Is_Empty then
+         --  Input with nothing in it is the degenerate case of input with no
+         --  patch in it, and git rejects both alike: succeeding quietly reads
+         --  as "applied" to anything checking only the exit status.
+         if not Options.Allow_Empty then
+            Bad_Patch
+              ("No valid patches in input (allow with ""--allow-empty"")");
+         end if;
          return;
       end if;
 
@@ -690,6 +768,14 @@ package body Version.Apply is
             end if;
          end;
       end loop;
+
+      --  Input that parsed to nothing is not an applied patch. Returning
+      --  success here reads as "applied" to any caller checking only the
+      --  exit status, which is exactly what a patch pipeline does.
+      if Results.Is_Empty and then not Options.Allow_Empty then
+         Bad_Patch
+           ("No valid patches in input (allow with ""--allow-empty"")");
+      end if;
 
       --  git's --index precondition: every patched file's working-tree
       --  content must already match what is staged, otherwise `git apply

@@ -14,6 +14,7 @@ package Version.Apply is
       Strip         : Natural := 1;      --  -p<n> (leading path components)
       Update_Index  : Boolean := False;  --  --index (working tree + index)
       Cached        : Boolean := False;  --  --cached (index only)
+      Allow_Empty   : Boolean := False;  --  --allow-empty: accept no patches
    end record;
 
    procedure Apply_Patch

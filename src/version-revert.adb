@@ -530,6 +530,31 @@ package body Version.Revert is
             Base_Id       => Base_Id,
             Target_Branch => "revert",
             Conflicts     => Conflicts);
+
+         --  git leaves a conflicted revert in a state its own tools can read:
+         --  the index carries stages 1/2/3, REVERT_HEAD names the commit
+         --  being reverted, and MERGE_MSG holds the message. Without the
+         --  staged conflict the index keeps a stage-0 entry, so `status`
+         --  reports a plain modification and `commit -a` would cheerfully
+         --  commit the conflict markers. (cherry-pick already did this; the
+         --  revert path was simply never given the same treatment.)
+         Version.Staging.Write (Repo => Repo, Entries => Merged_Index);
+         Version.Files.Write_Binary_File_Atomic
+           (Path    =>
+              Version.Files.Join
+                (Version.Repository.Git_Dir (Repo), "REVERT_HEAD"),
+            Content => To_String (Commit_Id) & Character'Val (10));
+         declare
+            Msg : constant String := Revert_Message (Repo, Commit_Id);
+         begin
+            Version.Files.Write_Binary_File_Atomic
+              (Path    =>
+                 Version.Files.Join
+                   (Version.Repository.Git_Dir (Repo), "MERGE_MSG"),
+               Content =>
+                 (if Msg'Length = 0 or else Msg (Msg'Last) /= Character'Val (10)
+                  then Msg & Character'Val (10) else Msg));
+         end;
          return Replay_Result'(Kind => Replay_Conflict, Commit_Id => Zero_Id);
       end if;
 
