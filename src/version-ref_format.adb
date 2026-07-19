@@ -495,6 +495,17 @@ package body Version.Ref_Format is
       end Try;
       Result : Unbounded_String;
    begin
+      --  A remote's HEAD shortens to the remote itself: "origin", not
+      --  "origin/HEAD". git does this because `origin` already names that
+      --  ref, so the longer form is never the shortest unambiguous one.
+      if Ref'Length > 13
+        and then Ref (Ref'First .. Ref'First + 12) = "refs/remotes/"
+        and then Ref'Length > 5
+        and then Ref (Ref'Last - 4 .. Ref'Last) = "/HEAD"
+      then
+         return Ref (Ref'First + 13 .. Ref'Last - 5);
+      end if;
+
       Try ("refs/heads/", Result);
       Try ("refs/tags/", Result);
       Try ("refs/remotes/", Result);
@@ -715,6 +726,42 @@ package body Version.Ref_Format is
                              = "refs/remotes/"
                   then
                      return Full (Full'First + 13 .. Full'Last);
+                  elsif Arg = "track" or else Arg = "trackshort" then
+                     --  How this branch stands against its upstream, not the
+                     --  upstream's name. Substituting the name for it was a
+                     --  silently wrong answer in a field scripts read to
+                     --  decide whether to push.
+                     declare
+                        AB : constant Version.Tracking.Ahead_Behind :=
+                          Version.Tracking.Count_Ahead_Behind
+                            (Repo, Short_Name (Ref));
+                        A : constant String :=
+                          Ada.Strings.Fixed.Trim
+                            (Natural'Image (AB.Ahead), Ada.Strings.Left);
+                        B : constant String :=
+                          Ada.Strings.Fixed.Trim
+                            (Natural'Image (AB.Behind), Ada.Strings.Left);
+                     begin
+                        if Arg = "trackshort" then
+                           if AB.Ahead > 0 and then AB.Behind > 0 then
+                              return "<>";
+                           elsif AB.Ahead > 0 then
+                              return ">";
+                           elsif AB.Behind > 0 then
+                              return "<";
+                           else
+                              return "=";
+                           end if;
+                        elsif AB.Ahead > 0 and then AB.Behind > 0 then
+                           return "[ahead " & A & ", behind " & B & "]";
+                        elsif AB.Ahead > 0 then
+                           return "[ahead " & A & "]";
+                        elsif AB.Behind > 0 then
+                           return "[behind " & B & "]";
+                        else
+                           return "";
+                        end if;
+                     end;
                   else
                      return Full;
                   end if;
