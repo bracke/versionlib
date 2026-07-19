@@ -106,6 +106,16 @@ package Version.Objects is
       Id   : Hex_Object_Id)
       return Git_Object;
 
+   function Replacement_Of
+     (Repo : Version.Repository.Repository_Handle;
+      Id   : Hex_Object_Id)
+      return Hex_Object_Id;
+   --  The object `refs/replace/<Id>` maps Id to, following a chain, or Id
+   --  itself. Every read has to go through this or the replacement is
+   --  invisible -- which matters most to the history walks, since a graft
+   --  changes reachability and so changes what `rev-list`, `cherry` and
+   --  `filter-branch` see. `GIT_NO_REPLACE_OBJECTS` bypasses it, as in git.
+
    function Read_Object
      (Repo : Version.Repository.Repository_Handle;
       Id   : Hex_Object_Id)

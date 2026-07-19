@@ -379,7 +379,6 @@ package body Version.Name_Rev is
             From_Tag   => Tip.From_Tag);
       end loop;
 
-
       declare
          Found : constant Name_Maps.Cursor := Names.Find (Target);
       begin
