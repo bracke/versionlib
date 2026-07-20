@@ -105,9 +105,22 @@ package Version.Config is
       Name  : String;
       Value : String);
 
+   procedure Add_Value
+     (Repo  : Version.Repository.Repository_Handle;
+      Name  : String;
+      Value : String);
+   --  git's `config --add`: append another value for Name, keeping the ones
+   --  already there, so the key becomes multi-valued (Read_All returns each).
+
    procedure Unset_Key
      (Repo : Version.Repository.Repository_Handle;
       Name : String);
+
+   procedure Unset_All
+     (Repo : Version.Repository.Repository_Handle;
+      Name : String);
+   --  git's `config --unset-all`: remove every value of Name, including a
+   --  multi-valued key that a single --unset refuses.
 
    procedure Set_Key_Worktree
      (Repo  : Version.Repository.Repository_Handle;

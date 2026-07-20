@@ -1,3 +1,4 @@
+- Add: `Version.Config.Add_Value` (git's `config --add`, appending a value while keeping the existing ones) and `Unset_All` (removing every value of a key, including a multivar a single unset refuses).
 - Add: `Version.Describe.Describe` takes Long, Abbrev and Pattern (git's `--long`, `--abbrev`, `--match`), and a new `Describe_By_Any_Ref` names a commit by the nearest ref of any kind for `--all`, preferring an annotated tag on a tie.
 - Add: `Version.Fmt_Merge_Msg.Format` takes `Log_Entries` for `--log[=<n>]`, listing the merged commits' subjects newest first under a `* <branch>:` heading, with git's "(N commits)" and closing "..." when a limit hides some.
 - Fix: a merge message does not say a branch came from "." -- that is this repository, and git writes `Merge branch 'topic'`, not `Merge branch 'topic' of .`.

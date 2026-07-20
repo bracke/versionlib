@@ -1130,6 +1130,50 @@ package body Version.Config is
       Set_In_File (Config_Path (Repo), Name, Value);
    end Set_Key;
 
+   procedure Add_Value
+     (Repo  : Version.Repository.Repository_Handle;
+      Name  : String;
+      Value : String)
+   is
+      Path           : constant String := Config_Path (Repo);
+      Items          : constant Config_Entry_Vectors.Vector :=
+        Read_File_Entries (Path);
+      Result         : Config_Entry_Vectors.Vector := Items;
+      Target_Section : Unbounded_String;
+      Target_Key     : Unbounded_String;
+      Wanted         : constant String := Lower (Name);
+      Last_Match     : Integer := -1;
+   begin
+      Require_Config_Name (Name);
+      Require_Config_Scalar (Value, "config value");
+      Split_Config_Name (Name, Target_Section, Target_Key);
+
+      --  Insert the new value right after the last existing one for the key,
+      --  so a key's values stay contiguous the way git keeps them.
+      if not Items.Is_Empty then
+         for I in Items.First_Index .. Items.Last_Index loop
+            if Lower (Config_Entry_Name (Items.Element (I))) = Wanted then
+               Last_Match := I;
+            end if;
+         end loop;
+      end if;
+
+      declare
+         New_Entry : constant Config_Entry :=
+           (Section => Target_Section,
+            Key     => Target_Key,
+            Value   => To_Unbounded_String (Value));
+      begin
+         if Last_Match >= 0 then
+            Result.Insert (Last_Match + 1, New_Entry);
+         else
+            Result.Append (New_Entry);
+         end if;
+      end;
+
+      Write_Entries_To (Path, Result);
+   end Add_Value;
+
    procedure Set_Key_Worktree
      (Repo  : Version.Repository.Repository_Handle;
       Name  : String;
@@ -1183,6 +1227,33 @@ package body Version.Config is
    begin
       Unset_In_File (Config_Path (Repo), Name);
    end Unset_Key;
+
+   procedure Unset_All
+     (Repo : Version.Repository.Repository_Handle; Name : String)
+   is
+      Path   : constant String := Config_Path (Repo);
+      Items  : constant Config_Entry_Vectors.Vector :=
+        Read_File_Entries (Path);
+      Result : Config_Entry_Vectors.Vector;
+      Wanted : constant String := Lower (Name);
+      Matches : Natural := 0;
+   begin
+      Require_Config_Name (Name);
+
+      for E of Items loop
+         if Lower (Config_Entry_Name (E)) = Wanted then
+            Matches := Matches + 1;
+         else
+            Result.Append (E);
+         end if;
+      end loop;
+
+      if Matches = 0 then
+         raise Key_Absent with "config key does not exist: " & Name;
+      end if;
+
+      Write_Entries_To (Path, Result);
+   end Unset_All;
 
    function Get_Value
      (Repo : Version.Repository.Repository_Handle; Name : String) return String
