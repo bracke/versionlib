@@ -1153,9 +1153,11 @@ package body Version.Diff is
    --  footer) when Show_Stat, followed by git's `--summary` lines
    --  (create/delete mode, mode change) when Show_Summary.
    function Emit_Stat
-     (Files        : Stat_Vectors.Vector;
-      Show_Stat    : Boolean;
-      Show_Summary : Boolean) return String
+     (Files          : Stat_Vectors.Vector;
+      Show_Stat      : Boolean;
+      Show_Summary   : Boolean;
+      Show_Numstat   : Boolean := False;
+      Show_Shortstat : Boolean := False) return String
    is
       Result    : Unbounded_String;
       Name_W    : Natural := 0;
@@ -1196,6 +1198,33 @@ package body Version.Diff is
       function Scale_Linear (It, W, Max : Natural) return Natural is
         (if It = 0 then 0 else 1 + (It * (W - 1)) / Max);
    begin
+      --  --numstat: one "<added>\t<deleted>\t<path>" per file, tabs not
+      --  bars, and a binary file shows "-\t-". No footer.
+      if Show_Numstat then
+         declare
+            Out_Text : Unbounded_String;
+            Tab : constant String := (1 => Character'Val (9));
+            Nl  : constant String := (1 => Character'Val (10));
+         begin
+            for I in Files.First_Index .. Files.Last_Index loop
+               declare
+                  F : constant Stat_Entry := Files.Element (I);
+               begin
+                  if F.Binary then
+                     Append
+                       (Out_Text, "-" & Tab & "-" & Tab & Stat_Name (F) & Nl);
+                  else
+                     Append
+                       (Out_Text,
+                        Count_Image (F.Ins) & Tab & Count_Image (F.Del) & Tab
+                        & Stat_Name (F) & Nl);
+                  end if;
+               end;
+            end loop;
+            return To_String (Out_Text);
+         end;
+      end if;
+
       if Files.Is_Empty then
          return "";
       end if;
@@ -1248,8 +1277,12 @@ package body Version.Diff is
          end if;
       end if;
 
-      if Show_Stat then
+      if Show_Stat or else Show_Shortstat then
+         --  --shortstat prints only the "N files changed" footer, so the
+         --  per-file bar loop is skipped; the totals it needs were summed
+         --  in the pre-pass above.
          for I in Files.First_Index .. Files.Last_Index loop
+           if Show_Stat then
             declare
                F    : constant Stat_Entry := Files.Element (I);
                Full : constant String := Stat_Name (F);
@@ -1326,6 +1359,7 @@ package body Version.Diff is
                   end;
                end if;
             end;
+           end if;
          end loop;
 
          declare
@@ -1410,6 +1444,8 @@ package body Version.Diff is
       Summary     : Boolean := False;
       Name_Only   : Boolean := False;
       Name_Status : Boolean := False;
+      Numstat     : Boolean := False;
+      Shortstat   : Boolean := False;
       Detect_Renames : Boolean := False;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
@@ -1419,7 +1455,8 @@ package body Version.Diff is
       NL       : constant Character := Character'Val (10);
       Old_Map  : constant Side_Entry_Maps.Map := To_Map (Old_Side);
       New_Map  : constant Side_Entry_Maps.Map := To_Map (New_Side);
-      As_Stat  : constant Boolean := Stat or else Summary;
+      As_Stat  : constant Boolean :=
+        Stat or else Summary or else Numstat or else Shortstat;
       As_List  : constant Boolean := Name_Only or else Name_Status;
       Paths    : Path_Sets.Map;
       Result   : Unbounded_String;
@@ -1680,7 +1717,9 @@ package body Version.Diff is
       end;
 
       if As_Stat then
-         return Emit_Stat (Stats, Show_Stat => Stat, Show_Summary => Summary);
+         return Emit_Stat
+           (Stats, Show_Stat => Stat, Show_Summary => Summary,
+            Show_Numstat => Numstat, Show_Shortstat => Shortstat);
       end if;
       return To_String (Result);
    end Diff_Sides;
@@ -1710,6 +1749,8 @@ package body Version.Diff is
                  New_Working => True,
                  Context     => Options.Context_Lines,
                  Stat        => Options.Stat,
+                 Numstat     => Options.Numstat,
+                 Shortstat   => Options.Shortstat,
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
@@ -1752,6 +1793,8 @@ package body Version.Diff is
                  New_Working => True,
                  Context     => Options.Context_Lines,
                  Stat        => Options.Stat,
+                 Numstat     => Options.Numstat,
+                 Shortstat   => Options.Shortstat,
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
@@ -1877,6 +1920,7 @@ package body Version.Diff is
            New_Working => True,
            Context     => Options.Context_Lines,
            Stat        => Options.Stat, Summary => Options.Summary,
+           Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
            Detect_Renames => Renames_Enabled (Repo, Options),
@@ -1905,6 +1949,7 @@ package body Version.Diff is
            New_Working => False,
            Context     => Options.Context_Lines,
            Stat        => Options.Stat, Summary => Options.Summary,
+           Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
            Detect_Renames => Renames_Enabled (Repo, Options),

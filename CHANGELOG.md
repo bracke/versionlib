@@ -1,3 +1,4 @@
+- Add: `Version.Diff.Diff_Options` gains Numstat and Shortstat, rendered by the shared stat engine -- numstat as `<added>\t<deleted>\t<path>` (binary shows `-`/`-`), shortstat as git's footer line alone.
 - Add: `Version.Log.Log_List_Text` takes Name_Only/Name_Status, threading git's `--name-only`/`--name-status` through the per-commit diff; `show -s` no longer emits the header/diff separator blank line that only a following patch needs.
 - Add: `Version.Config.Add_Value` (git's `config --add`, appending a value while keeping the existing ones) and `Unset_All` (removing every value of a key, including a multivar a single unset refuses).
 - Add: `Version.Describe.Describe` takes Long, Abbrev and Pattern (git's `--long`, `--abbrev`, `--match`), and a new `Describe_By_Any_Ref` names a commit by the nearest ref of any kind for `--all`, preferring an annotated tag on a tie.
