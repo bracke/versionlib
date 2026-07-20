@@ -763,18 +763,21 @@ package body Version.Rebase is
       Version.Refs.Write_Symbolic_HEAD (Repo => Repo, Target => Branch_Ref);
       Version.Restore.Restore_Working_Tree_For_Commit (Repo => Repo, Commit_Id => Final_Head);
       Version.Restore.Write_Index_For_Commit (Repo => Repo, Commit_Id => Final_Head);
+      --  git words these two differently: HEAD records where it is going back
+      --  to, the branch records what it was rebased onto.
       Version.Reflog.Append
         (Repo    => Repo,
          Ref     => "HEAD",
          Old_Id  => To_String (Original_Head),
          New_Id  => To_String (Final_Head),
-         Message => "rebase: onto " & To_String (Target_Head));
+         Message => "rebase (finish): returning to " & Branch_Ref);
       Version.Reflog.Append
         (Repo    => Repo,
          Ref     => Branch_Ref,
          Old_Id  => To_String (Original_Head),
          New_Id  => To_String (Final_Head),
-         Message => "rebase: onto " & To_String (Target_Head));
+         Message => "rebase (finish): " & Branch_Ref & " onto "
+                    & To_String (Target_Head));
       Version.Rebase_State.Clear_State (Repo);
       Version.Merge_State.Clear_State (Repo);
       Version.Hooks.Run_Post_Commit (Repo => Repo, Run_Hooks => True);
@@ -793,7 +796,8 @@ package body Version.Rebase is
         Version.Rebase_State.Action_Vectors.Empty_Vector;
       Execs               : Version.Rebase_State.Exec_Vectors.Vector :=
         Version.Rebase_State.Exec_Vectors.Empty_Vector;
-      Next_Exec           : Natural := 0)
+      Next_Exec           : Natural := 0;
+      Onto_Name           : String := "")
    is
       use type Version.Rebase_State.Rebase_Action;
       Replay_Head : Version.Objects.Hex_Object_Id := Current_Replay_Head;
@@ -871,9 +875,13 @@ package body Version.Rebase is
       if not Version.Refs.Is_Detached (Repo)
         or else Version.Refs.Current_Commit_Id (Repo) /= To_String (Replay_Head)
       then
+         --  git records the onto the user named ("main"), not the id it
+         --  resolved to, so the reflog reads the way the command was typed.
          Move_Detached_Head
            (Repo, Replay_Head,
-            "rebase (start): checkout " & To_String (Target_Head));
+            "rebase (start): checkout "
+            & (if Onto_Name'Length > 0 then Onto_Name
+               else To_String (Target_Head)));
       end if;
 
       loop
@@ -981,7 +989,8 @@ package body Version.Rebase is
                Target_Head         => Target_Head,
                Current_Replay_Head => Target_Head,
                Next_Index          => 0,
-               Commits             => Commits);
+               Commits             => Commits,
+               Onto_Name           => Target);
          exception
             when others =>
                declare
@@ -2453,6 +2462,56 @@ package body Version.Rebase is
             Next_Exec           => Version.Rebase_State.Next_Exec (State));
       end;
    end Continue_Rebase;
+
+   --  git's `--skip`: give up on the commit we stopped at and carry on with
+   --  the rest. The conflicted worktree and index are thrown away in favour of
+   --  the replay head, which is where the next commit is applied.
+   procedure Skip_Rebase is
+      Repo  : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      State : constant Version.Rebase_State.Rebase_State :=
+        Version.Rebase_State.Read_State (Repo);
+      Replay_Head : constant Version.Objects.Hex_Object_Id :=
+        Version.Rebase_State.Current_Replay_Head (State);
+   begin
+      Require_Current_Rebase_Branch
+        (Repo       => Repo,
+         Branch_Ref => Version.Rebase_State.Branch_Ref (State));
+
+      Version.Restore.Restore_Working_Tree_For_Commit
+        (Repo => Repo, Commit_Id => Replay_Head);
+      Version.Restore.Write_Index_For_Commit
+        (Repo => Repo, Commit_Id => Replay_Head);
+      Version.Merge_State.Clear_State (Repo);
+
+      Replay_Remaining
+        (Repo                => Repo,
+         Branch_Ref          => Version.Rebase_State.Branch_Ref (State),
+         Original_Head       => Version.Rebase_State.Original_Head (State),
+         Target_Head         => Version.Rebase_State.Target_Head (State),
+         Current_Replay_Head => Replay_Head,
+         Next_Index          => Version.Rebase_State.Next_Index (State) + 1,
+         Commits             => Version.Rebase_State.Commits (State),
+         Allow_Root          => True,
+         Actions             => Version.Rebase_State.Actions (State),
+         Execs               => Version.Rebase_State.Execs (State),
+         Next_Exec           => Version.Rebase_State.Next_Exec (State));
+   end Skip_Rebase;
+
+   --  git's `--quit`: forget the rebase without undoing it. HEAD stays
+   --  detached wherever the replay reached and the branch keeps its original
+   --  tip -- the point being to keep the commits made so far, not to restore.
+   procedure Quit_Rebase is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+   begin
+      if not Version.Rebase_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with "no rebase in progress";
+      end if;
+
+      Version.Rebase_State.Clear_State (Repo);
+      Version.Merge_State.Clear_State (Repo);
+   end Quit_Rebase;
 
    procedure Abort_Rebase is
       Repo  : constant Version.Repository.Repository_Handle := Version.Repository.Open;

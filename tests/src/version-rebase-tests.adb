@@ -816,8 +816,11 @@ package body Version.Rebase.Tests is
          Assert
            (Ada.Strings.Fixed.Index (Reflog_Text, To_String (Before_Feature)) /= 0,
             "branch reflog must retain original feature tip");
+         --  git's wording: the branch records what it was rebased onto,
+         --  while HEAD records the ref it is returning to.
          Assert
-           (Ada.Strings.Fixed.Index (Reflog_Text, "rebase: onto") /= 0,
+           (Ada.Strings.Fixed.Index (Reflog_Text, "rebase (finish):") /= 0
+            and then Ada.Strings.Fixed.Index (Reflog_Text, " onto ") /= 0,
             "branch reflog must record rebase completion");
       end;
 

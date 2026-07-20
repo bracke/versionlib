@@ -67,6 +67,14 @@ package Version.Rebase is
    --  this path).
 
    procedure Continue_Rebase;
+   procedure Skip_Rebase;
+   --  Drop the commit the rebase stopped on and replay the rest.
+
+   procedure Quit_Rebase;
+   --  Forget the rebase without undoing it: HEAD stays where the replay
+   --  reached and the branch keeps its original tip, so the commits made so
+   --  far are kept rather than restored away.
+
    procedure Abort_Rebase;
 
    function In_Progress return Boolean;
