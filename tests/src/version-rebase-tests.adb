@@ -3,6 +3,7 @@ with Ada.Environment_Variables;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 
 with AUnit.Assertions;
 with AUnit.Test_Cases;
@@ -15,6 +16,7 @@ with Version.Init;
 with Version.Merge_State;
 with Version.Objects;
 with Version.Rebase_State;
+with Version.Staging;
 with Version.Refs;
 with Version.Repository;
 with Version.Reflog;
@@ -370,6 +372,7 @@ package body Version.Rebase.Tests is
          "echo rebase continue > rebase-post-commit.txt" & Character'Val (10)
          & "exit 0" & Character'Val (10));
       Write_File (Root, "conflict.txt", "resolved" & Character'Val (10));
+      Version.Test_Support.Stage_Resolved_File (Root, "conflict.txt");
       Version.Rebase.Continue_Rebase;
       Assert
         (Ada.Directories.Exists
@@ -518,6 +521,7 @@ package body Version.Rebase.Tests is
          Assert (Raised, "rerere-enabled rebase must pause on first conflict");
          Version.Git_Fixtures.Run (Root, "test -f .git/rr-cache/*/preimage");
          Write_File (Root, "conflict.txt", "resolved" & Character'Val (10));
+         Version.Test_Support.Stage_Resolved_File (Root, "conflict.txt");
          Version.Rebase.Continue_Rebase;
          Version.Git_Fixtures.Run (Root, "test -f .git/rr-cache/*/postimage");
 
@@ -585,6 +589,7 @@ package body Version.Rebase.Tests is
          "echo failing rebase post > rebase-post-commit-failed.txt" & Character'Val (10)
          & "exit 1" & Character'Val (10));
       Write_File (Root, "conflict.txt", "resolved" & Character'Val (10));
+      Version.Test_Support.Stage_Resolved_File (Root, "conflict.txt");
 
       begin
          Version.Rebase.Continue_Rebase;
@@ -654,6 +659,7 @@ package body Version.Rebase.Tests is
       end;
 
       Write_File (Root, "conflict.txt", "resolved" & Character'Val (10));
+      Version.Test_Support.Stage_Resolved_File (Root, "conflict.txt");
       Write_File (Root, "untracked.txt", "must not be staged" & Character'Val (10));
 
       begin
@@ -1134,6 +1140,25 @@ package body Version.Rebase.Tests is
             Paused              => True,
             Current_Commit      => To_String (Head));
 
+         --  An unmerged index entry is what "not resolved yet" means, and it
+         --  is the only thing that can say so for a rebase git paused: git
+         --  records its stops in rebase-merge/ alone and writes no merge
+         --  state of ours, so demanding ours would refuse to continue every
+         --  rebase git started.
+         declare
+            Entries : Version.Staging.Index_Entry_Vectors.Vector :=
+              Version.Staging.Load (Repo);
+         begin
+            Entries.Append
+              (Version.Staging.Index_Entry'
+                 (Path  => Ada.Strings.Unbounded.To_Unbounded_String
+                             ("conflicted.txt"),
+                  Id    => Version.Write.Write_Blob (Repo, "conflicted"),
+                  Mode  => Ada.Strings.Unbounded.To_Unbounded_String ("100644"),
+                  Stage => 2, Skip_Worktree => False));
+            Version.Staging.Write (Repo => Repo, Entries => Entries);
+         end;
+
          begin
             Version.Rebase.Continue_Rebase;
          exception
@@ -1145,7 +1170,7 @@ package body Version.Rebase.Tests is
       end;
 
       Assert (Raised,
-              "continue must reject paused rebase without merge state");
+              "continue must reject a rebase whose index is still unmerged");
       Ada.Directories.Set_Directory (Old_Dir);
    exception
       when others =>

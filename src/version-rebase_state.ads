@@ -74,6 +74,18 @@ package Version.Rebase_State is
    --  order; Next_Exec is how many have run. Pause_Reason is meaningful only
    --  when Paused (Current_Commit is required for Conflict/Edit, empty for Exec).
 
+   procedure Write_Resume_Info
+     (Repo        : Version.Repository.Repository_Handle;
+      Author_Line : String;
+      Message     : String;
+      Patch       : String);
+   --  The three files `git rebase --continue` reads for itself, written at a
+   --  stop so the other tool can carry the rebase to completion: who authored
+   --  the commit being replayed (Author_Line is the raw
+   --  "Name <email> <ts> <tz>" from the commit header), the message that
+   --  commit should carry, and the diff being applied. Nothing here is read
+   --  back by this tool -- the state above is what it resumes from.
+
    function Read_State
      (Repo : Version.Repository.Repository_Handle)
       return Rebase_State;

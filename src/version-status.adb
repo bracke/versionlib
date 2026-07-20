@@ -11,6 +11,7 @@ with Ada.Characters.Handling;
 with Version.Config;
 with Version.Console;
 with Version.Objects;
+with Version.Rebase_State;
 with Version.Refs;
 with Version.Revisions;
 with Version.Repository;
@@ -1488,6 +1489,150 @@ package body Version.Status is
       end if;
    end Short_Id;
 
+   procedure Print_Head_Line (Repo : Version.Repository.Repository_Handle);
+   --  Declared ahead of the rebase header, which falls back to it.
+
+   --  git's paused-rebase header. Everything here is read back out of the
+   --  rebase state, which is why it can be reproduced at all: `done` gives the
+   --  commands already run, `git-rebase-todo` those still to come, and `onto`
+   --  the commit the branch is being replayed onto.
+   procedure Print_Rebase_Status
+     (Repo : Version.Repository.Repository_Handle)
+   is
+      State : constant Version.Rebase_State.Rebase_State :=
+        Version.Rebase_State.Read_State (Repo);
+
+      Onto : constant Version.Objects.Hex_Object_Id :=
+        Version.Rebase_State.Target_Head (State);
+
+      function Short (Id : Version.Objects.Hex_Object_Id) return String is
+         Full : constant String := Version.Objects.To_String (Id);
+      begin
+         return Full (Full'First .. Full'First
+                      + Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7)
+                      - 1);
+      exception
+         when others =>
+            return Full (Full'First .. Full'First + 6);
+      end Short;
+
+      function Branch return String is
+         Ref    : constant String := Version.Rebase_State.Branch_Ref (State);
+         Prefix : constant String := "refs/heads/";
+      begin
+         if Ref'Length > Prefix'Length
+           and then Ref (Ref'First .. Ref'First + Prefix'Length - 1) = Prefix
+         then
+            return Ref (Ref'First + Prefix'Length .. Ref'Last);
+         end if;
+         return Ref;
+      end Branch;
+
+      function Command_Line
+        (Action : Version.Rebase_State.Rebase_Action;
+         Id     : Version.Objects.Hex_Object_Id) return String
+      is
+         Verb : constant String :=
+           (case Action is
+               when Version.Rebase_State.Pick   => "pick",
+               when Version.Rebase_State.Reword => "reword",
+               when Version.Rebase_State.Edit   => "edit");
+
+         function Subject return String is
+         begin
+            return " # " & Version.Objects.Commit_Message_First_Line
+                             (Version.Objects.Read_Object (Repo, Id));
+         exception
+            when others =>
+               return "";
+         end Subject;
+      begin
+         return "   " & Verb & " " & Short (Id) & Subject;
+      end Command_Line;
+
+      Commits : constant Version.Rebase_State.Commit_Vectors.Vector :=
+        Version.Rebase_State.Commits (State);
+      Actions : constant Version.Rebase_State.Action_Vectors.Vector :=
+        Version.Rebase_State.Actions (State);
+
+      --  The command stopped on counts as done -- it is git's "last command
+      --  done" -- while the resume cursor still points at it.
+      Cursor : constant Natural := Version.Rebase_State.Next_Index (State);
+      Done   : constant Natural :=
+        Natural'Min (Cursor + 1, Natural (Commits.Length));
+      Remaining : constant Natural := Natural (Commits.Length) - Done;
+
+      function Action_At (I : Natural) return Version.Rebase_State.Rebase_Action
+      is (if Actions.Is_Empty then Version.Rebase_State.Pick
+          else Actions.Element (Actions.First_Index + I));
+
+      function Plural (N : Natural) return String is
+        (if N = 1 then "" else "s");
+   begin
+      Ada.Text_IO.Put_Line
+        ("interactive rebase in progress; onto " & Short (Onto));
+
+      if Done = 0 then
+         Ada.Text_IO.Put_Line ("No commands done.");
+      else
+         Ada.Text_IO.Put_Line
+           ("Last command" & (if Done = 1 then "" else "s") & " done ("
+            & Natural'Image (Done) (2 .. Natural'Image (Done)'Last)
+            & " command" & Plural (Done) & " done):");
+         for I in 0 .. Done - 1 loop
+            Ada.Text_IO.Put_Line
+              (Command_Line (Action_At (I),
+                             Commits.Element (Commits.First_Index + I)));
+         end loop;
+      end if;
+
+      if Remaining = 0 then
+         Ada.Text_IO.Put_Line ("No commands remaining.");
+      else
+         Ada.Text_IO.Put_Line
+           ("Next command" & (if Remaining = 1 then "" else "s") & " to do ("
+            & Natural'Image (Remaining) (2 .. Natural'Image (Remaining)'Last)
+            & " remaining command" & Plural (Remaining) & "):");
+         for I in Done .. Natural (Commits.Length) - 1 loop
+            Ada.Text_IO.Put_Line
+              (Command_Line (Action_At (I),
+                             Commits.Element (Commits.First_Index + I)));
+         end loop;
+         Ada.Text_IO.Put_Line
+           ("  (use ""git rebase --edit-todo"" to view and edit)");
+      end if;
+
+      if Version.Rebase_State."="
+           (Version.Rebase_State.Pause_Reason (State),
+            Version.Rebase_State.Pause_Edit)
+      then
+         Ada.Text_IO.Put_Line
+           ("You are currently editing a commit while rebasing branch '"
+            & Branch & "' on '" & Short (Onto) & "'.");
+         Ada.Text_IO.Put_Line
+           ("  (use ""git commit --amend"" to amend the current commit)");
+         Ada.Text_IO.Put_Line
+           ("  (use ""git rebase --continue"" once you are satisfied with your"
+            & " changes)");
+      else
+         Ada.Text_IO.Put_Line
+           ("You are currently rebasing branch '" & Branch & "' on '"
+            & Short (Onto) & "'.");
+         Ada.Text_IO.Put_Line
+           ("  (fix conflicts and then run ""git rebase --continue"")");
+         Ada.Text_IO.Put_Line
+           ("  (use ""git rebase --skip"" to skip this patch)");
+         Ada.Text_IO.Put_Line
+           ("  (use ""git rebase --abort"" to check out the original branch)");
+      end if;
+
+      Ada.Text_IO.New_Line;
+   exception
+      --  A rebase state we cannot read must not take `status` down with it.
+      when others =>
+         Print_Head_Line (Repo);
+   end Print_Rebase_Status;
+
    procedure Print_Head_Line (Repo : Version.Repository.Repository_Handle) is
       Head : constant Version.Refs.Head_Info := Version.Refs.Read_Head (Repo);
    begin
@@ -1704,7 +1849,14 @@ package body Version.Status is
       --  directory the command ran in.
       Prefix : constant String := Version.Repository.Prefix (Repo);
    begin
-      Print_Head_Line (Repo);
+      --  A rebase in progress replaces the "On branch" line: HEAD is detached
+      --  partway through the replay, so naming the commit it happens to sit on
+      --  would tell the user nothing. git reports the rebase instead.
+      if Version.Rebase_State.State_Exists (Repo) then
+         Print_Rebase_Status (Repo);
+      else
+         Print_Head_Line (Repo);
+      end if;
 
       if Is_Initial then
          Ada.Text_IO.New_Line;
@@ -1746,6 +1898,13 @@ package body Version.Status is
 
       if not Result.Conflicted.Is_Empty then
          Ada.Text_IO.Put_Line ("Unmerged paths:");
+         --  Mid-merge there is nothing to unstage back to, so git offers only
+         --  the resolution hint; unmerged entries from anything else (a
+         --  rebase, a cherry-pick) can be unstaged and git says so.
+         if not Merging then
+            Ada.Text_IO.Put_Line
+              ("  (use ""git restore --staged <file>..."" to unstage)");
+         end if;
          Ada.Text_IO.Put_Line
            ("  (use ""git add <file>..."" to mark resolution)");
          Print_Long_Entries

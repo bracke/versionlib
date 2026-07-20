@@ -31,10 +31,11 @@ with Version.Ref_Transaction;
 
 with Version.Restore;
 with Version.Revisions;
+with Version.Diff;
 with Version.Staging;
 with Version.Status;
+with Version.Trailers;
 with Version.Tree_Cache;
-with Version.Working_Tree;
 with Version.Write;
 with Version.Timestamps;
 
@@ -64,9 +65,12 @@ package body Version.Rebase is
    is
       Expected : constant String := Branch_Name_From_Ref (Branch_Ref);
    begin
+      --  A detached HEAD is the normal state during a rebase -- that is where
+      --  the replayed commits are being stacked -- so it is not an error. Only
+      --  an attached HEAD naming some other branch means the user has moved
+      --  off the rebase and cannot continue or abort it here.
       if Version.Refs.Is_Detached (Repo) then
-         raise Ada.IO_Exceptions.Data_Error with
-           "cannot continue or abort rebase from detached HEAD";
+         return;
       end if;
 
       if Version.Refs.Current_Branch_Name (Repo) /= Expected then
@@ -488,12 +492,34 @@ package body Version.Rebase is
       Base_Id       : Version.Objects.Object_Id_Storage;
       Target_Branch : Unbounded_String;
    begin
+      Conflicts.Clear;
+
+      --  A rebase git paused has no merge state of ours -- git records the
+      --  stop in rebase-merge/ alone. That is not a broken rebase, so instead
+      --  of demanding our own file, fall back to the index: unmerged entries
+      --  are what "still conflicted" means, and both tools write them.
       if not Version.Merge_State.State_Exists (Repo) then
-         raise Ada.IO_Exceptions.Data_Error with
-           "cannot continue rebase: merge state missing";
+         for E of Version.Staging.Load (Repo) loop
+            if E.Stage /= 0 then
+               declare
+                  Already : Boolean := False;
+               begin
+                  for C of Conflicts loop
+                     if C.Path = E.Path then
+                        Already := True;
+                     end if;
+                  end loop;
+                  if not Already then
+                     Conflicts.Append
+                       (Version.Merge.Conflict'
+                          (Path => E.Path, others => <>));
+                  end if;
+               end;
+            end if;
+         end loop;
+         return;
       end if;
 
-      Conflicts.Clear;
       Version.Merge_State.Read_State
         (Repo          => Repo,
          Current_Id    => Current_Id,
@@ -511,6 +537,23 @@ package body Version.Rebase is
            "cannot continue rebase: merge state does not match rebase state";
       end if;
    end Require_Paused_Merge_State;
+
+   --  git will not continue while the index still holds unmerged stages, even
+   --  if the working file no longer has markers in it: editing a file is not
+   --  the same as resolving it, and continuing anyway would commit whatever
+   --  the index still had rather than the edit the user made.
+   procedure Require_Index_Fully_Merged
+     (Repo : Version.Repository.Repository_Handle) is
+   begin
+      for E of Version.Staging.Load (Repo) loop
+         if E.Stage /= 0 then
+            raise Ada.IO_Exceptions.Data_Error with
+              "cannot continue rebase: unresolved conflict in "
+              & To_String (E.Path)
+              & " -- resolve it and mark it resolved with `add`";
+         end if;
+      end loop;
+   end Require_Index_Fully_Merged;
 
    function Conflict_Paths_Have_Markers
      (Repo      : Version.Repository.Repository_Handle;
@@ -541,34 +584,17 @@ package body Version.Rebase is
       end if;
    end Require_No_Untracked_During_Continue;
 
-   procedure Build_Index_From_Working_Tree
+   --  The resolution is what the user staged, exactly as git commits the index
+   --  on `rebase --continue`. Rebuilding it from the working tree instead --
+   --  which this used to do -- both accepted a resolution that was never
+   --  marked resolved and swept up every unrelated edit lying around.
+   procedure Load_Staged_Index
      (Repo   : Version.Repository.Repository_Handle;
       Result : in out Version.Staging.Index_Entry_Vectors.Vector)
    is
-      Files : constant Version.Working_Tree.Working_File_Vectors.Vector :=
-        Version.Working_Tree.Scan (Repo);
    begin
-      Result.Clear;
-      if not Files.Is_Empty then
-         for I in Files.First_Index .. Files.Last_Index loop
-            declare
-               File_Item : constant Version.Working_Tree.Working_File := Files.Element (I);
-               Relative_Path : constant String := To_String (File_Item.Path);
-               Absolute_Path : constant String := Join (Version.Repository.Root_Path (Repo), Relative_Path);
-               Content : constant String := Version.Files.Read_Binary_File (Absolute_Path);
-               Blob_Id : constant Version.Objects.Hex_Object_Id :=
-                 Version.Write.Write_Blob (Repo => Repo, Content => Content);
-            begin
-               Result.Append
-                 (Version.Staging.Index_Entry'
-                    (Path => File_Item.Path,
-                     Id   => Blob_Id,
-                     Mode => To_Unbounded_String ("100644"),
-                     Stage => 0, Skip_Worktree => False));
-            end;
-         end loop;
-      end if;
-   end Build_Index_From_Working_Tree;
+      Result := Version.Staging.Load (Repo);
+   end Load_Staged_Index;
 
    function Replay_Commit
      (Repo          : Version.Repository.Repository_Handle;
@@ -690,6 +716,40 @@ package body Version.Rebase is
          raise;
    end Write_Branch_Ref;
 
+   procedure Write_Resume_For
+     (Repo   : Version.Repository.Repository_Handle;
+      Commit : Version.Objects.Hex_Object_Id);
+   --  Declared here and defined below, next to the commit-header readers it
+   --  needs: the stop sites are above them.
+
+   --  git keeps HEAD detached for the whole rebase and advances it one commit
+   --  at a time; the branch ref moves only at the end. Leaving HEAD on the
+   --  branch instead makes the index describe a different commit than HEAD,
+   --  which is what made every file the new base introduced look newly staged.
+   procedure Move_Detached_Head
+     (Repo      : Version.Repository.Repository_Handle;
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Message   : String)
+   is
+      Old_Id : constant String := Version.Refs.Current_Commit_Id (Repo);
+   begin
+      Version.Reflog.Preflight_Append
+        (Repo, "HEAD", Version.Reflog.Data_Error_On_Lock);
+      Version.Refs.Write_Detached_HEAD (Repo => Repo, Commit_Id => Commit_Id);
+      Version.Reflog.Append
+        (Repo    => Repo,
+         Ref     => "HEAD",
+         Old_Id  => Old_Id,
+         New_Id  => To_String (Commit_Id),
+         Message => Message);
+   end Move_Detached_Head;
+
+   function Replay_Subject
+     (Repo : Version.Repository.Repository_Handle;
+      Id   : Version.Objects.Hex_Object_Id) return String is
+     (Version.Objects.Commit_Message_First_Line
+        (Version.Objects.Read_Object (Repo, Id)));
+
    procedure Finish_Rebase
      (Repo          : Version.Repository.Repository_Handle;
       Branch_Ref    : String;
@@ -698,6 +758,9 @@ package body Version.Rebase is
       Final_Head    : Version.Objects.Hex_Object_Id) is
    begin
       Write_Branch_Ref (Repo => Repo, Branch_Ref => Branch_Ref, Commit_Id => Final_Head);
+      --  Reattach: the branch now holds the replayed history, so HEAD goes
+      --  back to naming it rather than the commit it happens to be at.
+      Version.Refs.Write_Symbolic_HEAD (Repo => Repo, Target => Branch_Ref);
       Version.Restore.Restore_Working_Tree_For_Commit (Repo => Repo, Commit_Id => Final_Head);
       Version.Restore.Write_Index_For_Commit (Repo => Repo, Commit_Id => Final_Head);
       Version.Reflog.Append
@@ -803,6 +866,16 @@ package body Version.Rebase is
          end loop;
       end Run_Due_Execs;
    begin
+      --  Detach at the replay point before touching anything. On --continue
+      --  HEAD is already there, so this is a no-op rather than a second move.
+      if not Version.Refs.Is_Detached (Repo)
+        or else Version.Refs.Current_Commit_Id (Repo) /= To_String (Replay_Head)
+      then
+         Move_Detached_Head
+           (Repo, Replay_Head,
+            "rebase (start): checkout " & To_String (Target_Head));
+      end if;
+
       loop
          Run_Due_Execs;
          exit when Index >= Natural (Commits.Length);
@@ -816,24 +889,26 @@ package body Version.Rebase is
             if Result.Kind = Replay_Conflict then
                Persist (Paused => True, Cur_Commit => To_String (Commit_Id),
                         Reason => Version.Rebase_State.Pause_Conflict);
+               Write_Resume_For (Repo, Commit_Id);
                raise Ada.IO_Exceptions.Data_Error with "rebase paused: conflicts recorded";
             end if;
 
             Replay_Head := Result.Commit_Id;
+            Move_Detached_Head
+              (Repo, Replay_Head,
+               "rebase (pick): " & Replay_Subject (Repo, Replay_Head));
 
             if Is_Edit (Index) then
-               --  Stop for edit: move the branch onto the applied commit so the
-               --  user can amend or add commits, leave a clean working tree, and
-               --  pause with no merge state (which is how Continue_Rebase tells
-               --  an edit-stop from a conflict-stop). Return cleanly -- an
-               --  edit-stop is an intentional stop, not an error (git exits 0).
-               Write_Branch_Ref
-                 (Repo => Repo, Branch_Ref => Branch_Ref, Commit_Id => Replay_Head);
+               --  Stop for edit: HEAD is already on the applied commit, so the
+               --  user can amend or add commits from here. Leave a clean
+               --  working tree and pause. Return cleanly -- an edit-stop is an
+               --  intentional stop, not an error (git exits 0).
                Version.Restore.Restore_Working_Tree_For_Commit
                  (Repo => Repo, Commit_Id => Replay_Head);
                Version.Restore.Write_Index_For_Commit
                  (Repo => Repo, Commit_Id => Replay_Head);
-               Persist (Paused => True, Cur_Commit => To_String (Commit_Id));
+               Persist (Paused => True, Cur_Commit => To_String (Commit_Id),
+                        Reason => Version.Rebase_State.Pause_Edit);
                return;
             end if;
 
@@ -993,6 +1068,66 @@ package body Version.Rebase is
       end loop;
       return Content (Start .. Last);
    end IR_Full_Message;
+
+   --  Leave behind what `git rebase --continue` needs to finish the commit we
+   --  stopped on: its authorship, its message with git's "# Conflicts:" note,
+   --  and the diff being applied. None of it is read back by this tool.
+   procedure Write_Resume_For
+     (Repo   : Version.Repository.Repository_Handle;
+      Commit : Version.Objects.Hex_Object_Id)
+   is
+      function Conflicts_Note return String is
+         Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
+           Version.Staging.Load (Repo);
+         Seen    : Version.Trailers.String_Vectors.Vector;
+         Text    : Unbounded_String;
+      begin
+         for E of Entries loop
+            if E.Stage /= 0
+              and then not Seen.Contains (To_String (E.Path))
+            then
+               Seen.Append (To_String (E.Path));
+               Append (Text, "#" & Character'Val (9)
+                       & To_String (E.Path) & Character'Val (10));
+            end if;
+         end loop;
+
+         if Length (Text) = 0 then
+            return "";
+         end if;
+
+         return Character'Val (10) & "# Conflicts:" & Character'Val (10)
+           & To_String (Text);
+      end Conflicts_Note;
+
+      function Patch_Text return String is
+         Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+           Version.Objects.Commit_Parent_Ids
+             (Version.Objects.Read_Object (Repo, Commit));
+      begin
+         if Parents.Is_Empty then
+            return Version.Diff.Diff_Root_Commit (Repo, Commit);
+         end if;
+         return Version.Diff.Diff_Commits
+           (Repo, Parents.First_Element, Commit);
+      exception
+         when others =>
+            return "";
+      end Patch_Text;
+   begin
+      Version.Rebase_State.Write_Resume_Info
+        (Repo        => Repo,
+         Author_Line => IR_Author_Line (Repo, Commit),
+         Message     =>
+           IR_Full_Message (Repo, Commit) & Character'Val (10)
+           & Conflicts_Note,
+         Patch       => Patch_Text);
+   exception
+      --  Best effort: these files only help the other tool, and failing to
+      --  write them must not turn a normal conflict stop into an error.
+      when others =>
+         null;
+   end Write_Resume_For;
 
    procedure Start_Interactive (Upstream : String) is
       Repo : constant Version.Repository.Repository_Handle :=
@@ -2130,10 +2265,11 @@ package body Version.Rebase is
                raise Ada.IO_Exceptions.Data_Error with
                  "cannot continue rebase: conflict markers remain";
             end if;
+            Require_Index_Fully_Merged (Repo);
             Version.Merge.Record_Rerere_Resolutions
               (Repo => Repo, Conflicts => Conflicts);
             Require_No_Untracked_During_Continue;
-            Build_Index_From_Working_Tree (Repo => Repo, Result => Index_Items);
+            Load_Staged_Index (Repo => Repo, Result => Index_Items);
             Version.Staging.Write (Repo => Repo, Entries => Index_Items);
 
             declare
@@ -2248,11 +2384,13 @@ package body Version.Rebase is
          raise Ada.IO_Exceptions.Data_Error with "cannot continue rebase: conflict markers remain";
       end if;
 
+      Require_Index_Fully_Merged (Repo);
+
       Version.Merge.Record_Rerere_Resolutions
         (Repo => Repo, Conflicts => Conflicts);
 
       Require_No_Untracked_During_Continue;
-      Build_Index_From_Working_Tree (Repo => Repo, Result => Index_Items);
+      Load_Staged_Index (Repo => Repo, Result => Index_Items);
       Version.Staging.Write (Repo => Repo, Entries => Index_Items);
 
       declare
@@ -2329,6 +2467,11 @@ package body Version.Rebase is
         (Repo       => Repo,
          Branch_Ref => Version.Rebase_State.Branch_Ref (State),
          Commit_Id  => Version.Rebase_State.Original_Head (State));
+      --  Abort puts the user back where they started, which means back on the
+      --  branch: HEAD has been detached for the whole rebase.
+      Version.Refs.Write_Symbolic_HEAD
+        (Repo   => Repo,
+         Target => Version.Rebase_State.Branch_Ref (State));
       Version.Restore.Restore_Working_Tree_For_Commit
         (Repo      => Repo,
          Commit_Id => Version.Rebase_State.Original_Head (State));

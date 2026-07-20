@@ -78,6 +78,7 @@ package body Version.Git_Compat.Tests is
    begin
       Version.Test_Support.Write_Text_File
         (Join (Root, "conflict.txt"), "resolved" & LF);
+      Version.Test_Support.Stage_Resolved_File (Root, "conflict.txt");
       Version.Rebase.Continue_Rebase;
    end Resolve_And_Continue_Rebase;
 

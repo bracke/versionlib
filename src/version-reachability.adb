@@ -367,9 +367,28 @@ package body Version.Reachability is
       Result  : in out Version.Objects.Object_Id_Vectors.Vector) is
    begin
       Append_Hex_Ids_From_File (Join (Git_Dir, "VERSION_MERGE"), Result);
-      Append_Hex_Ids_From_File (Join (Git_Dir, "VERSION_REBASE"), Result);
       Append_Hex_Ids_From_File (Join (Git_Dir, "VERSION_CHERRY_PICK"), Result);
       Append_Hex_Ids_From_File (Join (Git_Dir, "VERSION_REVERT"), Result);
+
+      --  A paused rebase keeps its in-flight commits alive only through its
+      --  state: partway through, HEAD is detached and they are on no branch.
+      --  That state is git's rebase-merge directory, so every file in it that
+      --  can name an object must be scanned -- missing one lets gc delete a
+      --  commit the rebase still needs.
+      Append_Hex_Ids_From_File (Join (Git_Dir, "REBASE_HEAD"), Result);
+
+      declare
+         Dir : constant String := Join (Git_Dir, "rebase-merge");
+      begin
+         Append_Hex_Ids_From_File (Join (Dir, "onto"), Result);
+         Append_Hex_Ids_From_File (Join (Dir, "orig-head"), Result);
+         Append_Hex_Ids_From_File (Join (Dir, "stopped-sha"), Result);
+         Append_Hex_Ids_From_File (Join (Dir, "done"), Result);
+         Append_Hex_Ids_From_File (Join (Dir, "git-rebase-todo"), Result);
+         Append_Hex_Ids_From_File
+           (Join (Dir, "git-rebase-todo.backup"), Result);
+         Append_Hex_Ids_From_File (Join (Dir, "version-merges"), Result);
+      end;
    end Append_Worktree_State_Roots;
 
    procedure Append_Worktree_HEAD_Reflog_Roots

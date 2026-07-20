@@ -1,3 +1,11 @@
+with Ada.Strings.Unbounded;
+
+with Version.Files;
+with Version.Objects;
+with Version.Repository;
+with Version.Staging;
+with Version.Write;
+
 with Project_Tools.Files;
 with Project_Tools.Test_Fixtures;
 
@@ -35,5 +43,34 @@ package body Version.Test_Support is
    begin
       return Project_Tools.Files.Join (Left, Right);
    end Join;
+
+   procedure Stage_Resolved_File
+     (Root : String;
+      Path : String)
+   is
+      use Ada.Strings.Unbounded;
+
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Blob : constant Version.Objects.Hex_Object_Id :=
+        Version.Write.Write_Blob
+          (Repo, Version.Files.Read_Binary_File (Join (Root, Path)));
+      Kept : Version.Staging.Index_Entry_Vectors.Vector;
+   begin
+      for E of Version.Staging.Load (Repo) loop
+         if To_String (E.Path) /= Path then
+            Kept.Append (E);
+         end if;
+      end loop;
+
+      Kept.Append
+        (Version.Staging.Index_Entry'
+           (Path  => To_Unbounded_String (Path),
+            Id    => Blob,
+            Mode  => To_Unbounded_String ("100644"),
+            Stage => 0, Skip_Worktree => False));
+      Version.Staging.Sort_By_Path (Kept);
+      Version.Staging.Write (Repo => Repo, Entries => Kept);
+   end Stage_Resolved_File;
 
 end Version.Test_Support;

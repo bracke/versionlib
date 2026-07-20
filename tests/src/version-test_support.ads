@@ -34,6 +34,14 @@ package Version.Test_Support is
      (Path : String)
       return String;
 
+   procedure Stage_Resolved_File
+     (Root : String;
+      Path : String);
+   --  Mark Path resolved the way a user does with `add`: hash the working-tree
+   --  file and put it in the index at stage 0, dropping the conflict stages.
+   --  A rebase will not continue while the index is still unmerged, so a test
+   --  that only writes the resolved bytes has not finished resolving.
+
    function Join
      (Left  : String;
       Right : String)
