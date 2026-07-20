@@ -12,9 +12,22 @@ package Version.Am is
    --  The session is left in progress (`.git/rebase-apply`) for the user to
    --  resolve and then Continue, Skip, or Abort_Am.
 
+   --  git's per-session flags. Quiet silences the "Applying: <subject>" line
+   --  git prints for each patch; Signoff appends a Signed-off-by trailer;
+   --  Keep leaves the subject's "[PATCH]" prefix in place; and
+   --  Committer_Date_Is_Author_Date dates the commit from the patch rather
+   --  than from now.
+   type Am_Options is record
+      Quiet   : Boolean := False;
+      Signoff : Boolean := False;
+      Keep    : Boolean := False;
+      Committer_Date_Is_Author_Date : Boolean := False;
+   end record;
+
    procedure Apply_Mailbox
      (Repo    : Version.Repository.Repository_Handle;
-      Mailbox : String);
+      Mailbox : String;
+      Options : Am_Options := (others => <>));
    --  Start a new am session: split Mailbox into one-commit records, then apply
    --  and commit each with the patch's recorded author and message. Raises
    --  Am_Conflict (leaving the session in progress) on the first patch that

@@ -1,9 +1,11 @@
 with Ada.Containers.Vectors;
 with Ada.IO_Exceptions;
+with Ada.Text_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
 with Version.Apply;
+with Version.Config;
 with Version.Files;
 with Version.Objects;
 with Version.Ref_Names;
@@ -414,17 +416,60 @@ package body Version.Am is
    end Commit_From_Index;
 
    --  Apply patch N's diff and commit it; raises Data_Error if it fails.
+   --  The session's flags outlive the invocation that set them: --continue
+   --  resumes a session started by an earlier command line, so they are kept
+   --  beside the patches rather than passed down the call chain.
+   function Session_Quiet
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Version.Files.Is_Ordinary_File (State_Path (Repo, "quiet")));
+
+   function Session_Signoff
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Version.Files.Is_Ordinary_File (State_Path (Repo, "sign")));
+
    procedure Apply_And_Commit
      (Repo : Version.Repository.Repository_Handle; Lines : Str_Vectors.Vector)
    is
       Author_Line, Subject, Message, Diff : Unbounded_String;
    begin
       Parse_Patch (Lines, Author_Line, Subject, Message, Diff);
+
+      --  git names each patch as it starts it, before anything can fail, so
+      --  the last line printed is the patch that broke.
+      if not Session_Quiet (Repo) then
+         Ada.Text_IO.Put_Line ("Applying: " & To_String (Subject));
+      end if;
+
       Version.Apply.Apply_Patch (Repo, To_String (Diff));
       Stage_Diff (Repo, To_String (Diff));
-      Commit_From_Index
-        (Repo, To_String (Author_Line), To_String (Subject),
-         To_String (Message));
+
+      declare
+         --  git appends the trailer to the message body, separated from it by
+         --  a blank line when the body does not already end in a trailer
+         --  block; keeping it simple, a blank line always separates.
+         function Signed return String is
+            Identity : constant Version.Config.Identity :=
+              Version.Config.User_Identity (Repo);
+            Name  : constant String := To_String (Identity.Name);
+            Email : constant String := To_String (Identity.Email);
+            Body_Text : constant String := To_String (Message);
+         begin
+            if Name'Length = 0 or else Email'Length = 0 then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "cannot sign off: user identity is not configured";
+            end if;
+
+            return Body_Text
+              & (if Body_Text'Length = 0 then "" else "" & LF)
+              & LF & "Signed-off-by: " & Name & " <" & Email & ">";
+         end Signed;
+
+         Full : constant String :=
+           (if Session_Signoff (Repo) then Signed else To_String (Message));
+      begin
+         Commit_From_Index
+           (Repo, To_String (Author_Line), To_String (Subject), Full);
+      end;
    end Apply_And_Commit;
 
    --  Apply patches [next .. last]; on a failure leave the session and raise
@@ -462,7 +507,8 @@ package body Version.Am is
 
    procedure Apply_Mailbox
      (Repo    : Version.Repository.Repository_Handle;
-      Mailbox : String)
+      Mailbox : String;
+      Options : Am_Options := (others => <>))
    is
       Lines   : Str_Vectors.Vector;
       Current : Unbounded_String;
@@ -498,6 +544,13 @@ package body Version.Am is
       if Count = 0 then
          Version.Files.Delete_Directory_Tree_If_Exists (State_Dir (Repo));
          return;
+      end if;
+
+      if Options.Quiet then
+         Write_State (Repo, "quiet", "");
+      end if;
+      if Options.Signoff then
+         Write_State (Repo, "sign", "");
       end if;
 
       Write_State (Repo, "orig-head", Version.Refs.Current_Commit_Id (Repo));
