@@ -7,6 +7,7 @@ with Version.Merge;
 with Version.Hash;
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded;
+with Ada.Strings.Fixed;
 
 with GNAT.OS_Lib;
 
@@ -1153,11 +1154,12 @@ package body Version.Diff is
    --  footer) when Show_Stat, followed by git's `--summary` lines
    --  (create/delete mode, mode change) when Show_Summary.
    function Emit_Stat
-     (Files          : Stat_Vectors.Vector;
-      Show_Stat      : Boolean;
-      Show_Summary   : Boolean;
-      Show_Numstat   : Boolean := False;
-      Show_Shortstat : Boolean := False) return String
+     (Files           : Stat_Vectors.Vector;
+      Show_Stat       : Boolean;
+      Show_Summary    : Boolean;
+      Show_Numstat    : Boolean := False;
+      Show_Shortstat  : Boolean := False;
+      Min_Count_Width : Natural := 0) return String
    is
       Result    : Unbounded_String;
       Name_W    : Natural := 0;
@@ -1253,6 +1255,9 @@ package body Version.Diff is
 
       Count_W :=
         Natural'Max (Count_W, Count_Image (Max_Change)'Length);
+      --  `git apply --stat` pads the count column to a wider minimum than a
+      --  plain diffstat does.
+      Count_W := Natural'Max (Count_W, Min_Count_Width);
 
       --  git's width budget: name + number + 6 constant columns + graph.
       Width := Term_Columns;
@@ -1432,6 +1437,147 @@ package body Version.Diff is
 
       return To_String (Result);
    end Emit_Stat;
+
+   function Summarize_Patch
+     (Patch : String;
+      Mode  : Patch_Summary_Mode) return String
+   is
+      HT : constant Character := Character'Val (9);
+      NL : constant Character := Character'Val (10);
+
+      Files   : Stat_Vectors.Vector;
+      Summary : Unbounded_String;
+
+      First : Natural := Patch'First;
+
+      function Line_At (P : Natural; Last : out Natural) return String is
+      begin
+         Last := P;
+         while Last <= Patch'Last and then Patch (Last) /= NL loop
+            Last := Last + 1;
+         end loop;
+         return Patch (P .. Last - 1);
+      end Line_At;
+
+      --  The "b/<path>" of a "diff --git a/x b/y" header, which is the name
+      --  git reports (the destination side).
+      function Dest_Path (Header : String) return String is
+         B : constant Natural :=
+           Ada.Strings.Fixed.Index (Header, " b/");
+      begin
+         if B = 0 then
+            return "";
+         end if;
+         return Header (B + 3 .. Header'Last);
+      end Dest_Path;
+
+      Current : Stat_Entry;
+      Have    : Boolean := False;
+
+      procedure Flush is
+      begin
+         if Have then
+            Files.Append (Current);
+            Have := False;
+         end if;
+      end Flush;
+   begin
+      while First <= Patch'Last loop
+         declare
+            Last : Natural;
+            L    : constant String := Line_At (First, Last);
+         begin
+            if L'Length > 11
+              and then L (L'First .. L'First + 10) = "diff --git "
+            then
+               Flush;
+               Current :=
+                 (Path        => To_Unbounded_String (Dest_Path (L)),
+                  others      => <>);
+               Current.Old_Present := True;
+               Current.New_Present := True;
+               Have := True;
+
+            elsif Have and then L'Length > 14
+              and then L (L'First .. L'First + 13) = "new file mode "
+            then
+               Current.Old_Present := False;
+               Append
+                 (Summary,
+                  " create mode " & L (L'First + 14 .. L'Last) & " "
+                  & To_String (Current.Path) & NL);
+
+            elsif Have and then L'Length > 18
+              and then L (L'First .. L'First + 17) = "deleted file mode "
+            then
+               Current.New_Present := False;
+               Append
+                 (Summary,
+                  " delete mode " & L (L'First + 18 .. L'Last) & " "
+                  & To_String (Current.Path) & NL);
+
+            elsif Have and then L'Length > 12
+              and then L (L'First .. L'First + 11) = "GIT binary "
+            then
+               Current.Binary := True;
+
+            elsif Have and then L'Length >= 4
+              and then L (L'First .. L'First + 3) = "--- "
+            then
+               null;   --  the old-file header, not a deletion
+
+            elsif Have and then L'Length >= 4
+              and then L (L'First .. L'First + 3) = "+++ "
+            then
+               null;   --  the new-file header, not an insertion
+
+            elsif Have and then L'Length >= 1 and then L (L'First) = '+' then
+               Current.Ins := Current.Ins + 1;
+
+            elsif Have and then L'Length >= 1 and then L (L'First) = '-' then
+               Current.Del := Current.Del + 1;
+            end if;
+
+            First := Last + 1;
+         end;
+      end loop;
+      Flush;
+
+      case Mode is
+         when Summary_Names =>
+            return To_String (Summary);
+
+         when Summary_Numstat =>
+            declare
+               Out_Text : Unbounded_String;
+            begin
+               for F of Files loop
+                  if F.Binary then
+                     Append
+                       (Out_Text,
+                        "-" & HT & "-" & HT & To_String (F.Path) & NL);
+                  else
+                     Append
+                       (Out_Text,
+                        Count_Image (F.Ins) & HT & Count_Image (F.Del) & HT
+                        & To_String (F.Path) & NL);
+                  end if;
+               end loop;
+               return To_String (Out_Text);
+            end;
+
+         when Summary_Stat =>
+            return Emit_Stat
+              (Files, Show_Stat => True, Show_Summary => False,
+               Min_Count_Width => 4);
+
+         when Summary_Shortstat =>
+            return Emit_Stat
+              (Files, Show_Stat => False, Show_Summary => False,
+               Show_Shortstat => True);
+      end case;
+   end Summarize_Patch;
+
 
    function Diff_Sides
      (Repo        : Version.Repository.Repository_Handle;

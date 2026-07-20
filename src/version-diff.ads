@@ -176,4 +176,16 @@ package Version.Diff is
       New_Text : String;
       Context  : Natural := 3) return String;
 
+   type Patch_Summary_Mode is (Summary_Stat, Summary_Numstat,
+                              Summary_Shortstat, Summary_Names);
+
+   function Summarize_Patch
+     (Patch : String;
+      Mode  : Patch_Summary_Mode) return String;
+   --  Render what `git apply --stat|--numstat|--shortstat|--summary` prints
+   --  for Patch without applying it: the per-file added/deleted line counts
+   --  are read from the unified diff, and the mode/create/delete lines for
+   --  Summary_Names from its "new file mode" / "deleted file mode" headers.
+   --  Summary_Stat reuses the same bar rendering as a tree diff.
+
 end Version.Diff;
