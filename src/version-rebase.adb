@@ -1863,15 +1863,26 @@ package body Version.Rebase is
             Rebased_Map         => Map_As_Vector);
       end Persist;
 
-      procedure Abort_Octopus is
+      --  A --rebase-merges conflict cannot be left paused yet. Its todo is
+      --  still written as plain picks, whereas git expresses the topology as
+      --  label/reset/merge -- so a rebase paused here and resumed with real
+      --  git would replay the merges linearly and flatten the history without
+      --  saying so. Rolling back is worse UX than pausing, but it is honest,
+      --  and it is what an octopus conflict has always done.
+      procedure Abort_Merges (Reason : String) is
       begin
          Version.Restore.Restore_Working_Tree_For_Commit (Repo, Original_Head);
          Version.Restore.Write_Index_For_Commit (Repo, Original_Head);
+         Version.Refs.Write_Symbolic_HEAD (Repo => Repo, Target => Branch_Ref);
          Version.Merge_State.Clear_State (Repo);
          Version.Rebase_State.Clear_State (Repo);
          raise Ada.IO_Exceptions.Data_Error with
-           "rebase --rebase-merges aborted: octopus merge conflict "
-           & "(cannot continue an octopus)";
+           "rebase --rebase-merges aborted: " & Reason;
+      end Abort_Merges;
+
+      procedure Abort_Octopus is
+      begin
+         Abort_Merges ("octopus merge conflict (cannot continue an octopus)");
       end Abort_Octopus;
    begin
       for E of Topo loop
@@ -1897,9 +1908,10 @@ package body Version.Rebase is
                     Replay_Commit (Repo, Onto, C, Allow_Root => True);
                begin
                   if R.Kind = Replay_Conflict then
-                     Persist (Paused => True, Cur => To_String (C));
-                     raise Ada.IO_Exceptions.Data_Error with
-                       "rebase paused: conflicts recorded";
+                     Abort_Merges
+                       ("conflict replaying " & To_String (C)
+                        & " (resolve it on a plain rebase, or rerun without"
+                        & " --rebase-merges)");
                   end if;
                   Map.Include (C, R.Commit_Id);
                end;
@@ -1941,12 +1953,10 @@ package body Version.Rebase is
                         Base_Id       => Base,
                         Target_Branch => "rebase",
                         Conflicts     => Conflicts);
-                     --  Record the conflicted stages; see Replay_Commit.
-                     Version.Staging.Write
-                       (Repo => Repo, Entries => Merged_Index);
-                     Persist (Paused => True, Cur => To_String (C));
-                     raise Ada.IO_Exceptions.Data_Error with
-                       "rebase paused: conflicts recorded";
+                     Abort_Merges
+                       ("conflict recreating merge " & To_String (C)
+                        & " (resolve it on a plain rebase, or rerun without"
+                        & " --rebase-merges)");
                   end if;
 
                   declare
