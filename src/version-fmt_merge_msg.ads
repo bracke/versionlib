@@ -13,7 +13,13 @@ package Version.Fmt_Merge_Msg is
    function Format
      (Repo           : Version.Repository.Repository_Handle;
       Input          : String;
-      Current_Branch : String)
+      Current_Branch : String;
+      Log_Entries    : Integer := 0)
       return String;
+   --  Log_Entries is `--log[=<n>]`: 0 for no shortlog (the default), -1 for
+   --  `--log` with no limit, or a positive count. The shortlog lists the
+   --  subjects of the commits being merged, newest first, under a "* <branch>:"
+   --  heading; when a limit hides some, git says how many there were and
+   --  closes the list with "...".
 
 end Version.Fmt_Merge_Msg;

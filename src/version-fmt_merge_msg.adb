@@ -3,6 +3,8 @@ with Ada.Containers.Indefinite_Vectors;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
+with Version.History;
+with Version.Refs;
 with Version.Objects;
 
 package body Version.Fmt_Merge_Msg is
@@ -150,9 +152,42 @@ package body Version.Fmt_Merge_Msg is
    function Format
      (Repo           : Version.Repository.Repository_Handle;
       Input          : String;
-      Current_Branch : String)
+      Current_Branch : String;
+      Log_Entries    : Integer := 0)
       return String
    is
+      Log_Written : Boolean := False;
+
+      function Natural_Text (N : Natural) return String is
+         T : constant String := Natural'Image (N);
+      begin
+         return T (T'First + 1 .. T'Last);
+      end Natural_Text;
+
+      --  Rev_List takes vectors; these wrap the one id and the one exclusion
+      --  the shortlog needs.
+      function Include_Of (Sha : String)
+         return Version.History.Commit_Id_Vectors.Vector
+      is
+         V : Version.History.Commit_Id_Vectors.Vector;
+      begin
+         V.Append (Version.Objects.To_Object_Id (Sha));
+         return V;
+      end Include_Of;
+
+      function Exclude_Of (Branch : String)
+         return Version.History.Commit_Id_Vectors.Vector
+      is
+         V : Version.History.Commit_Id_Vectors.Vector;
+      begin
+         if Branch'Length > 0
+           and then Version.Refs.Ref_Exists (Repo, "refs/heads/" & Branch)
+         then
+            V.Append (Version.Refs.Resolve_Ref (Repo, "refs/heads/" & Branch));
+         end if;
+         return V;
+      end Exclude_Of;
+
       Lines   : constant String_Vectors.Vector := Split_Lines (Input);
       Entries : Entry_Vectors.Vector;
       Groups  : Group_Vectors.Vector;
@@ -298,11 +333,14 @@ package body Version.Fmt_Merge_Msg is
 
                   --  A source that contributed nothing but its HEAD is
                   --  reported as the URL alone.
+                  --  "." is this repository, and git does not say a branch
+                  --  came from here -- "Merge branch 'topic'", not
+                  --  "Merge branch 'topic' of .".
                   if Only_Head and then Length (Src) > 0 then
                      Append (Result, To_String (Src));
                   else
                      Append (Result, To_String (Part));
-                     if Length (Src) > 0 then
+                     if Length (Src) > 0 and then To_String (Src) /= "." then
                         Append (Result, " of " & To_String (Src));
                      end if;
                   end if;
@@ -320,6 +358,52 @@ package body Version.Fmt_Merge_Msg is
          Append (Result, " into " & Current_Branch);
       end if;
 
+      --  `--log`: under the subject, the commits each merged ref brings that
+      --  the current branch does not already have, newest first. A limit that
+      --  hides some is announced ("(N commits)") and the list closes with
+      --  "...", which is how git says the tail was cut rather than empty.
+      if Log_Entries /= 0 then
+         for E of Entries loop
+            declare
+               Subjects : constant Version.History.Commit_Id_Vectors.Vector :=
+                 Version.History.Rev_List
+                   (Repo    => Repo,
+                    Include => Include_Of (To_String (E.Sha)),
+                    Exclude => Exclude_Of (Current_Branch));
+               Total : constant Natural := Natural (Subjects.Length);
+               Shown : constant Natural :=
+                 (if Log_Entries < 0 then Total
+                  else Natural'Min (Total, Log_Entries));
+            begin
+               if Total > 0 then
+                  Append (Result, LF & LF & "* " & To_String (E.Name) & ":");
+                  if Shown < Total then
+                     Append
+                       (Result,
+                        " (" & Natural_Text (Total) & " commits)");
+                  end if;
+                  Append (Result, LF);
+
+                  for I in 0 .. Shown - 1 loop
+                     Append
+                       (Result,
+                        "  "
+                        & Version.Objects.Commit_Message_First_Line
+                            (Version.Objects.Read_Object
+                               (Repo, Subjects.Element (I)))
+                        & LF);
+                  end loop;
+
+                  if Shown < Total then
+                     Append (Result, "  ..." & LF);
+                  end if;
+
+                  Log_Written := True;
+               end if;
+            end;
+         end loop;
+      end if;
+
       --  Append the message body of any merged annotated tags.
       for E of Entries loop
          if To_String (E.Type_Word) = "tag" then
@@ -333,7 +417,12 @@ package body Version.Fmt_Merge_Msg is
          end if;
       end loop;
 
-      Append (Result, LF);
+      --  The shortlog's last entry already ended the line; adding another
+      --  would leave a blank one git does not write.
+      if not Log_Written then
+         Append (Result, LF);
+      end if;
+
       return To_String (Result);
    end Format;
 
