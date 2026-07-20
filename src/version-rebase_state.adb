@@ -126,13 +126,17 @@ package body Version.Rebase_State is
    --  full object id (git writes 40 hex here, not an abbreviation, in both
    --  `done` and `git-rebase-todo`); `exec` carries the rest of the line as a
    --  shell command and no comment.
-   type Todo_Kind is (Todo_Commit, Todo_Exec);
+   --  Exec is the one command that is not part of the public Todo_Command
+   --  grammar: it belongs to interactive rebase, not to topology.
+   type Line_Kind is (Line_Commit, Line_Exec, Line_Label, Line_Reset,
+                      Line_Merge);
 
    type Todo_Line is record
-      Kind    : Todo_Kind := Todo_Commit;
+      Kind    : Line_Kind := Line_Commit;
       Action  : Rebase_Action := Pick;
       Id      : Version.Objects.Object_Id_Storage := Zero_Id;
       Command : Unbounded_String := Null_Unbounded_String;
+      Label   : Unbounded_String := Null_Unbounded_String;
    end record;
 
    package Todo_Vectors is new Ada.Containers.Vectors
@@ -155,9 +159,9 @@ package body Version.Rebase_State is
    is
    begin
       case Item.Kind is
-         when Todo_Exec =>
+         when Line_Exec =>
             return "exec " & To_String (Item.Command);
-         when Todo_Commit =>
+         when Line_Commit =>
             declare
                --  The comment is what `git status` shows the user; an
                --  unreadable commit must not make the state unwritable.
@@ -171,6 +175,25 @@ package body Version.Rebase_State is
             begin
                return Action_Word (Item.Action) & " "
                  & To_String (Item.Id) & Comment;
+            end;
+         when Line_Label =>
+            return "label " & To_String (Item.Label);
+         when Line_Reset =>
+            return "reset " & To_String (Item.Label);
+         when Line_Merge =>
+            declare
+               function Comment return String is
+               begin
+                  return " # " & Subject_Of (Repo, Item.Id);
+               exception
+                  when others =>
+                     return "";
+               end Comment;
+            begin
+               --  -C keeps the original merge's message and authorship, which
+               --  is what makes the recreated merge the same commit in spirit.
+               return "merge -C " & To_String (Item.Id) & " "
+                 & To_String (Item.Label) & Comment;
             end;
       end case;
    end Render;
@@ -215,14 +238,66 @@ package body Version.Rebase_State is
                         return Rest (Rest'First .. Hash - 1);
                      end Argument;
                   begin
-                     if Verb = "exec" or else Verb = "x" then
+                     --  git comments a reset with the commit the label
+                     --  stands for ("reset branch-point # A"), so the label is
+                     --  only the part before it.
+                     if Verb = "label" or else Verb = "l" then
+                        Require_Text (Argument, "label");
+                        Result.Append
+                          (Todo_Line'
+                             (Kind  => Line_Label,
+                              Label => To_Unbounded_String (Argument),
+                              others => <>));
+                     elsif Verb = "reset" or else Verb = "t" then
+                        Require_Text (Argument, "reset");
+                        Result.Append
+                          (Todo_Line'
+                             (Kind  => Line_Reset,
+                              Label => To_Unbounded_String (Argument),
+                              others => <>));
+                     elsif Verb = "merge" or else Verb = "m" then
+                        --  `merge -C <sha> <label> [# subject]`; the -c spelling
+                        --  differs only in reopening the editor, which is not a
+                        --  distinction a replay can act on.
+                        declare
+                           R : constant String :=
+                             (if Rest'Length > 3
+                                and then (Rest (Rest'First .. Rest'First + 2)
+                                          = "-C " or else
+                                          Rest (Rest'First .. Rest'First + 2)
+                                          = "-c ")
+                              then Rest (Rest'First + 3 .. Rest'Last)
+                              else Rest);
+                           Gap : constant Natural :=
+                             Ada.Strings.Fixed.Index (R, " ");
+                           Id_Text : constant String :=
+                             (if Gap = 0 then R else R (R'First .. Gap - 1));
+                           Rest_Of : constant String :=
+                             (if Gap = 0 then "" else R (Gap + 1 .. R'Last));
+                           Hash : constant Natural :=
+                             Ada.Strings.Fixed.Index (Rest_Of, " #");
+                           Lbl : constant String :=
+                             (if Hash = 0 then Rest_Of
+                              else Rest_Of (Rest_Of'First .. Hash - 1));
+                        begin
+                           Require_Id (Id_Text, "merge commit");
+                           Require_Text (Lbl, "merge label");
+                           Result.Append
+                             (Todo_Line'
+                                (Kind  => Line_Merge,
+                                 Id    => Version.Objects.To_Object_Id (Id_Text),
+                                 Label => To_Unbounded_String (Lbl),
+                                 others => <>));
+                        end;
+                     elsif Verb = "exec" or else Verb = "x" then
                         Require_Text (Rest, "exec command");
                         Result.Append
                           (Todo_Line'
-                             (Kind    => Todo_Exec,
+                             (Kind    => Line_Exec,
                               Action  => Pick,
                               Id      => Zero_Id,
-                              Command => To_Unbounded_String (Rest)));
+                              Command => To_Unbounded_String (Rest),
+                              Label   => Null_Unbounded_String));
                      else
                         declare
                            Arg : constant String := Argument;
@@ -243,10 +318,11 @@ package body Version.Rebase_State is
                            Require_Id (Arg, "todo commit");
                            Result.Append
                              (Todo_Line'
-                                (Kind    => Todo_Commit,
+                                (Kind    => Line_Commit,
                                  Action  => Act,
                                  Id      => Version.Objects.To_Object_Id (Arg),
-                                 Command => Null_Unbounded_String));
+                                 Command => Null_Unbounded_String,
+                                 Label   => Null_Unbounded_String));
                         end;
                      end if;
                   end;
@@ -279,10 +355,11 @@ package body Version.Rebase_State is
             if E.After = N then
                Result.Append
                  (Todo_Line'
-                    (Kind    => Todo_Exec,
+                    (Kind    => Line_Exec,
                      Action  => Pick,
                      Id      => Zero_Id,
-                     Command => E.Command));
+                     Command => E.Command,
+                     Label   => Null_Unbounded_String));
             end if;
          end loop;
       end Emit_Execs_After;
@@ -293,10 +370,11 @@ package body Version.Rebase_State is
          for I in Commits.First_Index .. Commits.Last_Index loop
             Result.Append
               (Todo_Line'
-                 (Kind    => Todo_Commit,
+                 (Kind    => Line_Commit,
                   Action  => Action_At (I),
                   Id      => Commits.Element (I),
-                  Command => Null_Unbounded_String));
+                  Command => Null_Unbounded_String,
+                  Label   => Null_Unbounded_String));
             Emit_Execs_After (I + 1);
          end loop;
       end if;
@@ -334,12 +412,16 @@ package body Version.Rebase_State is
 
       for I in Items.First_Index .. Items.Last_Index loop
          case Items.Element (I).Kind is
-            when Todo_Commit =>
+            when Line_Commit =>
                exit when Commits_Seen >= Next_Index;
                Commits_Seen := Commits_Seen + 1;
-            when Todo_Exec =>
+            when Line_Exec =>
                exit when Execs_Seen >= Next_Exec;
                Execs_Seen := Execs_Seen + 1;
+            when Line_Label | Line_Reset | Line_Merge =>
+               --  Only reachable for a merges todo, which splits by an
+               --  explicit command count instead of these counters.
+               null;
          end case;
       end loop;
 
@@ -582,6 +664,133 @@ package body Version.Rebase_State is
       Put_File (Repo, "patch", Patch);
    end Write_Resume_Info;
 
+   procedure Write_Merges_State
+     (Repo           : Version.Repository.Repository_Handle;
+      Branch_Ref     : String;
+      Original_Head  : Version.Objects.Hex_Object_Id;
+      Target_Head    : Version.Objects.Hex_Object_Id;
+      Todo           : Todo_Command_Vectors.Vector;
+      Done_Count     : Natural;
+      Paused         : Boolean := False;
+      Current_Commit : String := "")
+   is
+      Items : Todo_Vectors.Vector;
+      --  As in linear mode, git counts the command it stopped on as done: it
+      --  is the "last command done" its status reports, even though the
+      --  commit is not applied. Read_State takes the extra one back off.
+      Split : constant Natural :=
+        Natural'Min (Done_Count + (if Paused then 1 else 0),
+                     Natural (Todo.Length));
+      Picks : Natural := 0;
+   begin
+      Require_Branch_Ref (Branch_Ref);
+      Require_Id (To_String (Original_Head), "original head");
+      Require_Id (To_String (Target_Head), "target head");
+
+      if Done_Count > Natural (Todo.Length) then
+         raise Ada.IO_Exceptions.Data_Error with
+           "malformed rebase state: done count";
+      end if;
+
+      for C of Todo loop
+         case C.Kind is
+            when Cmd_Pick =>
+               Require_Id (To_String (C.Id), "commit");
+               Picks := Picks + 1;
+               Items.Append
+                 (Todo_Line'
+                    (Kind    => Line_Commit,
+                     Action  => C.Action,
+                     Id      => C.Id,
+                     Command => Null_Unbounded_String,
+                     Label   => Null_Unbounded_String));
+            when Cmd_Label =>
+               Require_Text (To_String (C.Label), "label");
+               Items.Append
+                 (Todo_Line'
+                    (Kind => Line_Label, Label => C.Label, others => <>));
+            when Cmd_Reset =>
+               Require_Text (To_String (C.Label), "reset");
+               Items.Append
+                 (Todo_Line'
+                    (Kind => Line_Reset, Label => C.Label, others => <>));
+            when Cmd_Merge =>
+               Require_Id (To_String (C.Id), "merge commit");
+               Require_Text (To_String (C.Label), "merge label");
+               Picks := Picks + 1;
+               Items.Append
+                 (Todo_Line'
+                    (Kind  => Line_Merge,
+                     Id    => C.Id,
+                     Label => C.Label,
+                     others => <>));
+         end case;
+      end loop;
+
+      Version.Files.Create_Directory_If_Missing (State_Dir (Repo));
+
+      Put_File (Repo, "head-name", Branch_Ref & LF);
+      Put_File (Repo, "onto", To_String (Target_Head) & LF);
+      Put_File (Repo, "orig-head", To_String (Original_Head) & LF);
+      Put_File (Repo, "interactive", "");
+      Put_File (Repo, "no-reschedule-failed-exec", "");
+
+      Put_File (Repo, "done", Serialize (Repo, Items, 0, Split - 1));
+      Put_File
+        (Repo, "git-rebase-todo",
+         Serialize (Repo, Items, Split, Integer (Items.Length) - 1));
+
+      if not Has_File (Repo, "git-rebase-todo.backup") then
+         Put_File
+           (Repo, "git-rebase-todo.backup",
+            Serialize (Repo, Items, 0, Integer (Items.Length) - 1));
+      end if;
+
+      --  msgnum/end count commits, not commands.
+      declare
+         Done_Picks : Natural := 0;
+      begin
+         for I in 0 .. Split - 1 loop
+            if Items.Element (I).Kind in Line_Commit | Line_Merge then
+               Done_Picks := Done_Picks + 1;
+            end if;
+         end loop;
+         Put_File (Repo, "msgnum", Natural_Image (Done_Picks) & LF);
+      end;
+      Put_File (Repo, "end", Natural_Image (Picks) & LF);
+
+      if Paused and then Current_Commit'Length > 0 then
+         Require_Id (Current_Commit, "current commit");
+         Put_File (Repo, "stopped-sha", Current_Commit & LF);
+         Version.Files.Write_Binary_File_Atomic
+           (Path    => Version.Files.Join
+                         (Version.Repository.Git_Dir (Repo), "REBASE_HEAD"),
+            Content => Current_Commit & LF);
+      else
+         Version.Files.Delete_File_If_Exists (State_Path (Repo, "stopped-sha"));
+         Version.Files.Delete_File_If_Exists
+           (Version.Files.Join
+              (Version.Repository.Git_Dir (Repo), "REBASE_HEAD"));
+      end if;
+
+      Version.Files.Delete_File_If_Exists (State_Path (Repo, "amend"));
+      --  The topology now lives in the todo itself, so the sidecar that used
+      --  to carry it is not written -- and is removed if an older rebase left
+      --  one behind.
+      Version.Files.Delete_File_If_Exists
+        (State_Path (Repo, "version-merges"));
+   end Write_Merges_State;
+
+   function Todo (State : Rebase_State) return Todo_Command_Vectors.Vector is
+   begin
+      return State.Todo_Value;
+   end Todo;
+
+   function Done_Count (State : Rebase_State) return Natural is
+   begin
+      return State.Done_Count_Value;
+   end Done_Count;
+
    -------------------------------  reading  --------------------------------
 
    function Read_State
@@ -631,14 +840,45 @@ package body Version.Rebase_State is
          procedure Absorb (Items : Todo_Vectors.Vector; Executed : Boolean) is
          begin
             for Item of Items loop
+               --  Every command, in order, is also kept as the public todo:
+               --  that is the only view that can express a merges topology,
+               --  while Commits/Actions stay the flat view linear mode uses.
                case Item.Kind is
-                  when Todo_Commit =>
+                  when Line_Commit =>
+                     State.Todo_Value.Append
+                       (Todo_Command'
+                          (Kind   => Cmd_Pick,
+                           Action => Item.Action,
+                           Id     => Item.Id,
+                           Label  => Null_Unbounded_String));
                      State.Commits_Value.Append (Item.Id);
                      State.Actions_Value.Append (Item.Action);
                      if Executed then
                         State.Next_Index_Value := State.Next_Index_Value + 1;
                      end if;
-                  when Todo_Exec =>
+                  when Line_Merge =>
+                     State.Todo_Value.Append
+                       (Todo_Command'
+                          (Kind   => Cmd_Merge,
+                           Action => Pick,
+                           Id     => Item.Id,
+                           Label  => Item.Label));
+                     State.Mode_Value := Mode_Merges;
+                     State.Commits_Value.Append (Item.Id);
+                     State.Actions_Value.Append (Pick);
+                     if Executed then
+                        State.Next_Index_Value := State.Next_Index_Value + 1;
+                     end if;
+                  when Line_Label | Line_Reset =>
+                     State.Todo_Value.Append
+                       (Todo_Command'
+                          (Kind   => (if Item.Kind = Line_Label
+                                      then Cmd_Label else Cmd_Reset),
+                           Action => Pick,
+                           Id     => Zero_Id,
+                           Label  => Item.Label));
+                     State.Mode_Value := Mode_Merges;
+                  when Line_Exec =>
                      State.Execs_Value.Append
                        (Exec_Step'
                           (After   => Natural (State.Commits_Value.Length),
@@ -647,6 +887,10 @@ package body Version.Rebase_State is
                         State.Next_Exec_Value := State.Next_Exec_Value + 1;
                      end if;
                end case;
+
+               if Executed then
+                  State.Done_Count_Value := State.Done_Count_Value + 1;
+               end if;
             end loop;
          end Absorb;
       begin
@@ -671,6 +915,9 @@ package body Version.Rebase_State is
             --  the resume cursor is one short of what `done` counts.
             if State.Next_Index_Value > 0 then
                State.Next_Index_Value := State.Next_Index_Value - 1;
+            end if;
+            if State.Done_Count_Value > 0 then
+               State.Done_Count_Value := State.Done_Count_Value - 1;
             end if;
          end;
       else
@@ -720,7 +967,12 @@ package body Version.Rebase_State is
          end;
       end if;
 
-      if State.Pause_Reason_Value /= Pause_Exec then
+      --  Linear mode alone can assert that the cursor lands on the stopped
+      --  commit: a merges todo interleaves label/reset commands, so its
+      --  commit cursor and its command cursor advance at different rates.
+      if State.Pause_Reason_Value /= Pause_Exec
+        and then State.Mode_Value = Mode_Linear
+      then
          if State.Next_Index_Value >= Natural (State.Commits_Value.Length)
            or else State.Commits_Value.Element
              (State.Commits_Value.First_Index + State.Next_Index_Value)

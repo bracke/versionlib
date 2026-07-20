@@ -1,5 +1,4 @@
 with Ada.Containers; use Ada.Containers;
-with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Ordered_Sets;
 with Ada.Containers.Vectors;
 with Ada.Directories; use Ada.Directories;
@@ -1769,302 +1768,430 @@ package body Version.Rebase is
 
    package Merges_Id_Sets is new Ada.Containers.Ordered_Sets
      (Element_Type => Version.Objects.Object_Id_Storage);
-   package Merges_Id_Maps is new Ada.Containers.Ordered_Maps
-     (Key_Type     => Version.Objects.Object_Id_Storage,
-      Element_Type => Version.Objects.Object_Id_Storage);
 
-   --  Rebased parents of C (deduplicated): a parent inside the rebase set S maps
-   --  through Map to its rebased id, one outside S maps to Upstream_Head.
-   function Merges_Rebased_Parents
-     (Repo          : Version.Repository.Repository_Handle;
-      C             : Version.Objects.Hex_Object_Id;
-      In_Set        : Merges_Id_Sets.Set;
-      Map           : Merges_Id_Maps.Map;
-      Upstream_Head : Version.Objects.Hex_Object_Id)
-      return Version.Rebase_State.Commit_Vectors.Vector
-   is
-      Rebased : Version.Rebase_State.Commit_Vectors.Vector;
+
+   ------------------------  merges todo: generation  ------------------------
+
+   --  A label has to be a usable ref component, and it has to be stable across
+   --  a pause: the abbreviated id is both, and unlike a branch name it cannot
+   --  collide with another side of the same topology.
+   function Label_For (Id : Version.Objects.Hex_Object_Id) return String is
+      Full : constant String := Version.Objects.To_String (Id);
    begin
-      for P of Version.History.Parent_Commits (Repo, C) loop
-         declare
-            RP : constant Version.Objects.Hex_Object_Id :=
-              (if In_Set.Contains (P) and then Map.Contains (P)
-               then Map.Element (P) else Upstream_Head);
-            Dup : Boolean := False;
-         begin
-            for E of Rebased loop
-               if E = RP then
-                  Dup := True;
-               end if;
-            end loop;
-            if not Dup then
-               Rebased.Append (RP);
+      return Full (Full'First .. Full'First + 6);
+   end Label_For;
+
+   Onto_Label : constant String := "onto";
+
+   --  Turn the topological order into git's todo grammar. A commit is labelled
+   --  only when something later comes back to it -- a merge side, or a commit
+   --  whose first parent is not the line we are already on -- because every
+   --  label is a ref git has to write.
+   function Build_Merges_Todo
+     (Repo          : Version.Repository.Repository_Handle;
+      Topo          : Version.Rebase_State.Commit_Vectors.Vector;
+      In_Set        : Merges_Id_Sets.Set)
+      return Version.Rebase_State.Todo_Command_Vectors.Vector
+   is
+      use Version.Rebase_State;
+
+      Result : Todo_Command_Vectors.Vector;
+      Needs_Label : Merges_Id_Sets.Set;
+
+      function Position_Of (Id : Version.Objects.Hex_Object_Id) return Integer is
+      begin
+         for I in Topo.First_Index .. Topo.Last_Index loop
+            if Topo.Element (I) = Id then
+               return I;
             end if;
+         end loop;
+         return -1;
+      end Position_Of;
+   begin
+      --  Pass one: who is come back to later.
+      for I in Topo.First_Index .. Topo.Last_Index loop
+         declare
+            Parents : constant Version.History.Commit_Id_Vectors.Vector :=
+              Version.History.Parent_Commits (Repo, Topo.Element (I));
+            N : Natural := 0;
+         begin
+            for P of Parents loop
+               if In_Set.Contains (P) then
+                  --  A non-first parent is always a merge side; a first parent
+                  --  only needs a name when it is not the previous command.
+                  if N > 0 or else Position_Of (P) /= I - 1 then
+                     Needs_Label.Include (P);
+                  end if;
+               end if;
+               N := N + 1;
+            end loop;
          end;
       end loop;
-      return Rebased;
-   end Merges_Rebased_Parents;
 
-   --  Replay the topologically-ordered Topo list from Start_Index, recreating
-   --  merges, resuming from Initial_Map. On a linear or two-parent-merge
-   --  conflict it records a Merge_State plus the rebase-merges state and raises
-   --  (resumable via Continue_Rebase); an octopus conflict aborts (git parity).
+      --  Pass two: emit. `label onto` first, so a reset can always get back to
+      --  the base even when the first commit does not sit on it.
+      Result.Append
+        (Todo_Command'
+           (Kind  => Cmd_Label,
+            Label => To_Unbounded_String (Onto_Label),
+            others => <>));
+
+      declare
+         --  Which commit HEAD stands on. Zero means "not on a replayed commit
+         --  yet", which forces the opening `reset onto` -- git emits one too,
+         --  and it is what makes the todo self-contained rather than an
+         --  assumption about where HEAD happened to be.
+         Current : Version.Objects.Hex_Object_Id := Zero_Id;
+      begin
+         for I in Topo.First_Index .. Topo.Last_Index loop
+            declare
+               C : constant Version.Objects.Hex_Object_Id := Topo.Element (I);
+               Parents : constant Version.History.Commit_Id_Vectors.Vector :=
+                 Version.History.Parent_Commits (Repo, C);
+
+               First_In_Set : constant Boolean :=
+                 not Parents.Is_Empty
+                 and then In_Set.Contains (Parents.First_Element);
+
+               --  Where this commit has to be applied: its first parent when
+               --  that is being replayed too, otherwise the base.
+               Want : constant Version.Objects.Hex_Object_Id :=
+                 (if First_In_Set then Parents.First_Element else Zero_Id);
+
+               Merge_Sides : Version.Rebase_State.Commit_Vectors.Vector;
+            begin
+               for K in Parents.First_Index + 1 .. Parents.Last_Index loop
+                  Merge_Sides.Append (Parents.Element (K));
+               end loop;
+
+               --  Only move when we are not already standing there. Resetting
+               --  to where HEAD already is would name a label that was never
+               --  written, because a commit only gets one when something has
+               --  to come back to it.
+               if Current /= Want then
+                  Result.Append
+                    (Todo_Command'
+                       (Kind  => Cmd_Reset,
+                        Label => To_Unbounded_String
+                                   (if Want = Zero_Id then Onto_Label
+                                    else Label_For (Want)),
+                        others => <>));
+               end if;
+
+               if Merge_Sides.Is_Empty then
+                  Result.Append
+                    (Todo_Command'
+                       (Kind => Cmd_Pick, Id => C, others => <>));
+               else
+                  --  One merge command carries every side, space separated:
+                  --  an octopus is a single commit with N parents, so
+                  --  emitting a command per side would build a chain of
+                  --  two-parent merges instead.
+                  declare
+                     Labels : Unbounded_String;
+                  begin
+                     for Side of Merge_Sides loop
+                        if Length (Labels) > 0 then
+                           Append (Labels, " ");
+                        end if;
+                        Append
+                          (Labels,
+                           (if In_Set.Contains (Side) then Label_For (Side)
+                            else Version.Objects.To_String (Side)));
+                     end loop;
+
+                     Result.Append
+                       (Todo_Command'
+                          (Kind => Cmd_Merge, Id => C, Label => Labels,
+                           others => <>));
+                  end;
+               end if;
+
+               if Needs_Label.Contains (C) then
+                  Result.Append
+                    (Todo_Command'
+                       (Kind  => Cmd_Label,
+                        Label => To_Unbounded_String (Label_For (C)),
+                        others => <>));
+               end if;
+
+               Current := C;
+            end;
+         end loop;
+      end;
+
+      return Result;
+   end Build_Merges_Todo;
+
+   --  Execute a --rebase-merges todo from Start_At. Labels are refs under
+   --  rebase-merge/refs/rewritten/, which is git's own mechanism, so a rebase
+   --  paused here carries its whole topology on disk in a form git reads.
    procedure Replay_Merges_Remaining
      (Repo          : Version.Repository.Repository_Handle;
       Branch_Ref    : String;
       Original_Head : Version.Objects.Hex_Object_Id;
       Upstream_Head : Version.Objects.Hex_Object_Id;
-      Topo          : Version.Rebase_State.Commit_Vectors.Vector;
-      Start_Index   : Natural;
-      Initial_Map   : Version.Rebase_State.Map_Vectors.Vector)
+      Todo          : Version.Rebase_State.Todo_Command_Vectors.Vector;
+      Start_At      : Natural)
    is
-      In_Set : Merges_Id_Sets.Set;
-      Map    : Merges_Id_Maps.Map;
-      Index  : Natural := Start_Index;
+      use Version.Rebase_State;
 
-      function Tree_Of (C : Version.Objects.Hex_Object_Id)
-         return Version.Objects.Hex_Object_Id is
-        (Version.Objects.Commit_Tree_Id
-           (Version.Objects.Read_Object (Repo, C)));
+      Index : Natural := Start_At;
+
+      function Rewritten_Path (Label : String) return String is
+        (Join (Join (Join (Version.Repository.Git_Dir (Repo), "rebase-merge"),
+                     "refs/rewritten"),
+               Label));
+
+      procedure Put_Label (Label : String; Id : Version.Objects.Hex_Object_Id)
+      is
+         Path : constant String := Rewritten_Path (Label);
+      begin
+         Version.Files.Create_Parent_Directories (Path);
+         Version.Files.Write_Binary_File_Atomic
+           (Path => Path, Content => To_String (Id) & Character'Val (10));
+      end Put_Label;
+
+      --  `onto` is the one label that exists before anything is executed, so
+      --  it answers from the rebase's base rather than from a written ref.
+      function Get_Label (Label : String) return Version.Objects.Hex_Object_Id
+      is
+         Path : constant String := Rewritten_Path (Label);
+      begin
+         if Version.Files.Is_Ordinary_File (Path) then
+            declare
+               Raw  : constant String :=
+                 Version.Files.Read_Binary_File (Path);
+               Last : Natural := Raw'Last;
+            begin
+               while Last >= Raw'First
+                 and then (Raw (Last) = Character'Val (10)
+                           or else Raw (Last) = Character'Val (13))
+               loop
+                  Last := Last - 1;
+               end loop;
+               return Version.Objects.To_Object_Id (Raw (Raw'First .. Last));
+            end;
+         end if;
+
+         if Label = "onto" then
+            return Upstream_Head;
+         end if;
+
+         --  A merge side outside the rebase set is named by its own id.
+         if Version.Objects.Is_Valid_Hex_Object_Id (Label) then
+            return Version.Objects.To_Object_Id (Label);
+         end if;
+
+         raise Ada.IO_Exceptions.Data_Error with
+           "malformed rebase state: unknown label " & Label;
+      end Get_Label;
+
+      function Head_Id return Version.Objects.Hex_Object_Id is
+        (Version.Objects.To_Object_Id (Version.Refs.Current_Commit_Id (Repo)));
+
+      procedure Persist (Paused : Boolean; Cur : String) is
+      begin
+         Version.Rebase_State.Write_Merges_State
+           (Repo           => Repo,
+            Branch_Ref     => Branch_Ref,
+            Original_Head  => Original_Head,
+            Target_Head    => Upstream_Head,
+            Todo           => Todo,
+            Done_Count     => Index,
+            Paused         => Paused,
+            Current_Commit => Cur);
+      end Persist;
 
       function Items_Of (C : Version.Objects.Hex_Object_Id)
          return Version.Objects.Tree_Entry_Vectors.Vector
       is
          Cache : Version.Tree_Cache.Tree_Cache;
       begin
-         return Version.Tree_Cache.Flatten_Tree (Repo, Cache, Tree_Of (C));
+         return Version.Tree_Cache.Flatten_Tree
+           (Repo, Cache,
+            Version.Objects.Commit_Tree_Id
+              (Version.Objects.Read_Object (Repo, C)));
       end Items_Of;
 
-      function Map_As_Vector return Version.Rebase_State.Map_Vectors.Vector is
-         V : Version.Rebase_State.Map_Vectors.Vector;
+      --  Recreate one merge: HEAD is the first parent and the labelled commits
+      --  the rest. An octopus is merged a side at a time but committed once,
+      --  so it keeps all its parents. The original's message and authorship
+      --  carry over, which is what `merge -C` means.
+      procedure Do_Merge
+        (Original : Version.Objects.Hex_Object_Id;
+         Sides    : Version.Rebase_State.Commit_Vectors.Vector)
+      is
+         Ours : constant Version.Objects.Hex_Object_Id := Head_Id;
+         Acc  : Version.Objects.Tree_Entry_Vectors.Vector := Items_Of (Ours);
+         Merged_Index : Version.Staging.Index_Entry_Vectors.Vector;
+         Parent_Ids   : Version.Objects.Object_Id_Vectors.Vector;
       begin
-         for C in Map.Iterate loop
-            V.Append
-              (Version.Rebase_State.Map_Pair'
-                 (Original => Merges_Id_Maps.Key (C),
-                  Rebased  => Merges_Id_Maps.Element (C)));
-         end loop;
-         return V;
-      end Map_As_Vector;
+         Version.Restore.Restore_Working_Tree_For_Commit (Repo, Ours);
+         Version.Restore.Write_Index_For_Commit (Repo, Ours);
+         Parent_Ids.Append (Ours);
 
-      procedure Persist (Paused : Boolean; Cur : String) is
-      begin
-         Version.Rebase_State.Write_State
-           (Repo                => Repo,
-            Branch_Ref          => Branch_Ref,
-            Original_Head       => Original_Head,
-            Target_Head         => Upstream_Head,
-            Current_Replay_Head => Upstream_Head,
-            Next_Index          => Index,
-            Commits             => Topo,
-            Paused              => Paused,
-            Current_Commit      => Cur,
-            Mode                => Version.Rebase_State.Mode_Merges,
-            Rebased_Map         => Map_As_Vector);
-      end Persist;
+         for Side of Sides loop
+            declare
+               Base : constant Version.Objects.Hex_Object_Id :=
+                 Version.History.Merge_Base (Repo, Ours, Side);
+               Conflicts : Version.Merge.Conflict_Vectors.Vector;
+            begin
+               Merged_Index.Clear;
+               Version.Merge.Merge_Trees
+                 (Repo          => Repo,
+                  Current_Name  => "HEAD",
+                  Target_Name   => Version.Merge.Commit_Label_For (Repo, Side),
+                  Base_Items    => Items_Of (Base),
+                  Current_Items => Acc,
+                  Target_Items  => Items_Of (Side),
+                  Merged_Index  => Merged_Index,
+                  Conflicts     => Conflicts,
+                  Behavior      => Version.Merge.Merge_Behavior'
+                    (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
+                       (Version.Merge.Base_Label_For (Repo, Base)),
+                     others     => <>));
 
-      --  A --rebase-merges conflict cannot be left paused yet. Its todo is
-      --  still written as plain picks, whereas git expresses the topology as
-      --  label/reset/merge -- so a rebase paused here and resumed with real
-      --  git would replay the merges linearly and flatten the history without
-      --  saying so. Rolling back is worse UX than pausing, but it is honest,
-      --  and it is what an octopus conflict has always done.
-      procedure Abort_Merges (Reason : String) is
-      begin
-         Version.Restore.Restore_Working_Tree_For_Commit (Repo, Original_Head);
-         Version.Restore.Write_Index_For_Commit (Repo, Original_Head);
-         Version.Refs.Write_Symbolic_HEAD (Repo => Repo, Target => Branch_Ref);
-         Version.Merge_State.Clear_State (Repo);
-         Version.Rebase_State.Clear_State (Repo);
-         raise Ada.IO_Exceptions.Data_Error with
-           "rebase --rebase-merges aborted: " & Reason;
-      end Abort_Merges;
-
-      procedure Abort_Octopus is
-      begin
-         Abort_Merges ("octopus merge conflict (cannot continue an octopus)");
-      end Abort_Octopus;
-   begin
-      for E of Topo loop
-         In_Set.Include (E);
-      end loop;
-      for P of Initial_Map loop
-         Map.Include (P.Original, P.Rebased);
-      end loop;
-
-      while Index < Natural (Topo.Length) loop
-         declare
-            C : constant Version.Objects.Hex_Object_Id :=
-              Topo.Element (Topo.First_Index + Index);
-            Rebased : constant Version.Rebase_State.Commit_Vectors.Vector :=
-              Merges_Rebased_Parents (Repo, C, In_Set, Map, Upstream_Head);
-         begin
-            if Natural (Rebased.Length) <= 1 then
-               declare
-                  Onto : constant Version.Objects.Hex_Object_Id :=
-                    (if Rebased.Is_Empty then Upstream_Head
-                     else Rebased.First_Element);
-                  R : constant Replay_Result :=
-                    Replay_Commit (Repo, Onto, C, Allow_Root => True);
-               begin
-                  if R.Kind = Replay_Conflict then
-                     Abort_Merges
-                       ("conflict replaying " & To_String (C)
-                        & " (resolve it on a plain rebase, or rerun without"
-                        & " --rebase-merges)");
-                  end if;
-                  Map.Include (C, R.Commit_Id);
-               end;
-
-            elsif Natural (Rebased.Length) = 2 then
-               --  Set the working tree to the first rebased parent so the merge
-               --  (and any conflict markers) materialize on a complete tree.
-               Version.Restore.Restore_Working_Tree_For_Commit
-                 (Repo, Rebased.Element (0));
-               Version.Restore.Write_Index_For_Commit
-                 (Repo, Rebased.Element (0));
-               declare
-                  Base : constant Version.Objects.Hex_Object_Id :=
-                    Version.History.Merge_Base
-                      (Repo, Rebased.Element (0), Rebased.Element (1));
-                  Merged_Index : Version.Staging.Index_Entry_Vectors.Vector;
-                  Conflicts : Version.Merge.Conflict_Vectors.Vector;
-               begin
-                  Version.Merge.Merge_Trees
+               if not Conflicts.Is_Empty then
+                  Version.Merge_State.Clear_State (Repo);
+                  Version.Merge_State.Write_State
                     (Repo          => Repo,
-                     Current_Name  => "HEAD",
-                     Target_Name   => Version.Merge.Commit_Label_For
-                       (Repo, Rebased.Element (1)),
-                     Base_Items    => Items_Of (Base),
-                     Current_Items => Items_Of (Rebased.Element (0)),
-                     Target_Items  => Items_Of (Rebased.Element (1)),
-                     Merged_Index  => Merged_Index,
-                     Conflicts     => Conflicts,
-                     Behavior      => Version.Merge.Merge_Behavior'
-                       (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
-                          (Version.Merge.Base_Label_For (Repo, Base)),
-                        others     => <>));
-                  if not Conflicts.Is_Empty then
-                     Version.Merge_State.Clear_State (Repo);
-                     Version.Merge_State.Write_State
-                       (Repo          => Repo,
-                        Current_Id    => Rebased.Element (0),
-                        Target_Id     => Rebased.Element (1),
-                        Base_Id       => Base,
-                        Target_Branch => "rebase",
-                        Conflicts     => Conflicts);
-                     Abort_Merges
-                       ("conflict recreating merge " & To_String (C)
-                        & " (resolve it on a plain rebase, or rerun without"
-                        & " --rebase-merges)");
-                  end if;
+                     Current_Id    => Ours,
+                     Target_Id     => Side,
+                     Base_Id       => Base,
+                     Target_Branch => "rebase",
+                     Conflicts     => Conflicts);
+                  Version.Staging.Write (Repo => Repo, Entries => Merged_Index);
+                  Persist (Paused => True, Cur => To_String (Original));
+                  Write_Resume_For (Repo, Original);
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "rebase paused: conflicts recorded";
+               end if;
 
-                  declare
-                     Tree : constant Version.Objects.Hex_Object_Id :=
-                       Version.Write.Write_Tree_From_Index (Repo, Merged_Index);
-                     Parent_Ids : Version.Objects.Object_Id_Vectors.Vector;
-                  begin
-                     Parent_Ids.Append (Rebased.Element (0));
-                     Parent_Ids.Append (Rebased.Element (1));
-                     Map.Include
-                       (C,
-                        Version.Write.Write_Commit_With_Author
-                          (Repo, Tree, Parent_Ids,
-                           IR_Author_Line (Repo, C),
-                           IR_Full_Message (Repo, C)));
-                  end;
-               end;
+               Parent_Ids.Append (Side);
 
-            else
-               --  Octopus (>= 3 parents): iterated merge; abort on conflict.
                declare
-                  Acc_Items : Version.Objects.Tree_Entry_Vectors.Vector :=
-                    Items_Of (Rebased.Element (0));
-                  Final_Tree : Version.Objects.Hex_Object_Id :=
-                    Tree_Of (Rebased.Element (0));
-                  First_Rebased : constant Version.Objects.Hex_Object_Id :=
-                    Rebased.Element (0);
+                  Cache : Version.Tree_Cache.Tree_Cache;
+                  Tree  : constant Version.Objects.Hex_Object_Id :=
+                    Version.Write.Write_Tree_From_Index (Repo, Merged_Index);
                begin
-                  for I in 1 .. Natural (Rebased.Length) - 1 loop
-                     declare
-                        Nxt  : constant Version.Objects.Hex_Object_Id :=
-                          Rebased.Element (I);
-                        Base : constant Version.Objects.Hex_Object_Id :=
-                          Version.History.Merge_Base (Repo, First_Rebased, Nxt);
-                        Merged_Index :
-                          Version.Staging.Index_Entry_Vectors.Vector;
-                        Conflicts : Version.Merge.Conflict_Vectors.Vector;
-                     begin
-                        Version.Merge.Merge_Trees
-                          (Repo          => Repo,
-                           Current_Name  => "HEAD",
-                           Target_Name   =>
-                             Version.Merge.Commit_Label_For (Repo, Nxt),
-                           Base_Items    => Items_Of (Base),
-                           Current_Items => Acc_Items,
-                           Target_Items  => Items_Of (Nxt),
-                           Merged_Index  => Merged_Index,
-                           Conflicts     => Conflicts,
-                           Behavior      => Version.Merge.Merge_Behavior'
-                             (Base_Label =>
-                                Ada.Strings.Unbounded.To_Unbounded_String
-                                  (Version.Merge.Base_Label_For (Repo, Base)),
-                              others     => <>));
-                        if not Conflicts.Is_Empty then
-                           Abort_Octopus;
-                        end if;
-                        Final_Tree :=
-                          Version.Write.Write_Tree_From_Index
-                            (Repo, Merged_Index);
-                        declare
-                           Cache : Version.Tree_Cache.Tree_Cache;
-                        begin
-                           Acc_Items := Version.Tree_Cache.Flatten_Tree
-                             (Repo, Cache, Final_Tree);
-                        end;
-                     end;
-                  end loop;
-
-                  declare
-                     Parent_Ids : Version.Objects.Object_Id_Vectors.Vector;
-                  begin
-                     for RP of Rebased loop
-                        Parent_Ids.Append (RP);
-                     end loop;
-                     Map.Include
-                       (C,
-                        Version.Write.Write_Commit_With_Author
-                          (Repo, Final_Tree, Parent_Ids,
-                           IR_Author_Line (Repo, C),
-                           IR_Full_Message (Repo, C)));
-                  end;
+                  Acc := Version.Tree_Cache.Flatten_Tree (Repo, Cache, Tree);
                end;
-            end if;
+            end;
+         end loop;
+
+         Version.Staging.Write (Repo => Repo, Entries => Merged_Index);
+
+         declare
+            Tree : constant Version.Objects.Hex_Object_Id :=
+              Version.Write.Write_Tree_From_Index (Repo, Merged_Index);
+            New_Commit : constant Version.Objects.Hex_Object_Id :=
+              Version.Write.Write_Commit_With_Author
+                (Repo, Tree, Parent_Ids,
+                 IR_Author_Line (Repo, Original),
+                 IR_Full_Message (Repo, Original));
+         begin
+            Move_Detached_Head
+              (Repo, New_Commit,
+               "rebase (merge): " & Replay_Subject (Repo, New_Commit));
+            Version.Restore.Restore_Working_Tree_For_Commit (Repo, New_Commit);
+            Version.Restore.Write_Index_For_Commit (Repo, New_Commit);
+         end;
+      end Do_Merge;
+   begin
+      --  Detach at the base before the first command, exactly as linear mode
+      --  does; on resume HEAD is already where the todo left it.
+      if not Version.Refs.Is_Detached (Repo) then
+         Move_Detached_Head
+           (Repo, Upstream_Head,
+            "rebase (start): checkout " & To_String (Upstream_Head));
+      end if;
+
+      while Index < Natural (Todo.Length) loop
+         declare
+            C : constant Todo_Command := Todo.Element (Index);
+         begin
+            case C.Kind is
+               when Cmd_Label =>
+                  Put_Label (To_String (C.Label), Head_Id);
+
+               when Cmd_Reset =>
+                  declare
+                     Target : constant Version.Objects.Hex_Object_Id :=
+                       Get_Label (To_String (C.Label));
+                  begin
+                     Move_Detached_Head
+                       (Repo, Target,
+                        "rebase (reset): " & To_String (C.Label));
+                     Version.Restore.Restore_Working_Tree_For_Commit
+                       (Repo, Target);
+                     Version.Restore.Write_Index_For_Commit (Repo, Target);
+                  end;
+
+               when Cmd_Pick =>
+                  declare
+                     R : constant Replay_Result :=
+                       Replay_Commit (Repo, Head_Id, C.Id, Allow_Root => True);
+                  begin
+                     if R.Kind = Replay_Conflict then
+                        Persist (Paused => True, Cur => To_String (C.Id));
+                        Write_Resume_For (Repo, C.Id);
+                        raise Ada.IO_Exceptions.Data_Error with
+                          "rebase paused: conflicts recorded";
+                     end if;
+                     Move_Detached_Head
+                       (Repo, R.Commit_Id,
+                        "rebase (pick): "
+                        & Replay_Subject (Repo, R.Commit_Id));
+                  end;
+
+               when Cmd_Merge =>
+                  declare
+                     Text  : constant String := To_String (C.Label);
+                     Sides : Version.Rebase_State.Commit_Vectors.Vector;
+                     First : Natural := Text'First;
+                  begin
+                     --  The label field holds every side, space separated.
+                     while First <= Text'Last loop
+                        declare
+                           Last : Natural := First;
+                        begin
+                           while Last <= Text'Last
+                             and then Text (Last) /= ' '
+                           loop
+                              Last := Last + 1;
+                           end loop;
+                           if Last > First then
+                              Sides.Append
+                                (Get_Label (Text (First .. Last - 1)));
+                           end if;
+                           First := Last + 1;
+                        end;
+                     end loop;
+                     Do_Merge (C.Id, Sides);
+                  end;
+            end case;
          end;
 
          Index := Index + 1;
          Persist (Paused => False, Cur => "");
       end loop;
 
-      --  When HEAD is already an ancestor of the upstream (nothing to replay)
-      --  Original_Head was never mapped: fast-forward to the upstream, as git
-      --  does.
       Finish_Rebase
         (Repo          => Repo,
          Branch_Ref    => Branch_Ref,
          Original_Head => Original_Head,
          Target_Head   => Upstream_Head,
-         Final_Head    =>
-           (if Map.Contains (Original_Head) then Map.Element (Original_Head)
-            else Upstream_Head));
+         Final_Head    => Head_Id);
    end Replay_Merges_Remaining;
 
    procedure Start_Rebase_Merges (Upstream : String) is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
 
-      package Id_Sets is new Ada.Containers.Ordered_Sets
-        (Element_Type => Version.Objects.Object_Id_Storage);
+      --  The same set type the todo builder takes, so the topology can be
+      --  handed straight to it.
+      package Id_Sets renames Merges_Id_Sets;
    begin
       if Version.Refs.Is_Detached (Repo) then
          raise Ada.IO_Exceptions.Data_Error with "cannot rebase detached HEAD";
@@ -2147,25 +2274,26 @@ package body Version.Rebase is
          --  Persist the initial (unpaused) merges state, then replay. On any
          --  paused-conflict raise the state is preserved for --continue; a
          --  hard error clears it (mirrors Start_Root's wrapper).
-         Version.Rebase_State.Write_State
-           (Repo                => Repo,
-            Branch_Ref          => Branch_Ref,
-            Original_Head       => Original_Head,
-            Target_Head         => Upstream_Head,
-            Current_Replay_Head => Upstream_Head,
-            Next_Index          => 0,
-            Commits             => Topo,
-            Mode                => Version.Rebase_State.Mode_Merges);
-
+         declare
+            Merges_Todo : constant
+              Version.Rebase_State.Todo_Command_Vectors.Vector :=
+                Build_Merges_Todo (Repo, Topo, In_Set);
          begin
+            Version.Rebase_State.Write_Merges_State
+              (Repo          => Repo,
+               Branch_Ref    => Branch_Ref,
+               Original_Head => Original_Head,
+               Target_Head   => Upstream_Head,
+               Todo          => Merges_Todo,
+               Done_Count    => 0);
+
             Replay_Merges_Remaining
               (Repo          => Repo,
                Branch_Ref    => Branch_Ref,
                Original_Head => Original_Head,
                Upstream_Head => Upstream_Head,
-               Topo          => Topo,
-               Start_Index   => 0,
-               Initial_Map   => Version.Rebase_State.Map_Vectors.Empty_Vector);
+               Todo          => Merges_Todo,
+               Start_At      => 0);
          exception
             when others =>
                declare
@@ -2236,117 +2364,107 @@ package body Version.Rebase is
       end if;
 
       if Version.Rebase_State.Mode (State) = Version.Rebase_State.Mode_Merges then
-         --  Resume a --rebase-merges paused on a linear or two-parent-merge
-         --  conflict: the user resolved the index, so commit it (1 parent for a
-         --  linear commit, both rebased parents for a merge) and replay on.
+         --  Resume a --rebase-merges stop. The user resolved the index, so
+         --  commit it as the command that stopped -- a pick keeps one parent,
+         --  a merge both -- and hand the rest of the todo back to the driver.
+         --
+         --  The same preconditions as a linear continue: markers gone, index
+         --  fully merged, and the resolution taken from what was staged.
+         Require_Paused_Merge_State
+           (Repo      => Repo,
+            State     => State,
+            Conflicts => Conflicts);
+
+         if Conflict_Paths_Have_Markers (Repo => Repo, Conflicts => Conflicts)
+         then
+            raise Ada.IO_Exceptions.Data_Error with
+              "cannot continue rebase: conflict markers remain";
+         end if;
+
+         Require_Index_Fully_Merged (Repo);
+         Version.Merge.Record_Rerere_Resolutions
+           (Repo => Repo, Conflicts => Conflicts);
+         Load_Staged_Index (Repo => Repo, Result => Index_Items);
+
          declare
-            Topo : constant Version.Rebase_State.Commit_Vectors.Vector :=
-              Version.Rebase_State.Commits (State);
-            Position : constant Natural := Version.Rebase_State.Next_Index (State);
-            C : constant Version.Objects.Hex_Object_Id :=
+            Todo : constant Version.Rebase_State.Todo_Command_Vectors.Vector :=
+              Version.Rebase_State.Todo (State);
+            At_Cmd : constant Natural := Version.Rebase_State.Done_Count (State);
+            Stopped : constant Version.Objects.Hex_Object_Id :=
               Version.Rebase_State.Current_Commit (State);
             Upstream_Head : constant Version.Objects.Hex_Object_Id :=
               Version.Rebase_State.Target_Head (State);
-            In_Set : Merges_Id_Sets.Set;
-            Map    : Merges_Id_Maps.Map;
+            Tree_Id : constant Version.Objects.Hex_Object_Id :=
+              Version.Write.Write_Tree_From_Index
+                (Repo => Repo, Entries => Index_Items);
+            Parent_Ids : Version.Objects.Object_Id_Vectors.Vector;
+            New_Commit : Version.Objects.Hex_Object_Id;
          begin
-            for E of Topo loop
-               In_Set.Include (E);
-            end loop;
-            for P of Version.Rebase_State.Rebased_Map (State) loop
-               Map.Include (P.Original, P.Rebased);
-            end loop;
+            Parent_Ids.Append
+              (Version.Objects.To_Object_Id
+                 (Version.Refs.Current_Commit_Id (Repo)));
 
-            --  A merges pause records a Merge_State whose sides are the rebased
-            --  parents (not the original commit), so it does not satisfy the
-            --  linear Require_Paused_Merge_State check; read it directly for the
-            --  conflict list. The commit to recreate is Current_Commit (C) and
-            --  its rebased parents are recomputed from the Map.
-            if not Version.Merge_State.State_Exists (Repo) then
-               raise Ada.IO_Exceptions.Data_Error with
-                 "cannot continue rebase: merge state missing";
-            end if;
-            declare
-               MC, MT, MB : Version.Objects.Object_Id_Storage;
-               MBranch    : Unbounded_String;
-            begin
-               Conflicts.Clear;
-               Version.Merge_State.Read_State
-                 (Repo          => Repo,
-                  Current_Id    => MC,
-                  Target_Id     => MT,
-                  Base_Id       => MB,
-                  Target_Branch => MBranch,
-                  Conflicts     => Conflicts);
-            end;
-            if Conflict_Paths_Have_Markers (Repo => Repo, Conflicts => Conflicts)
+            --  A merge command's second parent is the side it was merging;
+            --  the resolved commit has to keep both or the topology is lost.
+            if At_Cmd < Natural (Todo.Length)
+              and then Version.Rebase_State."="
+                         (Todo.Element (At_Cmd).Kind,
+                          Version.Rebase_State.Cmd_Merge)
             then
-               raise Ada.IO_Exceptions.Data_Error with
-                 "cannot continue rebase: conflict markers remain";
-            end if;
-            Require_Index_Fully_Merged (Repo);
-            Version.Merge.Record_Rerere_Resolutions
-              (Repo => Repo, Conflicts => Conflicts);
-            Require_No_Untracked_During_Continue;
-            Load_Staged_Index (Repo => Repo, Result => Index_Items);
-            Version.Staging.Write (Repo => Repo, Entries => Index_Items);
-
-            declare
-               Rebased : constant Version.Rebase_State.Commit_Vectors.Vector :=
-                 Merges_Rebased_Parents
-                   (Repo, C, In_Set, Map, Upstream_Head);
-               Tree : constant Version.Objects.Hex_Object_Id :=
-                 Version.Write.Write_Tree_From_Index
-                   (Repo => Repo, Entries => Index_Items);
-               New_Commit : Version.Objects.Hex_Object_Id;
-            begin
-               if Natural (Rebased.Length) <= 1 then
-                  New_Commit := Write_Replayed_Commit
-                    (Repo      => Repo,
-                     Tree_Id   => Tree,
-                     Parent_Id =>
-                       (if Rebased.Is_Empty then Upstream_Head
-                        else Rebased.First_Element),
-                     Original  => C);
-               else
-                  declare
-                     Parent_Ids : Version.Objects.Object_Id_Vectors.Vector;
-                  begin
-                     for RP of Rebased loop
-                        Parent_Ids.Append (RP);
-                     end loop;
-                     New_Commit := Version.Write.Write_Commit_With_Author
-                       (Repo, Tree, Parent_Ids,
-                        IR_Author_Line (Repo, C), IR_Full_Message (Repo, C));
-                  end;
-               end if;
-
-               Map.Include (C, New_Commit);
-               Version.Merge_State.Clear_State (Repo);
-               Version.Restore.Restore_Working_Tree_For_Commit
-                 (Repo => Repo, Commit_Id => New_Commit);
-               Version.Restore.Write_Index_For_Commit
-                 (Repo => Repo, Commit_Id => New_Commit);
-
                declare
-                  Resumed_Map : Version.Rebase_State.Map_Vectors.Vector;
+                  Label : constant String :=
+                    To_String (Todo.Element (At_Cmd).Label);
+                  Path : constant String :=
+                    Join (Join (Join (Version.Repository.Git_Dir (Repo),
+                                      "rebase-merge"),
+                                "refs/rewritten"),
+                          Label);
                begin
-                  for M in Map.Iterate loop
-                     Resumed_Map.Append
-                       (Version.Rebase_State.Map_Pair'
-                          (Original => Merges_Id_Maps.Key (M),
-                           Rebased  => Merges_Id_Maps.Element (M)));
-                  end loop;
-                  Replay_Merges_Remaining
-                    (Repo          => Repo,
-                     Branch_Ref    => Version.Rebase_State.Branch_Ref (State),
-                     Original_Head => Version.Rebase_State.Original_Head (State),
-                     Upstream_Head => Upstream_Head,
-                     Topo          => Topo,
-                     Start_Index   => Position + 1,
-                     Initial_Map   => Resumed_Map);
+                  if Version.Files.Is_Ordinary_File (Path) then
+                     declare
+                        Raw  : constant String :=
+                          Version.Files.Read_Binary_File (Path);
+                        Last : Natural := Raw'Last;
+                     begin
+                        while Last >= Raw'First
+                          and then (Raw (Last) = Character'Val (10)
+                                    or else Raw (Last) = Character'Val (13))
+                        loop
+                           Last := Last - 1;
+                        end loop;
+                        Parent_Ids.Append
+                          (Version.Objects.To_Object_Id
+                             (Raw (Raw'First .. Last)));
+                     end;
+                  elsif Version.Objects.Is_Valid_Hex_Object_Id (Label) then
+                     Parent_Ids.Append
+                       (Version.Objects.To_Object_Id (Label));
+                  end if;
                end;
-            end;
+            end if;
+
+            New_Commit :=
+              Version.Write.Write_Commit_With_Author
+                (Repo, Tree_Id, Parent_Ids,
+                 IR_Author_Line (Repo, Stopped),
+                 IR_Full_Message (Repo, Stopped));
+
+            Version.Merge_State.Clear_State (Repo);
+            Move_Detached_Head
+              (Repo, New_Commit,
+               "rebase (continue): " & Replay_Subject (Repo, New_Commit));
+            Version.Restore.Restore_Working_Tree_For_Commit
+              (Repo => Repo, Commit_Id => New_Commit);
+            Version.Restore.Write_Index_For_Commit
+              (Repo => Repo, Commit_Id => New_Commit);
+
+            Replay_Merges_Remaining
+              (Repo          => Repo,
+               Branch_Ref    => Version.Rebase_State.Branch_Ref (State),
+               Original_Head => Version.Rebase_State.Original_Head (State),
+               Upstream_Head => Upstream_Head,
+               Todo          => Todo,
+               Start_At      => At_Cmd + 1);
          end;
          return;
       end if;

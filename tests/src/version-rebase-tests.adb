@@ -1629,23 +1629,32 @@ package body Version.Rebase.Tests is
       Version.Write.Save ("U1");
       Version.Git_Fixtures.Run (Root, "git checkout -q topic");
 
-      --  A --rebase-merges conflict rolls the rebase back rather than pausing,
-      --  because its paused todo cannot yet express the merge topology in
-      --  git's label/reset/merge grammar -- and a state git would replay as
-      --  plain picks silently flattens the history. Leaving nothing behind is
-      --  the honest interim. Restore the pause-and-continue assertions here
-      --  once the todo port lands.
+      --  The rebase pauses on the conflicting commit, and its state says so
+      --  in git's own grammar: the todo carries label/reset/merge, so the
+      --  topology survives the pause instead of reading as a row of picks.
       begin
          Version.Rebase.Start_Rebase_Merges ("main");
-         Assert (False, "rebase-merges must report the conflict");
+         Assert (False, "rebase-merges must pause on the conflict");
       exception
          when Ada.IO_Exceptions.Data_Error =>
             null;
       end;
-      Assert (not Version.Rebase_State.State_Exists (Version.Repository.Open),
-              "an aborted rebase-merges must leave no state for git to read");
+      Assert (Version.Rebase_State.State_Exists (Version.Repository.Open),
+              "a paused rebase-merges must leave state");
 
-      --  Rolled back: nothing half-applied, and the tree is clean.
+      --  Resolve and continue.
+      Write_File (Root, "f.txt", "resolved-line" & LF);
+      Version.Git_Fixtures.Run (Root, "git add f.txt");
+      Version.Rebase.Continue_Rebase;
+
+      --  HEAD is a recreated two-parent merge onto main with the resolution.
+      Version.Git_Fixtures.Run
+        (Root, "test ""$(git rev-list --parents -1 HEAD | wc -w)"" = ""3""");
+      Version.Git_Fixtures.Run
+        (Root,
+         "test ""$(git merge-base HEAD main)"" = ""$(git rev-parse main)""");
+      Version.Git_Fixtures.Run (Root, "test ""$(git show HEAD:f.txt)"" = ""resolved-line""");
+      Version.Git_Fixtures.Run (Root, "test -e g.txt && test -e h.txt");
       Version.Git_Fixtures.Run (Root, "git fsck --strict");
       Version.Git_Fixtures.Run
         (Root, "test -z ""$(git status --porcelain)""");

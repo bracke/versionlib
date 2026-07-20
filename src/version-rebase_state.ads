@@ -51,6 +51,28 @@ package Version.Rebase_State is
      (Index_Type   => Natural,
       Element_Type => Map_Pair);
 
+   --  git's todo grammar. A linear rebase only ever uses Cmd_Pick; a
+   --  --rebase-merges rebase expresses topology with the other three:
+   --  `label <name>` names the commit HEAD is on, `reset <name>` moves HEAD
+   --  back to one, and `merge -C <original> <name>` recreates a merge of the
+   --  labelled side. Together they say what a flat list of picks cannot.
+   type Todo_Kind is (Cmd_Pick, Cmd_Label, Cmd_Reset, Cmd_Merge);
+
+   type Todo_Command is record
+      Kind   : Todo_Kind := Cmd_Pick;
+      Action : Rebase_Action := Pick;
+      --  Cmd_Pick: the commit to replay. Cmd_Merge: the original merge commit,
+      --  whose message and authorship the recreated merge keeps.
+      Id     : Version.Objects.Object_Id_Storage :=
+        Version.Objects.Zero_Object_Id;
+      --  Cmd_Label/Cmd_Reset/Cmd_Merge: the label named.
+      Label  : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+
+   package Todo_Command_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Natural,
+      Element_Type => Todo_Command);
+
    type Rebase_State is private;
 
    procedure Write_State
@@ -85,6 +107,26 @@ package Version.Rebase_State is
    --  "Name <email> <ts> <tz>" from the commit header), the message that
    --  commit should carry, and the diff being applied. Nothing here is read
    --  back by this tool -- the state above is what it resumes from.
+
+   procedure Write_Merges_State
+     (Repo           : Version.Repository.Repository_Handle;
+      Branch_Ref     : String;
+      Original_Head  : Version.Objects.Hex_Object_Id;
+      Target_Head    : Version.Objects.Hex_Object_Id;
+      Todo           : Todo_Command_Vectors.Vector;
+      Done_Count     : Natural;
+      Paused         : Boolean := False;
+      Current_Commit : String := "");
+   --  A --rebase-merges rebase, whose todo carries label/reset/merge. Done is
+   --  the number of leading commands already executed: everything below that
+   --  goes to `done`, the rest to `git-rebase-todo`, which is what lets git
+   --  read and finish the same rebase.
+
+   function Todo (State : Rebase_State) return Todo_Command_Vectors.Vector;
+   --  Every command, executed ones first.
+
+   function Done_Count (State : Rebase_State) return Natural;
+   --  How many leading commands of Todo have run.
 
    function Read_State
      (Repo : Version.Repository.Repository_Handle)
@@ -130,5 +172,7 @@ private
       Pause_Reason_Value        : Pause_Kind := Pause_Conflict;
       Mode_Value                : Rebase_Mode := Mode_Linear;
       Rebased_Map_Value         : Map_Vectors.Vector;
+      Todo_Value                : Todo_Command_Vectors.Vector;
+      Done_Count_Value          : Natural := 0;
    end record;
 end Version.Rebase_State;
