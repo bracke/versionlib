@@ -517,6 +517,8 @@ package body Version.Log is
       Show_Signature : Boolean := False;
       Stat           : Boolean := False;
       Patch          : Boolean := False;
+      Name_Only      : Boolean := False;
+      Name_Status    : Boolean := False;
       Context        : Natural := 3) return String
    is
       Result  : Unbounded_String;
@@ -540,7 +542,7 @@ package body Version.Log is
                   Cache          => Objects,
                   Commit_Id      => Current_Id,
                   Show_Signature => Show_Signature));
-            if (Stat or else Patch)
+            if (Stat or else Patch or else Name_Only or else Name_Status)
               and then Natural (Version.Objects.Commit_Parent_Ids (Obj).Length)
                        < 2
             then
@@ -553,6 +555,8 @@ package body Version.Log is
                     Version.Objects.Commit_Parent_Id (Obj);
                   Opts : constant Version.Diff.Diff_Options :=
                     (Stat          => Stat,
+                     Name_Only     => Name_Only,
+                     Name_Status   => Name_Status,
                      Context_Lines => Context,
                      others        => <>);
                begin
@@ -592,7 +596,8 @@ package body Version.Log is
       return Log_List_Text
         (Repo, To_Commit_List (Collect_History
                                  (Repo, Objects, Commit_Id, Max_Count)),
-         Show_Signature, Stat, Patch, Context);
+         Show_Signature => Show_Signature, Stat => Stat, Patch => Patch,
+         Context => Context);
    end Log_From_Commit;
 
    function Log_Oneline_List_Text

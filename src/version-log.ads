@@ -16,6 +16,8 @@ package Version.Log is
       Show_Signature : Boolean := False;
       Stat           : Boolean := False;
       Patch          : Boolean := False;
+      Name_Only      : Boolean := False;
+      Name_Status    : Boolean := False;
       Context        : Natural := 3) return String;
 
    function Log_Oneline_List_Text

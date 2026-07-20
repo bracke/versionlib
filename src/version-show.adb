@@ -52,7 +52,11 @@ package body Version.Show is
          Append
            (Result,
             Version.Log.Format_Commit (Repo, Commit_Id, Full_Message => True));
-         Append (Result, Character'Val (10));
+         --  The blank line here separates the header from the diff that
+         --  follows. With -s there is no diff, so git ends at the message.
+         if not No_Patch then
+            Append (Result, Character'Val (10));
+         end if;
       end if;
 
       if No_Patch then
