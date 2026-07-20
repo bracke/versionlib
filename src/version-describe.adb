@@ -77,10 +77,38 @@ package body Version.Describe is
       return Natural (Counted.Length);
    end Distance;
 
+   function Glob (Text, Pattern : String) return Boolean is
+      function M (T, P : Natural) return Boolean is
+      begin
+         if P > Pattern'Last then
+            return T > Text'Last;
+         end if;
+         case Pattern (P) is
+            when '*' =>
+               for K in T - 1 .. Text'Last loop
+                  if M (K + 1, P + 1) then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            when '?' =>
+               return T <= Text'Last and then M (T + 1, P + 1);
+            when others =>
+               return T <= Text'Last and then Text (T) = Pattern (P)
+                 and then M (T + 1, P + 1);
+         end case;
+      end M;
+   begin
+      return M (Text'First, Pattern'First);
+   end Glob;
+
    function Describe
      (Repo     : Version.Repository.Repository_Handle;
       Commit   : Version.Objects.Hex_Object_Id;
-      All_Tags : Boolean := False)
+      All_Tags : Boolean := False;
+      Long     : Boolean := False;
+      Abbrev   : Natural := 7;
+      Pattern  : String  := "")
       return String
    is
       Tags      : constant Version.Tags.Tag_Name_Vectors.Vector :=
@@ -166,16 +194,22 @@ package body Version.Describe is
       for Tag of Tags loop
          declare
             Name       : constant String := To_String (Tag);
-            Annotated  : constant Boolean := Is_Annotated (Name);
+            --  --match: a tag whose name does not match the glob is not a
+            --  candidate at all, so it cannot become the best.
+            Matches    : constant Boolean :=
+              Pattern'Length = 0 or else Glob (Name, Pattern);
+            Annotated  : constant Boolean :=
+              Matches and then Is_Annotated (Name);
             Tag_Commit : constant Version.Objects.Hex_Object_Id :=
               Version.Revisions.Resolve_Commit (Repo, Name);
-            Exact      : constant Boolean := Tag_Commit = Commit;
+            Exact      : constant Boolean := Matches and then Tag_Commit = Commit;
             Reachable  : constant Boolean :=
-              Exact
+              Matches and then
+                (Exact
               or else Version.History.Is_Ancestor
                         (Repo,
                          Base_Id    => Tag_Commit,
-                         Derived_Id => Commit);
+                         Derived_Id => Commit));
          begin
             if Reachable then
                Any_Reachable := True;
@@ -219,15 +253,25 @@ package body Version.Describe is
       end loop;
 
       if Length (Best_Tag) > 0 then
-         if Best_Exact then
-            return To_String (Best_Tag);
-         end if;
-         return To_String (Best_Tag) & "-"
-           & Ada.Strings.Fixed.Trim
-               (Natural'Image (Best_Dist), Ada.Strings.Left)
-           & "-g"
-           & To_String (Commit)
-               (To_String (Commit)'First .. To_String (Commit)'First + 6);
+         declare
+            Hex : constant String := To_String (Commit);
+            --  git clamps --abbrev to at least 4 when it is used, but 0 turns
+            --  the suffix off entirely.
+            N   : constant Natural :=
+              (if Abbrev = 0 then 0
+               else Natural'Min (Natural'Max (Abbrev, 4), Hex'Length));
+            Short : constant String :=
+              (if N = 0 then "" else "-g" & Hex (Hex'First .. Hex'First + N - 1));
+         begin
+            --  --long keeps the count and short id even on an exact match.
+            if Best_Exact and then not Long then
+               return To_String (Best_Tag);
+            end if;
+            return To_String (Best_Tag) & "-"
+              & Ada.Strings.Fixed.Trim
+                  (Natural'Image (Best_Dist), Ada.Strings.Left)
+              & Short;
+         end;
       end if;
 
       --  No eligible tag matched — reproduce git's diagnostics.
@@ -243,5 +287,104 @@ package body Version.Describe is
            "No tags can describe '" & To_String (Commit) & "'.";
       end if;
    end Describe;
+
+   function Describe_By_Any_Ref
+     (Repo    : Version.Repository.Repository_Handle;
+      Commit  : Version.Objects.Hex_Object_Id;
+      Long    : Boolean := False;
+      Abbrev  : Natural := 7;
+      Pattern : String  := "")
+      return String
+   is
+      --  Every ref, as "<namespace>/<name>" the way --all reports it. Only
+      --  the ones reachable from Commit are candidates; the nearest wins,
+      --  exactly as for tags.
+      Best_Name : Unbounded_String;
+      Best_Dist : Natural := Natural'Last;
+      Best_Exact : Boolean := False;
+      Best_Annotated : Boolean := False;
+      Any        : Boolean := False;
+
+      procedure Consider (Display, Ref : String; Annotated : Boolean) is
+      begin
+         if Pattern'Length > 0
+           and then not Glob (Display, Pattern)
+         then
+            return;
+         end if;
+
+         declare
+            Ref_Commit : constant Version.Objects.Hex_Object_Id :=
+              Version.Revisions.Resolve_Commit (Repo, Ref);
+            Exact : constant Boolean := Ref_Commit = Commit;
+            Reachable : constant Boolean :=
+              Exact
+              or else Version.History.Is_Ancestor
+                        (Repo, Base_Id => Ref_Commit, Derived_Id => Commit);
+         begin
+            if Reachable then
+               Any := True;
+               declare
+                  Dist : constant Natural :=
+                    (if Exact then 0
+                     else Distance (Repo, Ref_Commit, Commit));
+               begin
+                  --  Nearer wins; on a tie git prefers an annotated tag.
+                  if Dist < Best_Dist
+                    or else (Dist = Best_Dist
+                             and then Annotated and then not Best_Annotated)
+                  then
+                     Best_Dist := Dist;
+                     Best_Name := To_Unbounded_String (Display);
+                     Best_Exact := Exact;
+                     Best_Annotated := Annotated;
+                  end if;
+               end;
+            end if;
+         exception
+            when others =>
+               null;
+         end;
+      end Consider;
+   begin
+      for T of Version.Tags.List_Tags loop
+         declare
+            Ref : constant String := "refs/tags/" & To_String (T);
+            Annot : constant Boolean :=
+              Version.Objects.Kind
+                (Version.Objects.Read_Object
+                   (Repo, Version.Refs.Resolve_Ref (Repo, Ref)))
+              = Version.Objects.Tag_Object;
+         begin
+            Consider ("tags/" & To_String (T), Ref, Annot);
+         end;
+      end loop;
+      for B of Version.Refs.List_Branches (Repo) loop
+         Consider
+           ("heads/" & To_String (B), "refs/heads/" & To_String (B), False);
+      end loop;
+
+      if Length (Best_Name) > 0 then
+         declare
+            Hex : constant String := To_String (Commit);
+            N   : constant Natural :=
+              (if Abbrev = 0 then 0
+               else Natural'Min (Natural'Max (Abbrev, 4), Hex'Length));
+            Short : constant String :=
+              (if N = 0 then "" else "-g" & Hex (Hex'First .. Hex'First + N - 1));
+         begin
+            if Best_Exact and then not Long then
+               return To_String (Best_Name);
+            end if;
+            return To_String (Best_Name) & "-"
+              & Ada.Strings.Fixed.Trim
+                  (Natural'Image (Best_Dist), Ada.Strings.Left)
+              & Short;
+         end;
+      end if;
+
+      raise Ada.IO_Exceptions.Data_Error with
+        "No names found, cannot describe anything.";
+   end Describe_By_Any_Ref;
 
 end Version.Describe;
