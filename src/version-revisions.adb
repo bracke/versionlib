@@ -163,8 +163,14 @@ package body Version.Revisions is
           (Candidate_Text'First .. Candidate_Text'First + Prefix_Text'Length - 1)
           = Prefix_Text
       then
-         Count := Count + 1;
-         Match := Candidate;
+         --  The same object can be present both loose and packed; count it
+         --  once, or a prefix that names one object reads as ambiguous.
+         if Count = 0
+           or else To_String (Match) /= Candidate_Text
+         then
+            Count := Count + 1;
+            Match := Candidate;
+         end if;
       end if;
    end Consider_Loose_Object;
 

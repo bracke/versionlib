@@ -434,8 +434,15 @@ package body Version.Pack_Index_Cache is
                 (Candidate_Text'First .. Candidate_Text'First + Prefix_Text'Length - 1)
                 = Prefix_Text
             then
-               Count := Count + 1;
-               Match := Candidate;
+               --  A pack copy of an object already matched loose (or in
+               --  another pack) is the same object; count it once so a
+               --  loose+packed duplicate is not read as ambiguous.
+               if Count = 0
+                 or else To_String (Match) /= Candidate_Text
+               then
+                  Count := Count + 1;
+                  Match := Candidate;
+               end if;
             end if;
          end;
 
