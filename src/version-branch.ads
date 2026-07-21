@@ -145,7 +145,11 @@ package Version.Branch is
      (Name : String := "")
       return String;
 
-   function List_Branches_Verbose_Text return String;
+   function List_Branches_Verbose_Text
+     (With_Upstream : Boolean := False) return String;
+   --  git's `branch -v`. With_Upstream is `-vv`: it also names each branch's
+   --  upstream in the tracking bracket. Both show ahead/behind counts when a
+   --  branch has an upstream and diverges from it.
 
    function Branches_Containing_Text
      (Revision : String)

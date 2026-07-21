@@ -4560,7 +4560,9 @@ package body Version.Branch is
       end if;
    end Spaces;
 
-   function List_Branches_Verbose_Text return String is
+   function List_Branches_Verbose_Text
+     (With_Upstream : Boolean := False) return String
+   is
       use Ada.Strings.Unbounded;
 
       Repo : constant Version.Repository.Repository_Handle :=
@@ -4620,6 +4622,55 @@ package body Version.Branch is
                To_String (Tip) (To_String (Tip)'First
                                 .. To_String (Tip)'First + 6));
             Ada.Strings.Unbounded.Append (Text, " ");
+
+            --  git's tracking bracket: with an upstream, -vv always names it
+            --  and both forms add ahead/behind when the branch diverges.
+            if Version.Tracking.Has_Upstream (Repo, Name) then
+               declare
+                  AB : constant Version.Tracking.Ahead_Behind :=
+                    Version.Tracking.Count_Ahead_Behind (Repo, Name);
+
+                  function Count_Img (N : Natural) return String is
+                     T : constant String := Natural'Image (N);
+                  begin
+                     return T (T'First + 1 .. T'Last);
+                  end Count_Img;
+
+                  AB_Text : constant String :=
+                    (if AB.Ahead > 0 and then AB.Behind > 0
+                     then "ahead " & Count_Img (AB.Ahead)
+                          & ", behind " & Count_Img (AB.Behind)
+                     elsif AB.Ahead > 0 then "ahead " & Count_Img (AB.Ahead)
+                     elsif AB.Behind > 0 then "behind " & Count_Img (AB.Behind)
+                     else "");
+
+                  Full_Ref : constant String :=
+                    Version.Tracking.Remote_Tracking_Ref
+                      (Version.Tracking.Upstream (Repo, Name));
+                  Rm_Prefix : constant String := "refs/remotes/";
+                  Short_Up : constant String :=
+                    (if Full_Ref'Length > Rm_Prefix'Length
+                       and then Full_Ref
+                         (Full_Ref'First .. Full_Ref'First + Rm_Prefix'Length - 1)
+                         = Rm_Prefix
+                     then Full_Ref (Full_Ref'First + Rm_Prefix'Length
+                                    .. Full_Ref'Last)
+                     else Full_Ref);
+               begin
+                  if With_Upstream then
+                     --  -vv: name the upstream, plus ahead/behind if any.
+                     Append
+                       (Text,
+                        "[" & Short_Up
+                        & (if AB_Text'Length > 0 then ": " & AB_Text else "")
+                        & "] ");
+                  elsif AB_Text'Length > 0 then
+                     --  -v: only the ahead/behind, and only when diverged.
+                     Append (Text, "[" & AB_Text & "] ");
+                  end if;
+               end;
+            end if;
+
             Append (Text, Version.Objects.Commit_Message_First_Line (Obj));
             Append (Text, Character'Val (10));
          end;

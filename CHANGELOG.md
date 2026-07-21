@@ -1,3 +1,4 @@
+- Add: `branch -v` shows git's tracking bracket -- `[ahead N]`/`[behind M]`/`[ahead N, behind M]` when a branch diverges from its upstream -- and `-vv` names the upstream (`[origin/main: ahead N]`, or `[origin/main]` in sync).
 - Fix: an abbreviated object id no longer reads as ambiguous when the object is present both loose and packed. The resolver counted the two copies of one object as two matches; it now dedups by id, so `rev-parse <abbrev>`, `cat-file <abbrev>` and every abbreviation lookup resolve as git does in a repo that has both a loose and a packed copy (common after add/commit before a prune).
 - Add: `Version.Diff.Diff_Trees` renders the unified/stat diff between two trees directly, for `diff-tree -p|--stat <tree> <tree>`.
 - Add: `Version.Log.Log_List_Text` takes Numstat/Shortstat/Raw, and the `Diff_Commits`/root-diff paths forward them; `log --raw` abbreviates the two object ids to 7 hex as git does.
