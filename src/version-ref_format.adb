@@ -924,6 +924,166 @@ package body Version.Ref_Format is
          end if;
       end Atom_Value;
 
+
+   --  Block constructs -- %(align:...)...%(end) and %(if)...%(then)...
+   --  %(else)...%(end) -- wrap other atoms, so they are handled by scanning
+   --  to the matching %(end) (counting nesting) and expanding the body.
+   function Opener_At (Pos : Natural) return String is
+   begin
+      --  The atom name of a "%(...)" starting at Pos, or "" if not one.
+      if Pos + 1 <= Format'Last
+        and then Format (Pos) = '%' and then Format (Pos + 1) = '('
+      then
+         for K in Pos + 2 .. Format'Last loop
+            exit when Format (K) = ')' or else Format (K) = ':';
+            if Format (K) not in 'a' .. 'z' then
+               return "";
+            end if;
+         end loop;
+         declare
+            Stop : Natural := Pos + 2;
+         begin
+            while Stop <= Format'Last
+              and then Format (Stop) /= ')' and then Format (Stop) /= ':'
+            loop
+               Stop := Stop + 1;
+            end loop;
+            return Format (Pos + 2 .. Stop - 1);
+         end;
+      end if;
+      return "";
+   end Opener_At;
+
+   --  The index of the '%' of the %(end) that closes the block opened at
+   --  From (which is the '%' of the opener). Nested align/if are balanced.
+   function Matching_End (From : Natural) return Natural is
+      Depth : Natural := 0;
+      K     : Natural := From;
+   begin
+      while K <= Format'Last loop
+         if K + 1 <= Format'Last and then Format (K) = '%'
+           and then Format (K + 1) = '('
+         then
+            declare
+               Head : constant String := Opener_At (K);
+            begin
+               if Head = "align" or else Head = "if" then
+                  Depth := Depth + 1;
+               elsif Head = "end" then
+                  Depth := Depth - 1;
+                  if Depth = 0 then
+                     return K;
+                  end if;
+               end if;
+            end;
+         end if;
+         K := K + 1;
+      end loop;
+      return 0;
+   end Matching_End;
+
+   --  The index of the '%' of a top-level %(<Tok>) inside Body (nested blocks
+   --  skipped), or 0.
+   function Top_Level (Body_Str : String; Tok : String) return Natural is
+      Depth : Natural := 0;
+      K     : Natural := Body_Str'First;
+   begin
+      while K <= Body_Str'Last loop
+         if K + 1 <= Body_Str'Last and then Body_Str (K) = '%'
+           and then Body_Str (K + 1) = '('
+         then
+            declare
+               Stop : Natural := K + 2;
+            begin
+               while Stop <= Body_Str'Last
+                 and then Body_Str (Stop) /= ')'
+                 and then Body_Str (Stop) /= ':'
+               loop
+                  Stop := Stop + 1;
+               end loop;
+               declare
+                  Head : constant String := Body_Str (K + 2 .. Stop - 1);
+               begin
+                  if Head = "align" or else Head = "if" then
+                     Depth := Depth + 1;
+                  elsif Head = "end" then
+                     Depth := Depth - 1;
+                  elsif Depth = 0 and then Head = Tok then
+                     return K;
+                  end if;
+               end;
+            end;
+         end if;
+         K := K + 1;
+      end loop;
+      return 0;
+   end Top_Level;
+
+   --  Pad Text to Width in the given position, git's %(align).
+   function Pad_Align (Text : String; Args : String) return String is
+      Width : Natural := 0;
+      Pos   : String (1 .. 6) := "left  ";
+      Pos_Last : Natural := 4;
+
+      procedure Take (Field : String) is
+      begin
+         if Starts_With (Field, "width=") then
+            Width := Natural'Value (Field (Field'First + 6 .. Field'Last));
+         elsif Starts_With (Field, "position=") then
+            declare
+               V : constant String := Field (Field'First + 9 .. Field'Last);
+            begin
+               Pos (1 .. V'Length) := V;
+               Pos_Last := V'Length;
+            end;
+         elsif Field = "left" or else Field = "right"
+           or else Field = "middle"
+         then
+            Pos (1 .. Field'Length) := Field;
+            Pos_Last := Field'Length;
+         else
+            begin
+               Width := Natural'Value (Field);
+            exception
+               when others => null;
+            end;
+         end if;
+      end Take;
+
+      First : Natural := Args'First;
+   begin
+      --  Args is "<width>,<pos>" or "width=..,position=..".
+      while First <= Args'Last loop
+         declare
+            Comma : Natural := First;
+         begin
+            while Comma <= Args'Last and then Args (Comma) /= ',' loop
+               Comma := Comma + 1;
+            end loop;
+            Take (Args (First .. Comma - 1));
+            First := Comma + 1;
+         end;
+      end loop;
+
+      if Text'Length >= Width then
+         return Text;
+      end if;
+
+      declare
+         Pad : constant Natural := Width - Text'Length;
+         P   : constant String := Pos (1 .. Pos_Last);
+      begin
+         if P = "right" then
+            return (1 .. Pad => ' ') & Text;
+         elsif P = "middle" then
+            return (1 .. Pad / 2 => ' ') & Text
+              & (1 .. Pad - Pad / 2 => ' ');
+         else
+            return Text & (1 .. Pad => ' ');
+         end if;
+      end;
+   end Pad_Align;
+
    begin
       while I <= Format'Last loop
          if Format (I) = '%' and then I < Format'Last then
@@ -944,8 +1104,169 @@ package body Version.Ref_Format is
                      Append (Result, Format (I));
                      I := I + 1;
                   else
-                     Append (Result, Atom_Value (Format (I + 2 .. Close - 1)));
-                     I := Close + 1;
+                     declare
+                        Inner : constant String :=
+                          Format (I + 2 .. Close - 1);
+                        Colon : constant Natural :=
+                          Ada.Strings.Fixed.Index (Inner, ":");
+                        A_Head : constant String :=
+                          (if Colon = 0 then Inner
+                           else Inner (Inner'First .. Colon - 1));
+                     begin
+                        if A_Head = "align" or else A_Head = "if" then
+                           declare
+                              End_At : constant Natural := Matching_End (I);
+                           begin
+                              if End_At = 0 then
+                                 --  No matching %(end); pass through.
+                                 Append (Result, Atom_Value (Inner));
+                                 I := Close + 1;
+                              else
+                                 declare
+                                    --  Body between this opener and its %(end)
+                                    Body_Str : constant String :=
+                                      Format (Close + 1 .. End_At - 1);
+                                    After : constant Natural :=
+                                      Matching_End (I);   --  '%' of %(end)
+                                    End_Close : Natural := After;
+                                 begin
+                                    while End_Close <= Format'Last
+                                      and then Format (End_Close) /= ')'
+                                    loop
+                                       End_Close := End_Close + 1;
+                                    end loop;
+
+                                    if A_Head = "align" then
+                                       Append
+                                         (Result,
+                                          Pad_Align
+                                            (Expand
+                                               (Repo, Body_Str, Ref, Id, Head),
+                                             (if Colon = 0 then ""
+                                              else Inner (Colon + 1
+                                                          .. Inner'Last))));
+                                    else
+                                       --  %(if): condition up to %(then),
+                                       --  then-branch to %(else) or %(end).
+                                       declare
+                                          Then_At : constant Natural :=
+                                            Top_Level (Body_Str, "then");
+                                       begin
+                                          if Then_At = 0 then
+                                             null;
+                                          else
+                                             declare
+                                                Then_Close : Natural := Then_At;
+                                                Cond : constant String :=
+                                                  Body_Str
+                                                    (Body_Str'First
+                                                     .. Then_At - 1);
+                                                Else_At : constant Natural :=
+                                                  Top_Level (Body_Str, "else");
+                                             begin
+                                                while Then_Close
+                                                  <= Body_Str'Last
+                                                  and then Body_Str (Then_Close)
+                                                           /= ')'
+                                                loop
+                                                   Then_Close :=
+                                                     Then_Close + 1;
+                                                end loop;
+
+                                                declare
+                                                   Then_Part : constant String
+                                                     :=
+                                                     (if Else_At = 0
+                                                      then Body_Str
+                                                        (Then_Close + 1
+                                                         .. Body_Str'Last)
+                                                      else Body_Str
+                                                        (Then_Close + 1
+                                                         .. Else_At - 1));
+                                                   Else_Close : Natural :=
+                                                     Else_At;
+                                                   Cond_Val : constant String :=
+                                                     Expand
+                                                       (Repo, Cond, Ref, Id,
+                                                        Head);
+
+                                                   --  %(if:equals=X) /
+                                                   --  notequals=X compare the
+                                                   --  condition value to X.
+                                                   Arg : constant String :=
+                                                     (if Colon = 0 then ""
+                                                      else Inner (Colon + 1
+                                                                  .. Inner'Last));
+                                                   Take : Boolean;
+                                                begin
+                                                   if Starts_With
+                                                        (Arg, "equals=")
+                                                   then
+                                                      Take := Cond_Val =
+                                                        Arg (Arg'First + 7
+                                                             .. Arg'Last);
+                                                   elsif Starts_With
+                                                           (Arg, "notequals=")
+                                                   then
+                                                      Take := Cond_Val /=
+                                                        Arg (Arg'First + 10
+                                                             .. Arg'Last);
+                                                   else
+                                                      --  git treats an
+                                                      --  all-whitespace
+                                                      --  condition (e.g.
+                                                      --  %(HEAD) for a
+                                                      --  non-current branch,
+                                                      --  which is a space) as
+                                                      --  false.
+                                                      Take :=
+                                                        (for some C of Cond_Val
+                                                         => C not in ' '
+                                                            | Character'Val (9)
+                                                            | Character'Val (10)
+                                                            | Character'Val (13));
+                                                   end if;
+
+                                                   if Take then
+                                                      Append
+                                                        (Result,
+                                                         Expand
+                                                           (Repo, Then_Part,
+                                                            Ref, Id, Head));
+                                                   elsif Else_At /= 0 then
+                                                      while Else_Close
+                                                        <= Body_Str'Last
+                                                        and then
+                                                          Body_Str (Else_Close)
+                                                          /= ')'
+                                                      loop
+                                                         Else_Close :=
+                                                           Else_Close + 1;
+                                                      end loop;
+                                                      Append
+                                                        (Result,
+                                                         Expand
+                                                           (Repo,
+                                                            Body_Str
+                                                              (Else_Close + 1
+                                                               .. Body_Str'Last),
+                                                            Ref, Id, Head));
+                                                   end if;
+                                                end;
+                                             end;
+                                          end if;
+                                       end;
+                                    end if;
+
+                                    I := End_Close + 1;
+                                 end;
+                              end if;
+                           end;
+                        else
+                           Append (Result, Atom_Value (Inner));
+                           I := Close + 1;
+                        end if;
+                     end;
                   end if;
                end;
             elsif I + 2 <= Format'Last
