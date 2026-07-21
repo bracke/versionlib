@@ -146,10 +146,21 @@ package Version.Branch is
       return String;
 
    function List_Branches_Verbose_Text
-     (With_Upstream : Boolean := False) return String;
+     (With_Upstream : Boolean := False;
+      Show_Local    : Boolean := True;
+      Show_Remote   : Boolean := False;
+      Remote_Prefix : Boolean := True;
+      Abbrev        : Natural := 7) return String;
    --  git's `branch -v`. With_Upstream is `-vv`: it also names each branch's
    --  upstream in the tracking bracket. Both show ahead/behind counts when a
    --  branch has an upstream and diverges from it.
+   --
+   --  Show_Remote adds remote-tracking refs to the same listing (with one name
+   --  column width shared with the locals, as `branch -av`/`-rv` need); when
+   --  Remote_Prefix they carry git's "remotes/" prefix (the `-a` form), else
+   --  the bare short name (`-r`). Show_Local can be turned off for `-r`. A
+   --  remote symref is shown as "name -> target". Abbrev is the object-id
+   --  width; 0 means the full 40-hex id (git's --no-abbrev).
 
    function Branches_Containing_Text
      (Revision : String)

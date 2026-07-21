@@ -41,6 +41,7 @@ with Version.Hooks;
 with Version.Revisions;
 with Version.Tracking;
 with Version.Stash;
+with Version.Ref_Format;
 
 package body Version.Branch is
 
@@ -4561,7 +4562,11 @@ package body Version.Branch is
    end Spaces;
 
    function List_Branches_Verbose_Text
-     (With_Upstream : Boolean := False) return String
+     (With_Upstream : Boolean := False;
+      Show_Local    : Boolean := True;
+      Show_Remote   : Boolean := False;
+      Remote_Prefix : Boolean := True;
+      Abbrev        : Natural := 7) return String
    is
       use Ada.Strings.Unbounded;
 
@@ -4576,103 +4581,190 @@ package body Version.Branch is
          then Version.Refs.Branch_Name (Head)
          else "");
 
-      Branches : Version.Refs.Branch_Name_Vectors.Vector :=
-        Version.Refs.List_Branches (Repo);
+      type Entry_Rec is record
+         Display  : Unbounded_String;   --  the name as listed
+         Full_Ref : Unbounded_String;   --  refs/heads/… or refs/remotes/…
+         Is_Local : Boolean := False;
+         Is_Cur   : Boolean := False;
+         Is_Sym   : Boolean := False;
+         Sym_Tgt  : Unbounded_String;
+      end record;
 
+      package Entry_Vectors is new Ada.Containers.Vectors
+        (Index_Type => Natural, Element_Type => Entry_Rec);
+
+      Entries : Entry_Vectors.Vector;
       Max_Name_Length : Natural := 0;
       Text            : Unbounded_String;
-   begin
-      Sort_Branch_Names (Branches);
 
-      --  git prints nothing when there are no branches.
-      if Branches.Is_Empty then
+      function Ab (Id : Version.Objects.Hex_Object_Id) return String is
+         S : constant String := Version.Objects.To_String (Id);
+      begin
+         if Abbrev = 0 or else Abbrev >= S'Length then
+            return S;
+         end if;
+         return S (S'First .. S'First + Abbrev - 1);
+      end Ab;
+   begin
+      if Show_Local then
+         declare
+            Branches : Version.Refs.Branch_Name_Vectors.Vector :=
+              Version.Refs.List_Branches (Repo);
+         begin
+            Sort_Branch_Names (Branches);
+            for I in Branches.First_Index .. Branches.Last_Index loop
+               declare
+                  Name : constant String := To_String (Branches.Element (I));
+               begin
+                  Entries.Append
+                    (Entry_Rec'
+                       (Display  => To_Unbounded_String (Name),
+                        Full_Ref =>
+                          To_Unbounded_String ("refs/heads/" & Name),
+                        Is_Local => True,
+                        Is_Cur   => Name = Current,
+                        others   => <>));
+               end;
+            end loop;
+         end;
+      end if;
+
+      if Show_Remote then
+         declare
+            Pats : Version.Ref_Format.String_Vectors.Vector;
+         begin
+            Pats.Append ("refs/remotes");
+            declare
+               Lines : constant Version.Ref_Format.String_Vectors.Vector :=
+                 Version.Ref_Format.For_Each_Ref
+                   (Repo, Pats,
+                    Format => "%(refname:lstrip=2)|%(symref:short)");
+            begin
+               for I in Lines.First_Index .. Lines.Last_Index loop
+                  declare
+                     L    : constant String := Lines.Element (I);
+                     Bar  : constant Natural :=
+                       Ada.Strings.Fixed.Index (L, "|");
+                     Nm   : constant String :=
+                       (if Bar = 0 then L else L (L'First .. Bar - 1));
+                     Tgt  : constant String :=
+                       (if Bar = 0 then "" else L (Bar + 1 .. L'Last));
+                  begin
+                     Entries.Append
+                       (Entry_Rec'
+                          (Display  => To_Unbounded_String
+                             ((if Remote_Prefix then "remotes/" else "") & Nm),
+                           Full_Ref =>
+                             To_Unbounded_String ("refs/remotes/" & Nm),
+                           Is_Local => False,
+                           Is_Sym   => Tgt /= "",
+                           Sym_Tgt  => To_Unbounded_String (Tgt),
+                           others   => <>));
+                  end;
+               end loop;
+            end;
+         end;
+      end if;
+
+      --  git prints nothing when there is nothing to list.
+      if Entries.Is_Empty then
          return "";
       end if;
 
-      for I in Branches.First_Index .. Branches.Last_Index loop
-         declare
-            Name : constant String := To_String (Branches.Element (I));
-         begin
-            if Name'Length > Max_Name_Length then
-               Max_Name_Length := Name'Length;
-            end if;
-         end;
+      for E of Entries loop
+         Max_Name_Length :=
+           Natural'Max (Max_Name_Length, Length (E.Display));
       end loop;
 
-      for I in Branches.First_Index .. Branches.Last_Index loop
+      for E of Entries loop
          declare
-            Name : constant String := To_String (Branches.Element (I));
-            Tip  : constant Version.Objects.Hex_Object_Id :=
-              Branch_Commit_Id (Repo => Repo, Name => Name);
-            Obj  : constant Version.Objects.Git_Object :=
-              Version.Objects.Read_Object (Repo, Tip);
+            Name : constant String := To_String (E.Display);
          begin
-            if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
-               raise Ada.IO_Exceptions.Data_Error with
-                 "branch does not point to a commit: " & Name;
-            end if;
-
-            Append (Text, (if Name = Current then "* " else "  "));
+            Append (Text, (if E.Is_Cur then "* " else "  "));
             Append (Text, Name);
-            --  git pads the name to the widest, plus one separating space,
-            --  and abbreviates the tip to seven hex digits.
+            --  git pads the name to the widest, plus one separating space.
             Append (Text, Spaces (Max_Name_Length - Name'Length + 1));
-            Append
-              (Text,
-               To_String (Tip) (To_String (Tip)'First
-                                .. To_String (Tip)'First + 6));
-            Ada.Strings.Unbounded.Append (Text, " ");
 
-            --  git's tracking bracket: with an upstream, -vv always names it
-            --  and both forms add ahead/behind when the branch diverges.
-            if Version.Tracking.Has_Upstream (Repo, Name) then
+            if E.Is_Sym then
+               --  A remote symref shows its target rather than a commit.
+               Append (Text, "-> " & To_String (E.Sym_Tgt));
+               Append (Text, Character'Val (10));
+            else
                declare
-                  AB : constant Version.Tracking.Ahead_Behind :=
-                    Version.Tracking.Count_Ahead_Behind (Repo, Name);
-
-                  function Count_Img (N : Natural) return String is
-                     T : constant String := Natural'Image (N);
-                  begin
-                     return T (T'First + 1 .. T'Last);
-                  end Count_Img;
-
-                  AB_Text : constant String :=
-                    (if AB.Ahead > 0 and then AB.Behind > 0
-                     then "ahead " & Count_Img (AB.Ahead)
-                          & ", behind " & Count_Img (AB.Behind)
-                     elsif AB.Ahead > 0 then "ahead " & Count_Img (AB.Ahead)
-                     elsif AB.Behind > 0 then "behind " & Count_Img (AB.Behind)
-                     else "");
-
-                  Full_Ref : constant String :=
-                    Version.Tracking.Remote_Tracking_Ref
-                      (Version.Tracking.Upstream (Repo, Name));
-                  Rm_Prefix : constant String := "refs/remotes/";
-                  Short_Up : constant String :=
-                    (if Full_Ref'Length > Rm_Prefix'Length
-                       and then Full_Ref
-                         (Full_Ref'First .. Full_Ref'First + Rm_Prefix'Length - 1)
-                         = Rm_Prefix
-                     then Full_Ref (Full_Ref'First + Rm_Prefix'Length
-                                    .. Full_Ref'Last)
-                     else Full_Ref);
+                  Tip : constant Version.Objects.Hex_Object_Id :=
+                    (if E.Is_Local
+                     then Branch_Commit_Id (Repo, Name)
+                     else Version.Refs.Resolve_Ref
+                            (Repo, To_String (E.Full_Ref)));
+                  Obj : constant Version.Objects.Git_Object :=
+                    Version.Objects.Read_Object (Repo, Tip);
                begin
-                  if With_Upstream then
-                     --  -vv: name the upstream, plus ahead/behind if any.
-                     Append
-                       (Text,
-                        "[" & Short_Up
-                        & (if AB_Text'Length > 0 then ": " & AB_Text else "")
-                        & "] ");
-                  elsif AB_Text'Length > 0 then
-                     --  -v: only the ahead/behind, and only when diverged.
-                     Append (Text, "[" & AB_Text & "] ");
+                  if Version.Objects.Kind (Obj)
+                    /= Version.Objects.Commit_Object
+                  then
+                     raise Ada.IO_Exceptions.Data_Error with
+                       "branch does not point to a commit: " & Name;
                   end if;
+
+                  Append (Text, Ab (Tip));
+                  Append (Text, " ");
+
+                  --  git's tracking bracket applies only to local branches.
+                  if E.Is_Local
+                    and then Version.Tracking.Has_Upstream (Repo, Name)
+                  then
+                     declare
+                        AB : constant Version.Tracking.Ahead_Behind :=
+                          Version.Tracking.Count_Ahead_Behind (Repo, Name);
+
+                        function Count_Img (N : Natural) return String is
+                           T : constant String := Natural'Image (N);
+                        begin
+                           return T (T'First + 1 .. T'Last);
+                        end Count_Img;
+
+                        AB_Text : constant String :=
+                          (if AB.Ahead > 0 and then AB.Behind > 0
+                           then "ahead " & Count_Img (AB.Ahead)
+                                & ", behind " & Count_Img (AB.Behind)
+                           elsif AB.Ahead > 0
+                           then "ahead " & Count_Img (AB.Ahead)
+                           elsif AB.Behind > 0
+                           then "behind " & Count_Img (AB.Behind)
+                           else "");
+
+                        Full_Ref : constant String :=
+                          Version.Tracking.Remote_Tracking_Ref
+                            (Version.Tracking.Upstream (Repo, Name));
+                        Rm_Prefix : constant String := "refs/remotes/";
+                        Short_Up : constant String :=
+                          (if Full_Ref'Length > Rm_Prefix'Length
+                             and then Full_Ref
+                               (Full_Ref'First
+                                .. Full_Ref'First + Rm_Prefix'Length - 1)
+                               = Rm_Prefix
+                           then Full_Ref (Full_Ref'First + Rm_Prefix'Length
+                                          .. Full_Ref'Last)
+                           else Full_Ref);
+                     begin
+                        if With_Upstream then
+                           Append
+                             (Text,
+                              "[" & Short_Up
+                              & (if AB_Text'Length > 0 then ": " & AB_Text
+                                 else "")
+                              & "] ");
+                        elsif AB_Text'Length > 0 then
+                           Append (Text, "[" & AB_Text & "] ");
+                        end if;
+                     end;
+                  end if;
+
+                  Append
+                    (Text, Version.Objects.Commit_Message_First_Line (Obj));
+                  Append (Text, Character'Val (10));
                end;
             end if;
-
-            Append (Text, Version.Objects.Commit_Message_First_Line (Obj));
-            Append (Text, Character'Val (10));
          end;
       end loop;
 
