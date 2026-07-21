@@ -1,3 +1,4 @@
+- Add: `Version.Diff.Diff_Trees` renders the unified/stat diff between two trees directly, for `diff-tree -p|--stat <tree> <tree>`.
 - Add: `Version.Log.Log_List_Text` takes Numstat/Shortstat/Raw, and the `Diff_Commits`/root-diff paths forward them; `log --raw` abbreviates the two object ids to 7 hex as git does.
 - Add: `Version.Diff.Summarize_Patch` renders `git apply --stat|--numstat|--summary` for a patch without applying it, reading per-file line counts from the unified diff and mode/create/delete lines from its headers. `--stat` reuses the tree-diff bar engine, with git apply's wider minimum count column.
 - Add: `Version.Diff.Diff_Options` gains Numstat and Shortstat, rendered by the shared stat engine -- numstat as `<added>\t<deleted>\t<path>` (binary shows `-`/`-`), shortstat as git's footer line alone.

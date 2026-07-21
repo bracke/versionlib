@@ -105,6 +105,15 @@ package Version.Diff is
       Options   : Diff_Options := (others => <>))
       return String;
 
+   function Diff_Trees
+     (Repo     : Version.Repository.Repository_Handle;
+      Old_Tree : Version.Objects.Hex_Object_Id;
+      New_Tree : Version.Objects.Hex_Object_Id;
+      Options  : Diff_Options := (others => <>))
+      return String;
+   --  The unified (or --stat/--name-*) diff between two trees directly, for
+   --  `diff-tree -p|--stat <tree> <tree>`. Same rendering as Diff_Commits.
+
    function Diff_Root_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;

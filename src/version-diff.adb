@@ -2106,6 +2106,39 @@ package body Version.Diff is
            Binary_Patch   => Options.Binary_Patch);
    end Diff_Tree_Vs_Index;
 
+   function Diff_Trees
+     (Repo     : Version.Repository.Repository_Handle;
+      Old_Tree : Version.Objects.Hex_Object_Id;
+      New_Tree : Version.Objects.Hex_Object_Id;
+      Options  : Diff_Options := (others => <>)) return String
+   is
+      Objects : Version.Object_Cache.Object_Cache;
+      Trees   : Version.Tree_Cache.Tree_Cache;
+   begin
+      return
+        Diff_Sides
+          (Repo        => Repo,
+           Objects     => Objects,
+           Old_Side    =>
+             From_Tree
+               (Version.Tree_Cache.Flatten_Tree
+                  (Repo => Repo, Cache => Trees, Tree_Id => Old_Tree)),
+           New_Side    =>
+             From_Tree
+               (Version.Tree_Cache.Flatten_Tree
+                  (Repo => Repo, Cache => Trees, Tree_Id => New_Tree)),
+           New_Working => False,
+           Context => Options.Context_Lines,
+           Stat => Options.Stat, Summary => Options.Summary,
+           Name_Only => Options.Name_Only,
+           Name_Status => Options.Name_Status,
+           Numstat => Options.Numstat, Shortstat => Options.Shortstat,
+           Detect_Renames => Renames_Enabled (Repo, Options),
+           Rename_Score   => Options.Rename_Score,
+           Rename_Limit   => Options.Rename_Limit,
+           Binary_Patch   => Options.Binary_Patch);
+   end Diff_Trees;
+
    function Diff_Commits
      (Repo    : Version.Repository.Repository_Handle;
       Old_Id  : Version.Objects.Hex_Object_Id;
