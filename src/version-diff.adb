@@ -1159,8 +1159,22 @@ package body Version.Diff is
       Show_Summary    : Boolean;
       Show_Numstat    : Boolean := False;
       Show_Shortstat  : Boolean := False;
-      Min_Count_Width : Natural := 0) return String
+      Min_Count_Width : Natural := 0;
+      Apply_Style     : Boolean := False) return String
    is
+      --  `git apply --stat` differs from a diffstat: a rename is shown by its
+      --  destination path alone (no "old => new"), a binary file is just "Bin"
+      --  with no byte counts, and the graph separator space follows the count
+      --  even when nothing changed.
+      function Disp_Name (F : Stat_Entry) return String is
+        (if Apply_Style then To_String (F.Path) else Stat_Name (F));
+
+      --  apply --stat sizes the name column from the rename's source path even
+      --  though it shows only the destination -- git's own quirk.
+      function Width_Name (F : Stat_Entry) return String is
+        (if Apply_Style and then Is_Rename (F)
+           and then Length (F.Old_Path) > Length (F.Path)
+         then To_String (F.Old_Path) else Disp_Name (F));
       Result    : Unbounded_String;
       Name_W    : Natural := 0;
       Count_W   : Natural := 0;
@@ -1214,12 +1228,12 @@ package body Version.Diff is
                begin
                   if F.Binary then
                      Append
-                       (Out_Text, "-" & Tab & "-" & Tab & Stat_Name (F) & Nl);
+                       (Out_Text, "-" & Tab & "-" & Tab & Disp_Name (F) & Nl);
                   else
                      Append
                        (Out_Text,
                         Count_Image (F.Ins) & Tab & Count_Image (F.Del) & Tab
-                        & Stat_Name (F) & Nl);
+                        & Disp_Name (F) & Nl);
                   end if;
                end;
             end loop;
@@ -1235,7 +1249,7 @@ package body Version.Diff is
          declare
             F : constant Stat_Entry := Files.Element (I);
          begin
-            Name_W := Natural'Max (Name_W, Stat_Name (F)'Length);
+            Name_W := Natural'Max (Name_W, Width_Name (F)'Length);
             if F.Binary then
                --  "Bin XXX -> YYY bytes" is not scaled, but it does set the
                --  width the graph column has to accommodate.
@@ -1290,7 +1304,7 @@ package body Version.Diff is
            if Show_Stat then
             declare
                F    : constant Stat_Entry := Files.Element (I);
-               Full : constant String := Stat_Name (F);
+               Full : constant String := Disp_Name (F);
 
                --  git elides the head of an over-long name as "...", cutting
                --  back to a path separator when there is one.
@@ -1322,9 +1336,12 @@ package body Version.Diff is
                        (Result,
                         " " & Pad_Name & " | "
                         & Repeat (' ', Integer'Max (0, Count_W - Bin'Length))
-                        & Bin & " "
-                        & Count_Image (F.Old_Size) & " -> "
-                        & Count_Image (F.New_Size) & " bytes" & LF);
+                        & Bin
+                        --  apply --stat knows no sizes, so it stops at "Bin".
+                        & (if Apply_Style then ""
+                           else " " & Count_Image (F.Old_Size) & " -> "
+                                & Count_Image (F.New_Size) & " bytes")
+                        & LF);
                   end;
                else
                   declare
@@ -1358,8 +1375,10 @@ package body Version.Diff is
                         & Repeat (' ', Integer'Max (0, Count_W - Num'Length))
                         & Num
                         --  git separates the count from the bars only when
-                        --  there are bars (a pure rename shows a bare "0").
-                        & (if F.Ins + F.Del > 0 then " " else "")
+                        --  there are bars (a pure rename shows a bare "0");
+                        --  apply --stat always leaves the trailing space.
+                        & (if Apply_Style or else F.Ins + F.Del > 0 then " "
+                           else "")
                         & Repeat ('+', Add) & Repeat ('-', Del_N) & LF);
                   end;
                end if;
@@ -1442,11 +1461,9 @@ package body Version.Diff is
      (Patch : String;
       Mode  : Patch_Summary_Mode) return String
    is
-      HT : constant Character := Character'Val (9);
       NL : constant Character := Character'Val (10);
 
       Files   : Stat_Vectors.Vector;
-      Summary : Unbounded_String;
 
       First : Natural := Patch'First;
 
@@ -1471,6 +1488,10 @@ package body Version.Diff is
          return Header (B + 3 .. Header'Last);
       end Dest_Path;
 
+      function Starts (L, Prefix : String) return Boolean is
+        (L'Length >= Prefix'Length
+         and then L (L'First .. L'First + Prefix'Length - 1) = Prefix);
+
       Current : Stat_Entry;
       Have    : Boolean := False;
 
@@ -1487,9 +1508,7 @@ package body Version.Diff is
             Last : Natural;
             L    : constant String := Line_At (First, Last);
          begin
-            if L'Length > 11
-              and then L (L'First .. L'First + 10) = "diff --git "
-            then
+            if Starts (L, "diff --git ") then
                Flush;
                Current :=
                  (Path        => To_Unbounded_String (Dest_Path (L)),
@@ -1498,37 +1517,57 @@ package body Version.Diff is
                Current.New_Present := True;
                Have := True;
 
-            elsif Have and then L'Length > 14
-              and then L (L'First .. L'First + 13) = "new file mode "
-            then
+            elsif Have and then Starts (L, "new file mode ") then
                Current.Old_Present := False;
-               Append
-                 (Summary,
-                  " create mode " & L (L'First + 14 .. L'Last) & " "
-                  & To_String (Current.Path) & NL);
+               Current.New_Mode :=
+                 To_Unbounded_String (L (L'First + 14 .. L'Last));
 
-            elsif Have and then L'Length > 18
-              and then L (L'First .. L'First + 17) = "deleted file mode "
-            then
+            elsif Have and then Starts (L, "deleted file mode ") then
                Current.New_Present := False;
-               Append
-                 (Summary,
-                  " delete mode " & L (L'First + 18 .. L'Last) & " "
-                  & To_String (Current.Path) & NL);
+               Current.Old_Mode :=
+                 To_Unbounded_String (L (L'First + 18 .. L'Last));
 
-            elsif Have and then L'Length > 12
-              and then L (L'First .. L'First + 11) = "GIT binary "
+            elsif Have and then Starts (L, "old mode ") then
+               Current.Old_Mode :=
+                 To_Unbounded_String (L (L'First + 9 .. L'Last));
+
+            elsif Have and then Starts (L, "new mode ") then
+               Current.New_Mode :=
+                 To_Unbounded_String (L (L'First + 9 .. L'Last));
+
+            elsif Have and then (Starts (L, "rename from ")
+                                 or else Starts (L, "copy from "))
+            then
+               Current.Old_Path :=
+                 To_Unbounded_String
+                   (L (L'First + (if Starts (L, "rename from ") then 12
+                                  else 10) .. L'Last));
+
+            elsif Have and then (Starts (L, "rename to ")
+                                 or else Starts (L, "copy to "))
+            then
+               Current.Path :=
+                 To_Unbounded_String
+                   (L (L'First + (if Starts (L, "rename to ") then 10
+                                  else 8) .. L'Last));
+
+            elsif Have and then Starts (L, "similarity index ")
+              and then L (L'Last) = '%'
+            then
+               Current.Rename_Score :=
+                 Natural'Value (L (L'First + 17 .. L'Last - 1))
+                 * Version.Rename_Detect.Max_Score / 100;
+
+            elsif Have
+              and then (Starts (L, "Binary files ")
+                        or else Starts (L, "GIT binary "))
             then
                Current.Binary := True;
 
-            elsif Have and then L'Length >= 4
-              and then L (L'First .. L'First + 3) = "--- "
-            then
+            elsif Have and then Starts (L, "--- ") then
                null;   --  the old-file header, not a deletion
 
-            elsif Have and then L'Length >= 4
-              and then L (L'First .. L'First + 3) = "+++ "
-            then
+            elsif Have and then Starts (L, "+++ ") then
                null;   --  the new-file header, not an insertion
 
             elsif Have and then L'Length >= 1 and then L (L'First) = '+' then
@@ -1545,31 +1584,18 @@ package body Version.Diff is
 
       case Mode is
          when Summary_Names =>
-            return To_String (Summary);
+            return Emit_Stat
+              (Files, Show_Stat => False, Show_Summary => True);
 
          when Summary_Numstat =>
-            declare
-               Out_Text : Unbounded_String;
-            begin
-               for F of Files loop
-                  if F.Binary then
-                     Append
-                       (Out_Text,
-                        "-" & HT & "-" & HT & To_String (F.Path) & NL);
-                  else
-                     Append
-                       (Out_Text,
-                        Count_Image (F.Ins) & HT & Count_Image (F.Del) & HT
-                        & To_String (F.Path) & NL);
-                  end if;
-               end loop;
-               return To_String (Out_Text);
-            end;
+            return Emit_Stat
+              (Files, Show_Stat => False, Show_Summary => False,
+               Show_Numstat => True, Apply_Style => True);
 
          when Summary_Stat =>
             return Emit_Stat
               (Files, Show_Stat => True, Show_Summary => False,
-               Min_Count_Width => 4);
+               Min_Count_Width => 4, Apply_Style => True);
 
          when Summary_Shortstat =>
             return Emit_Stat
