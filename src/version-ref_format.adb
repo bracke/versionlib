@@ -4,6 +4,7 @@ with Ada.Strings.Fixed;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded;   use Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
+with Version.Files;
 with Version.Objects;
 with Version.Refs;
 with Version.Tracking;
@@ -874,6 +875,49 @@ package body Version.Ref_Format is
             return Creator_Line (Content);
          elsif Head_A = "creatordate" then
             return Git_Date (Ident_Date (Creator_Line (Content)), Arg);
+         elsif Head_A = "color" then
+            --  Color is suppressed when the output is not a terminal, which
+            --  is always the case here, so every %(color:...) is empty.
+            return "";
+         elsif Head_A = "symref" then
+            --  A symbolic ref (e.g. refs/remotes/origin/HEAD) stores
+            --  "ref: <target>"; a direct ref has no symref.
+            declare
+               Path : constant String :=
+                 Version.Files.Join (Version.Repository.Git_Dir (Repo), Ref);
+            begin
+               if Version.Files.Is_Ordinary_File (Path) then
+                  declare
+                     Raw  : constant String :=
+                       Version.Files.Read_Binary_File (Path);
+                     Last : Natural := Raw'Last;
+                  begin
+                     while Last >= Raw'First
+                       and then (Raw (Last) = Character'Val (10)
+                                 or else Raw (Last) = Character'Val (13))
+                     loop
+                        Last := Last - 1;
+                     end loop;
+                     if Last - Raw'First + 1 > 5
+                       and then Raw (Raw'First .. Raw'First + 4) = "ref: "
+                     then
+                        declare
+                           Target : constant String :=
+                             Raw (Raw'First + 5 .. Last);
+                        begin
+                           if Arg = "short" then
+                              return Short_Name (Target);
+                           end if;
+                           return Target;
+                        end;
+                     end if;
+                  end;
+               end if;
+               return "";
+            exception
+               when others =>
+                  return "";
+            end;
          else
             raise Constraint_Error
               with "unknown for-each-ref field: " & Atom;
