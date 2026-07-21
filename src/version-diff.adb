@@ -1242,6 +1242,11 @@ package body Version.Diff is
       end if;
 
       if Files.Is_Empty then
+         --  `git apply --stat` still prints its footer for an empty patch
+         --  (e.g. everything filtered by --include); a plain diffstat does not.
+         if Apply_Style and then Show_Stat then
+            return " 0 files changed" & LF;
+         end if;
          return "";
       end if;
 

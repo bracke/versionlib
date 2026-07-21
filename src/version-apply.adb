@@ -40,7 +40,7 @@ package body Version.Apply is
 
    procedure Bad_Patch (Message : String) is
    begin
-      raise Ada.IO_Exceptions.Data_Error with Message;
+      raise Malformed_Patch with Message;
    end Bad_Patch;
 
    procedure Split_Lines
@@ -119,7 +119,7 @@ package body Version.Apply is
                   --  path with fewer components than -p<n> asks for means the
                   --  caller named the wrong strip depth, and applying the
                   --  remainder would touch a file they did not intend.
-                  raise Ada.IO_Exceptions.Data_Error with
+                  raise Malformed_Patch with
                     "git diff header lacks filename information when removing"
                     & Natural'Image (Strip)
                     & " leading pathname components";
@@ -525,9 +525,9 @@ package body Version.Apply is
                              or else To_String (Old_Lines.Element (Old_Pos))
                                      /= Txt
                            then
-                              Bad_Patch
-                                ("patch does not apply (context mismatch in "
-                                 & Target & ")");
+                              raise Ada.IO_Exceptions.Data_Error with
+                                "patch does not apply (context mismatch in "
+                                & Target & ")";
                            end if;
                            New_Lines.Append (To_Unbounded_String (Txt));
                            Old_Pos := Old_Pos + 1;
@@ -537,9 +537,9 @@ package body Version.Apply is
                              or else To_String (Old_Lines.Element (Old_Pos))
                                      /= Txt
                            then
-                              Bad_Patch
-                                ("patch does not apply (deletion mismatch in "
-                                 & Target & ")");
+                              raise Ada.IO_Exceptions.Data_Error with
+                                "patch does not apply (deletion mismatch in "
+                                & Target & ")";
                            end if;
                            Old_Pos := Old_Pos + 1;
                         when '+' =>
@@ -679,9 +679,12 @@ package body Version.Apply is
                if Starts (L, "Binary files ")
                  or else Starts (L, "Files ")
                then
-                  Bad_Patch
-                    ("cannot apply binary patch to '"
-                     & Second_Path & "' without full index line");
+                  --  A binary patch with no full index line cannot be applied,
+                  --  but the patch itself is well-formed: git's exit 1, not the
+                  --  die() of a malformed patch.
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "cannot apply binary patch to '"
+                    & Second_Path & "' without full index line";
                end if;
                if Starts (L, "rename from ") then
                   Rename_Fr := To_Unbounded_String (L (L'First + 12 .. L'Last));

@@ -17,12 +17,18 @@ package Version.Apply is
       Allow_Empty   : Boolean := False;  --  --allow-empty: accept no patches
    end record;
 
+   Malformed_Patch : exception;
+   --  The input is not a well-formed patch at all -- unparsable, corrupt, or
+   --  with a header that cannot yield a filename. git dies (exit 128) on these,
+   --  distinct from a well-formed patch that simply does not apply.
+
    procedure Apply_Patch
      (Repo    : Version.Repository.Repository_Handle;
       Patch   : String;
       Options : Apply_Options := (others => <>));
-   --  Apply the unified diff in Patch. Raises Ada.IO_Exceptions.Data_Error on
-   --  a malformed patch or when a hunk's context/deletion lines do not match
-   --  the current file content.
+   --  Apply the unified diff in Patch. Raises Malformed_Patch when the input is
+   --  not a valid patch (git's die, exit 128), and Ada.IO_Exceptions.Data_Error
+   --  when a well-formed patch does not apply -- a hunk's context/deletion
+   --  lines do not match, or --index finds the file out of sync (exit 1).
 
 end Version.Apply;
