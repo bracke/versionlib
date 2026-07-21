@@ -18,6 +18,9 @@ package Version.Log is
       Patch          : Boolean := False;
       Name_Only      : Boolean := False;
       Name_Status    : Boolean := False;
+      Numstat        : Boolean := False;
+      Shortstat      : Boolean := False;
+      Raw            : Boolean := False;
       Context        : Natural := 3) return String;
 
    function Log_Oneline_List_Text

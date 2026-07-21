@@ -511,6 +511,77 @@ package body Version.Log is
       return Result;
    end To_Commit_List;
 
+   --  Shorten the two 40-hex ids of each diff-tree raw line (":<m> <m> <id>
+   --  <id> <status>\t<path>") to 7 chars, which is what git log --raw shows.
+   function Abbreviate_Raw_Ids (Raw : String) return String is
+      Result : Unbounded_String;
+      First  : Natural := Raw'First;
+      LF     : constant Character := Character'Val (10);
+   begin
+      while First <= Raw'Last loop
+         declare
+            Last : Natural := First;
+         begin
+            while Last <= Raw'Last and then Raw (Last) /= LF loop
+               Last := Last + 1;
+            end loop;
+
+            declare
+               Line : constant String := Raw (First .. Last - 1);
+            begin
+               if Line'Length > 0 and then Line (Line'First) = ':' then
+                  --  Fields are space-separated up to the tab; abbreviate the
+                  --  3rd and 4th (the ids).
+                  declare
+                     Out_Line : Unbounded_String;
+                     P : Natural := Line'First;
+                     Field : Natural := 0;
+                  begin
+                     while P <= Line'Last loop
+                        declare
+                           E : Natural := P;
+                        begin
+                           while E <= Line'Last
+                             and then Line (E) /= ' '
+                             and then Line (E) /= Character'Val (9)
+                           loop
+                              E := E + 1;
+                           end loop;
+
+                           declare
+                              Tok : constant String := Line (P .. E - 1);
+                           begin
+                              Field := Field + 1;
+                              if (Field = 3 or else Field = 4)
+                                and then Tok'Length >= 7
+                              then
+                                 Append
+                                   (Out_Line,
+                                    Tok (Tok'First .. Tok'First + 6));
+                              else
+                                 Append (Out_Line, Tok);
+                              end if;
+                              if E <= Line'Last then
+                                 Append (Out_Line, Line (E));
+                              end if;
+                           end;
+
+                           P := E + 1;
+                        end;
+                     end loop;
+                     Append (Result, To_String (Out_Line) & LF);
+                  end;
+               elsif Line'Length > 0 then
+                  Append (Result, Line & LF);
+               end if;
+            end;
+
+            First := Last + 1;
+         end;
+      end loop;
+      return To_String (Result);
+   end Abbreviate_Raw_Ids;
+
    function Log_List_Text
      (Repo           : Version.Repository.Repository_Handle;
       Commits        : Version.History.Commit_Id_Vectors.Vector;
@@ -519,6 +590,9 @@ package body Version.Log is
       Patch          : Boolean := False;
       Name_Only      : Boolean := False;
       Name_Status    : Boolean := False;
+      Numstat        : Boolean := False;
+      Shortstat      : Boolean := False;
+      Raw            : Boolean := False;
       Context        : Natural := 3) return String
    is
       Result  : Unbounded_String;
@@ -542,7 +616,8 @@ package body Version.Log is
                   Cache          => Objects,
                   Commit_Id      => Current_Id,
                   Show_Signature => Show_Signature));
-            if (Stat or else Patch or else Name_Only or else Name_Status)
+            if (Stat or else Patch or else Name_Only or else Name_Status
+                or else Numstat or else Shortstat or else Raw)
               and then Natural (Version.Objects.Commit_Parent_Ids (Obj).Length)
                        < 2
             then
@@ -557,11 +632,37 @@ package body Version.Log is
                     (Stat          => Stat,
                      Name_Only     => Name_Only,
                      Name_Status   => Name_Status,
+                     Numstat       => Numstat,
+                     Shortstat     => Shortstat,
                      Context_Lines => Context,
                      others        => <>);
+                  --  --raw prints diff-tree's record format, which the
+                  --  unified-diff path does not produce; take it from the
+                  --  tree diff directly.
+                  function Tree_Of (C : Version.Objects.Hex_Object_Id)
+                     return Version.Objects.Hex_Object_Id
+                  is (Version.Objects.Commit_Tree_Id
+                        (Version.Objects.Read_Object (Repo, C)));
                begin
                   Append_Line (Result, "");
-                  if Parent'Length > 0 then
+                  if Raw then
+                     declare
+                        Full : constant String :=
+                          (if Parent'Length > 0
+                           then Version.Diff.Raw_Diff_Trees
+                             (Repo,
+                              Tree_Of (Version.Objects.To_Object_Id (Parent)),
+                              True, Tree_Of (Current_Id), True)
+                           else Version.Diff.Raw_Diff_Trees
+                             (Repo, Tree_Of (Current_Id), False,
+                              Tree_Of (Current_Id), True));
+                     begin
+                        --  git log --raw abbreviates the two object ids to
+                        --  7 hex (its --abbrev default) where diff-tree --raw
+                        --  shows them in full.
+                        Append (Result, Abbreviate_Raw_Ids (Full));
+                     end;
+                  elsif Parent'Length > 0 then
                      Append
                        (Result,
                         Version.Diff.Diff_Commits
