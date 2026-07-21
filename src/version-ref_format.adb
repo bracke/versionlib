@@ -1,6 +1,7 @@
 with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
+with Ada.Characters.Handling;
 with Ada.Strings.Unbounded;   use Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
 with Version.Objects;
@@ -635,6 +636,77 @@ package body Version.Ref_Format is
 
       function Content return String is (Version.Objects.Content (Obj));
 
+      --  The message after the header block (git's %(contents)); "" if none.
+      function Full_Message (Text : String) return String is
+         Pos : Natural := Text'First;
+      begin
+         while Pos < Text'Last loop
+            if Text (Pos) = Character'Val (10)
+              and then Text (Pos + 1) = Character'Val (10)
+            then
+               return Text (Pos + 2 .. Text'Last);
+            end if;
+            Pos := Pos + 1;
+         end loop;
+         return "";
+      end Full_Message;
+
+      --  git's %(body): the message past the subject's first paragraph.
+      function Body_Of (Text : String) return String is
+         Msg : constant String := Full_Message (Text);
+         Pos : Natural := Msg'First;
+      begin
+         while Pos < Msg'Last loop
+            if Msg (Pos) = Character'Val (10)
+              and then Msg (Pos + 1) = Character'Val (10)
+            then
+               return Msg (Pos + 2 .. Msg'Last);
+            end if;
+            Pos := Pos + 1;
+         end loop;
+         return "";
+      end Body_Of;
+
+      --  git's %(creator*): the tagger for a tag, else the committer.
+      function Creator_Line (Text : String) return String is
+         Tagger : constant String := Line_Value (Text, "tagger ");
+      begin
+         if Tagger'Length > 0 then
+            return Tagger;
+         end if;
+         return Line_Value (Text, "committer ");
+      end Creator_Line;
+
+      --  An annotated tag's target: the "object <sha>" it names, peeled
+      --  through any tag-of-tag chain to a non-tag. "" when Obj is not a tag.
+      function Peeled_Id return String is
+         Cur     : Version.Objects.Git_Object := Obj;
+         Cur_Id  : Unbounded_String := To_Unbounded_String (Id);
+      begin
+         if not Version.Objects."=" (Kind, Version.Objects.Tag_Object) then
+            return "";
+         end if;
+         loop
+            declare
+               Target : constant String :=
+                 Line_Value (Version.Objects.Content (Cur), "object ");
+            begin
+               exit when Target'Length = 0;
+               Cur_Id := To_Unbounded_String (Target);
+               Cur :=
+                 Version.Objects.Read_Object
+                   (Repo, Version.Objects.To_Object_Id (Target));
+               exit when not Version.Objects."="
+                             (Version.Objects.Kind (Cur),
+                              Version.Objects.Tag_Object);
+            end;
+         end loop;
+         return To_String (Cur_Id);
+      exception
+         when others =>
+            return "";
+      end Peeled_Id;
+
       function Atom_Value (Atom : String) return String is
          Colon : constant Natural := Ada.Strings.Fixed.Index (Atom, ":");
          Head_A : constant String :=
@@ -642,6 +714,23 @@ package body Version.Ref_Format is
          Arg    : constant String :=
            (if Colon = 0 then "" else Atom (Colon + 1 .. Atom'Last));
       begin
+         --  A leading '*' asks for the DEREFERENCED object: for an annotated
+         --  tag, the thing it points to; empty for anything else. Re-run the
+         --  same atom against the peeled object.
+         if Head_A'Length >= 1 and then Head_A (Head_A'First) = '*' then
+            declare
+               Peeled : constant String := Peeled_Id;
+            begin
+               if Peeled'Length = 0 then
+                  return "";
+               end if;
+               return Expand
+                 (Repo,
+                  "%(" & Atom (Atom'First + 1 .. Atom'Last) & ")",
+                  Ref, Peeled, Head);
+            end;
+         end if;
+
          if Head_A = "refname" then
             if Arg = "" then
                return Ref;
@@ -769,6 +858,22 @@ package body Version.Ref_Format is
             else
                return "";
             end if;
+         elsif Head_A = "contents" then
+            --  Bare %(contents) is the whole message; :subject is handled
+            --  above, :body falls through to Body_Of.
+            if Arg = "body" then
+               return Body_Of (Content);
+            elsif Arg = "" then
+               return Full_Message (Content);
+            else
+               return Full_Message (Content);
+            end if;
+         elsif Head_A = "body" then
+            return Body_Of (Content);
+         elsif Head_A = "creator" then
+            return Creator_Line (Content);
+         elsif Head_A = "creatordate" then
+            return Git_Date (Ident_Date (Creator_Line (Content)), Arg);
          else
             raise Constraint_Error
               with "unknown for-each-ref field: " & Atom;
@@ -887,11 +992,12 @@ package body Version.Ref_Format is
    ----------------------------------------------------------------------
 
    function For_Each_Ref
-     (Repo     : Version.Repository.Repository_Handle;
-      Patterns : String_Vectors.Vector;
-      Format   : String := "";
-      Sort_Key : String := "";
-      Count    : Natural := 0)
+     (Repo        : Version.Repository.Repository_Handle;
+      Patterns    : String_Vectors.Vector;
+      Format      : String := "";
+      Sort_Key    : String := "";
+      Count       : Natural := 0;
+      Ignore_Case : Boolean := False)
       return String_Vectors.Vector
    is
       Rows     : Row_Vectors.Vector := Enumerate (Repo);
@@ -947,9 +1053,30 @@ package body Version.Ref_Format is
         new Row_Vectors.Generic_Sorting ("<" => Less);
    begin
       for R of Rows loop
-         if Matches_Any (Patterns, To_String (R.Name)) then
-            Filtered.Append (R);
-         end if;
+         declare
+            Name : constant String := To_String (R.Name);
+            Hit  : Boolean;
+         begin
+            if Ignore_Case and then not Patterns.Is_Empty then
+               --  --ignore-case: compare a lowercased ref against lowercased
+               --  patterns, so `refs/heads/MAIN` matches `refs/heads/main`.
+               declare
+                  Folded : String_Vectors.Vector;
+               begin
+                  for P of Patterns loop
+                     Folded.Append (String'(Ada.Characters.Handling.To_Lower (P)));
+                  end loop;
+                  Hit := Matches_Any
+                    (Folded, Ada.Characters.Handling.To_Lower (Name));
+               end;
+            else
+               Hit := Matches_Any (Patterns, Name);
+            end if;
+
+            if Hit then
+               Filtered.Append (R);
+            end if;
+         end;
       end loop;
 
       Rows := Filtered;

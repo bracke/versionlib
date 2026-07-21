@@ -12,11 +12,12 @@ package Version.Ref_Format is
      (Index_Type => Positive, Element_Type => String);
 
    function For_Each_Ref
-     (Repo     : Version.Repository.Repository_Handle;
-      Patterns : String_Vectors.Vector;
-      Format   : String := "";
-      Sort_Key : String := "";
-      Count    : Natural := 0)
+     (Repo        : Version.Repository.Repository_Handle;
+      Patterns    : String_Vectors.Vector;
+      Format      : String := "";
+      Sort_Key    : String := "";
+      Count       : Natural := 0;
+      Ignore_Case : Boolean := False)
       return String_Vectors.Vector;
    --  One element per emitted ref line (no trailing newline). Patterns empty
    --  means "all refs". Sort_Key empty means ascending refname. Count 0 means
