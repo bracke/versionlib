@@ -1,3 +1,4 @@
+- Git parity: `pack-refs` skips a symbolic ref (e.g. `refs/remotes/origin/HEAD`) instead of failing to read it as an object id — git leaves symrefs loose.
 - Git parity: `branch -v` listing unified across local and remote-tracking refs (`branch -av`/`-avv`/`-rv`) with one shared name-column width, remote symref shown as `name -> target`, and a configurable id width (`--abbrev=`/`--no-abbrev`).
 - Git parity: `apply` distinguishes a malformed/corrupt/unparsable patch (new `Malformed_Patch`, git's die → exit 128) from a well-formed patch that does not apply (exit 1); an empty diffstat under apply prints ` 0 files changed`.
 - Git parity: `apply --stat`/`--numstat`/`--summary` now classify binary files (`Binary files ... differ`), report renames from `rename from`/`rename to`/`similarity index`, and render apply's diffstat style (`Bin` with no sizes, dest-only rename name sized from the source path, trailing graph space).

@@ -372,15 +372,22 @@ package body Version.Packed_Refs is
                        "invalid loose ref name: " & Ref_Name;
                   end if;
 
-                  if not Is_Hex_Object_Id (Id_Text) then
+                  if Id_Text'Length >= 5
+                    and then Id_Text (Id_Text'First .. Id_Text'First + 4)
+                             = "ref: "
+                  then
+                     --  A symbolic ref (e.g. refs/remotes/origin/HEAD) cannot
+                     --  be packed; git leaves it loose and skips it here.
+                     null;
+                  elsif not Is_Hex_Object_Id (Id_Text) then
                      raise Ada.IO_Exceptions.Data_Error with
                        "invalid loose ref object id: " & Ref_Name;
+                  else
+                     Replace_Or_Append
+                       (Result,
+                        (Name => To_Unbounded_String (Ref_Name),
+                         Id   => Version.Objects.To_Object_Id (Id_Text)));
                   end if;
-
-                  Replace_Or_Append
-                    (Result,
-                     (Name => To_Unbounded_String (Ref_Name),
-                      Id   => Version.Objects.To_Object_Id (Id_Text)));
                end;
             end if;
          end;
