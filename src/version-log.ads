@@ -24,8 +24,11 @@ package Version.Log is
       Context        : Natural := 3) return String;
 
    function Log_Oneline_List_Text
-     (Repo    : Version.Repository.Repository_Handle;
-      Commits : Version.History.Commit_Id_Vectors.Vector) return String;
+     (Repo         : Version.Repository.Repository_Handle;
+      Commits      : Version.History.Commit_Id_Vectors.Vector;
+      With_Parents : Boolean := False) return String;
+   --  With_Parents adds git's `--parents`: the abbreviated parent ids after
+   --  each commit id.
 
    function Log_Formatted_List_Text
      (Repo    : Version.Repository.Repository_Handle;

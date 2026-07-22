@@ -265,9 +265,10 @@ package body Version.Log is
    end Append_Indented_Message;
 
    function Format_Commit_Oneline_With_Cache
-     (Repo      : Version.Repository.Repository_Handle;
-      Cache     : in out Version.Object_Cache.Object_Cache;
-      Commit_Id : Version.Objects.Hex_Object_Id) return String
+     (Repo         : Version.Repository.Repository_Handle;
+      Cache        : in out Version.Object_Cache.Object_Cache;
+      Commit_Id    : Version.Objects.Hex_Object_Id;
+      With_Parents : Boolean := False) return String
    is
       Obj : constant Version.Objects.Git_Object :=
         Version.Object_Cache.Read_Object
@@ -277,6 +278,22 @@ package body Version.Log is
       --  floored at 7 (core.abbrev=auto), not a fixed width.
       Abbrev : constant Natural :=
         Version.Revisions.Unique_Abbrev_Length (Repo, Commit_Id, 7);
+
+      --  --parents inserts the abbreviated parent ids after the commit id.
+      function Parents_Text return String is
+         Result : Unbounded_String;
+      begin
+         for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+            declare
+               PS : constant String := Version.Objects.To_String (P);
+               PA : constant Natural :=
+                 Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
+            begin
+               Append (Result, PS (PS'First .. PS'First + PA - 1) & " ");
+            end;
+         end loop;
+         return To_String (Result);
+      end Parents_Text;
    begin
       if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
          raise Ada.IO_Exceptions.Data_Error
@@ -286,6 +303,7 @@ package body Version.Log is
       return
         Full (Full'First .. Full'First + Abbrev - 1)
         & " "
+        & (if With_Parents then Parents_Text else "")
         & Version.Objects.Commit_Message_First_Line (Obj);
    end Format_Commit_Oneline_With_Cache;
 
@@ -702,8 +720,9 @@ package body Version.Log is
    end Log_From_Commit;
 
    function Log_Oneline_List_Text
-     (Repo    : Version.Repository.Repository_Handle;
-      Commits : Version.History.Commit_Id_Vectors.Vector) return String
+     (Repo         : Version.Repository.Repository_Handle;
+      Commits      : Version.History.Commit_Id_Vectors.Vector;
+      With_Parents : Boolean := False) return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
@@ -712,7 +731,8 @@ package body Version.Log is
          Append_Line
            (Result,
             Format_Commit_Oneline_With_Cache
-              (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
+              (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
+               With_Parents => With_Parents));
       end loop;
 
       return To_String (Result);

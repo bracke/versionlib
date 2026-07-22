@@ -1,3 +1,4 @@
+- Git parity: `log --oneline --parents` inserts each commit's abbreviated parent ids after its own id (Log_Oneline_List_Text/Format_Commit_Oneline_With_Cache gained a With_Parents flag).
 - Git parity: `for-each-ref --shell`/`--perl`/`--python`/`--tcl` quote each atom's value for the host language (single quotes for shell/perl/python, double for tcl), leaving the literal text between atoms unquoted (via a new `Quote` parameter on Ref_Format.For_Each_Ref/Expand).
 - Git parity: `pack-refs` skips a symbolic ref (e.g. `refs/remotes/origin/HEAD`) instead of failing to read it as an object id — git leaves symrefs loose.
 - Git parity: `branch -v` listing unified across local and remote-tracking refs (`branch -av`/`-avv`/`-rv`) with one shared name-column width, remote symref shown as `name -> target`, and a configurable id width (`--abbrev=`/`--no-abbrev`).
