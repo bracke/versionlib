@@ -13,10 +13,116 @@ with Version.Ref_Cache;
 with Version.Pretty_Format;
 with Version.Diff;
 with Version.Verify;
+with Version.Refs;
+with Version.Ref_Format;
+with Ada.Containers.Indefinite_Hashed_Maps;
 
 package body Version.Log is
 
    use Ada.Strings.Unbounded;
+
+   package Decor_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type        => String,
+      Element_Type    => String,
+      Hash            => Ada.Strings.Hash,
+      Equivalent_Keys => "=");
+
+   --  Build git's `--decorate` map: commit id -> "HEAD -> main, tag: v2".
+   --  Refs are gathered in git's decoration order (the current branch first,
+   --  then other branches, then tags, then remotes), each peeled to the commit
+   --  it names.
+   function Build_Decorations
+     (Repo : Version.Repository.Repository_Handle;
+      Mode : Decorate_Mode) return Decor_Maps.Map
+   is
+      Map : Decor_Maps.Map;
+
+      Head : constant Version.Refs.Head_Info :=
+        Version.Refs.Read_Head (Repo);
+      Head_Branch : constant String :=
+        (if Version.Refs.Is_Attached (Head)
+         then "refs/heads/" & Version.Refs.Branch_Name (Head) else "");
+
+      procedure Add (Commit_Hex, Label : String) is
+      begin
+         if Map.Contains (Commit_Hex) then
+            Map.Replace (Commit_Hex, Map.Element (Commit_Hex) & ", " & Label);
+         else
+            Map.Insert (Commit_Hex, Label);
+         end if;
+      end Add;
+
+      --  The label a ref contributes, per --decorate mode and ref type.
+      function Label (Refname : String) return String is
+         function Strip (Prefix : String) return String is
+           (Refname (Refname'First + Prefix'Length .. Refname'Last));
+      begin
+         if Mode = Full_Decorate then
+            if Refname (Refname'First) = 'r'
+              and then Refname'Length >= 10
+              and then Refname (Refname'First .. Refname'First + 9)
+                       = "refs/tags/"
+            then
+               return "tag: " & Refname;
+            else
+               return Refname;
+            end if;
+         else
+            if Refname'Length >= 11
+              and then Refname (Refname'First .. Refname'First + 10)
+                       = "refs/heads/"
+            then
+               return Strip ("refs/heads/");
+            elsif Refname'Length >= 10
+              and then Refname (Refname'First .. Refname'First + 9)
+                       = "refs/tags/"
+            then
+               return "tag: " & Strip ("refs/tags/");
+            elsif Refname'Length >= 13
+              and then Refname (Refname'First .. Refname'First + 12)
+                       = "refs/remotes/"
+            then
+               return Strip ("refs/remotes/");
+            else
+               return Refname;
+            end if;
+         end if;
+      end Label;
+
+      procedure Scan (Prefix : String; Skip_Head_Branch : Boolean) is
+         Pats : Version.Ref_Format.String_Vectors.Vector;
+      begin
+         Pats.Append (Prefix);
+         for R of Version.Ref_Format.For_Each_Ref
+           (Repo, Pats, "%(refname)")
+         loop
+            if not (Skip_Head_Branch and then R = Head_Branch) then
+               begin
+                  Add (Version.Objects.To_String
+                         (Version.Revisions.Resolve_Commit (Repo, R)),
+                       Label (R));
+               exception
+                  when others => null;
+               end;
+            end if;
+         end loop;
+      end Scan;
+   begin
+      --  Current branch first, shown as "HEAD -> <branch>".
+      if Head_Branch /= "" then
+         begin
+            Add (Version.Objects.To_String
+                   (Version.Revisions.Resolve_Commit (Repo, Head_Branch)),
+                 "HEAD -> " & Label (Head_Branch));
+         exception
+            when others => null;
+         end;
+      end if;
+      Scan ("refs/heads", Skip_Head_Branch => True);
+      Scan ("refs/tags", Skip_Head_Branch => False);
+      Scan ("refs/remotes", Skip_Head_Branch => False);
+      return Map;
+   end Build_Decorations;
 
    function Line_Value (Text : String; Prefix : String) return String is
       Start : Natural := Text'First;
@@ -722,17 +828,45 @@ package body Version.Log is
    function Log_Oneline_List_Text
      (Repo         : Version.Repository.Repository_Handle;
       Commits      : Version.History.Commit_Id_Vectors.Vector;
-      With_Parents : Boolean := False) return String
+      With_Parents : Boolean := False;
+      Decorate     : Decorate_Mode := No_Decorate) return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
+      Decor   : constant Decor_Maps.Map :=
+        (if Decorate = No_Decorate then Decor_Maps.Empty_Map
+         else Build_Decorations (Repo, Decorate));
+
+      --  git puts the "(refs)" between the id (and parents) and the subject;
+      --  splice it in after the first space that ends the id/parents run.
+      function With_Decoration (Line, Hex : String) return String is
+      begin
+         if not Decor.Contains (Hex) then
+            return Line;
+         end if;
+         declare
+            Cut : Natural := Line'First;
+         begin
+            --  Skip the id and any parent ids (space-separated hex runs); the
+            --  subject begins after them. For oneline the id is one token, so
+            --  the first space is the split point (parents keep their own).
+            while Cut <= Line'Last and then Line (Cut) /= ' ' loop
+               Cut := Cut + 1;
+            end loop;
+            return Line (Line'First .. Cut - 1)
+              & " (" & Decor.Element (Hex) & ")"
+              & Line (Cut .. Line'Last);
+         end;
+      end With_Decoration;
    begin
       for Current_Id of Commits loop
          Append_Line
            (Result,
-            Format_Commit_Oneline_With_Cache
-              (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
-               With_Parents => With_Parents));
+            With_Decoration
+              (Format_Commit_Oneline_With_Cache
+                 (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
+                  With_Parents => With_Parents),
+               Version.Objects.To_String (Current_Id)));
       end loop;
 
       return To_String (Result);

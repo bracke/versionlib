@@ -1,3 +1,4 @@
+- Git parity: `log --decorate`/`--decorate=short`/`--decorate=full` annotate each commit with the refs that name it — `HEAD -> <branch>`, other branches, `tag: <name>` (tags peeled to their commit), and remotes, in git's decoration order.
 - Git parity: `log --oneline --parents` inserts each commit's abbreviated parent ids after its own id (Log_Oneline_List_Text/Format_Commit_Oneline_With_Cache gained a With_Parents flag).
 - Git parity: `for-each-ref --shell`/`--perl`/`--python`/`--tcl` quote each atom's value for the host language (single quotes for shell/perl/python, double for tcl), leaving the literal text between atoms unquoted (via a new `Quote` parameter on Ref_Format.For_Each_Ref/Expand).
 - Git parity: `pack-refs` skips a symbolic ref (e.g. `refs/remotes/origin/HEAD`) instead of failing to read it as an object id — git leaves symrefs loose.

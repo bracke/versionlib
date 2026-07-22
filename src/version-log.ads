@@ -23,12 +23,17 @@ package Version.Log is
       Raw            : Boolean := False;
       Context        : Natural := 3) return String;
 
+   type Decorate_Mode is (No_Decorate, Short_Decorate, Full_Decorate);
+
    function Log_Oneline_List_Text
      (Repo         : Version.Repository.Repository_Handle;
       Commits      : Version.History.Commit_Id_Vectors.Vector;
-      With_Parents : Boolean := False) return String;
+      With_Parents : Boolean := False;
+      Decorate     : Decorate_Mode := No_Decorate) return String;
    --  With_Parents adds git's `--parents`: the abbreviated parent ids after
-   --  each commit id.
+   --  each commit id. Decorate adds git's `--decorate` ref names in parens
+   --  (Short_Decorate: "main"/"tag: v2"; Full_Decorate: the full refnames),
+   --  with the current branch shown as "HEAD -> <branch>".
 
    function Log_Formatted_List_Text
      (Repo    : Version.Repository.Repository_Handle;
