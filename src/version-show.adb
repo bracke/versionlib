@@ -19,12 +19,13 @@ package body Version.Show is
    end Resolve_Revision;
 
    function Show_Commit
-     (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id;
-      Options   : Version.Diff.Diff_Options := (others => <>);
-      No_Patch  : Boolean := False;
-      Oneline   : Boolean := False;
-      Format    : String := "")
+     (Repo         : Version.Repository.Repository_Handle;
+      Commit_Id    : Version.Objects.Hex_Object_Id;
+      Options      : Version.Diff.Diff_Options := (others => <>);
+      No_Patch     : Boolean := False;
+      Oneline      : Boolean := False;
+      Format       : String := "";
+      Format_Oneline : Boolean := False)
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -47,7 +48,11 @@ package body Version.Show is
            (Result,
             Version.Log.Log_Formatted_From_Commit
               (Repo, Commit_Id, Format, Max_Count => 1));
-         Append (Result, Character'Val (10));
+         --  git's oneline pretty format runs straight into the diff; other
+         --  formats get a blank line separating them from it.
+         if not Format_Oneline then
+            Append (Result, Character'Val (10));
+         end if;
       else
          Append
            (Result,
