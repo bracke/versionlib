@@ -717,7 +717,8 @@ package body Version.Log is
       Numstat        : Boolean := False;
       Shortstat      : Boolean := False;
       Raw            : Boolean := False;
-      Context        : Natural := 3) return String
+      Context        : Natural := 3;
+      Oneline        : Boolean := False) return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
@@ -729,17 +730,26 @@ package body Version.Log is
               Version.Object_Cache.Read_Object
                 (Repo => Repo, Cache => Objects, Id => Current_Id);
          begin
-            if not First then
+            --  The full-header format blank-separates entries; the oneline
+            --  form runs them together, as git does.
+            if not First and then not Oneline then
                Append_Line (Result, "");
             end if;
             First := False;
-            Append
-              (Result,
-               Format_Commit_With_Cache
-                 (Repo           => Repo,
-                  Cache          => Objects,
-                  Commit_Id      => Current_Id,
-                  Show_Signature => Show_Signature));
+            if Oneline then
+               Append_Line
+                 (Result,
+                  Format_Commit_Oneline_With_Cache
+                    (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
+            else
+               Append
+                 (Result,
+                  Format_Commit_With_Cache
+                    (Repo           => Repo,
+                     Cache          => Objects,
+                     Commit_Id      => Current_Id,
+                     Show_Signature => Show_Signature));
+            end if;
             if (Stat or else Patch or else Name_Only or else Name_Status
                 or else Numstat or else Shortstat or else Raw)
               and then Natural (Version.Objects.Commit_Parent_Ids (Obj).Length)
@@ -768,7 +778,12 @@ package body Version.Log is
                   is (Version.Objects.Commit_Tree_Id
                         (Version.Objects.Read_Object (Repo, C)));
                begin
-                  Append_Line (Result, "");
+                  --  The full header ends with the message, so a blank line
+                  --  separates it from the file changes; the oneline header
+                  --  runs straight into them.
+                  if not Oneline then
+                     Append_Line (Result, "");
+                  end if;
                   if Raw then
                      declare
                         Full : constant String :=

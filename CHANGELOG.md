@@ -1,3 +1,4 @@
+- Git parity: `Log_List_Text` gains an Oneline mode — the oneline header runs straight into each commit's file changes, with no separating or inter-entry blank line, matching `log --oneline --name-only`/`--numstat`/`--raw`/etc.
 - Git parity: `Show_Commit` gains Format_Oneline so a `--pretty=oneline` header runs straight into the diff (no separating blank line), as git does.
 - Git parity: `log --decorate`/`--decorate=short`/`--decorate=full` annotate each commit with the refs that name it — `HEAD -> <branch>`, other branches, `tag: <name>` (tags peeled to their commit), and remotes, in git's decoration order.
 - Git parity: `log --oneline --parents` inserts each commit's abbreviated parent ids after its own id (Log_Oneline_List_Text/Format_Commit_Oneline_With_Cache gained a With_Parents flag).

@@ -21,7 +21,11 @@ package Version.Log is
       Numstat        : Boolean := False;
       Shortstat      : Boolean := False;
       Raw            : Boolean := False;
-      Context        : Natural := 3) return String;
+      Context        : Natural := 3;
+      Oneline        : Boolean := False) return String;
+   --  Oneline replaces each commit's header with git's oneline form and runs
+   --  the file changes straight after it (no separating blank), as
+   --  `log --oneline --name-only`/`--numstat`/`--raw`/... do.
 
    type Decorate_Mode is (No_Decorate, Short_Decorate, Full_Decorate);
 
