@@ -57,28 +57,64 @@ package body Version.Shortlog is
       return "";
    end Author_Name;
 
+   --  The author identity with its email ("Name <email>"), for shortlog -e.
+   function Author_Ident (Content : String) return String is
+      Pos : Natural := Content'First;
+   begin
+      while Pos <= Content'Last loop
+         declare
+            EOL : Natural := Content'Last + 1;
+         begin
+            for K in Pos .. Content'Last loop
+               if Content (K) = LF then
+                  EOL := K;
+                  exit;
+               end if;
+            end loop;
+            exit when Pos = EOL;
+
+            declare
+               Line : constant String := Content (Pos .. EOL - 1);
+            begin
+               if Line'Length >= 7
+                 and then Line (Line'First .. Line'First + 6) = "author "
+               then
+                  declare
+                     A : constant String :=
+                       Line (Line'First + 7 .. Line'Last);
+                  begin
+                     for I in reverse A'Range loop
+                        if A (I) = '>' then
+                           return A (A'First .. I);
+                        end if;
+                     end loop;
+                     return A;
+                  end;
+               end if;
+            end;
+            Pos := EOL + 1;
+         end;
+      end loop;
+      return "";
+   end Author_Ident;
+
    function Summarize
-     (Repo : Version.Repository.Repository_Handle;
-      Tip  : Version.Objects.Hex_Object_Id)
+     (Repo       : Version.Repository.Repository_Handle;
+      Commits    : Version.History.Commit_Id_Vectors.Vector;
+      With_Email : Boolean := False)
       return Group_Vectors.Vector
    is
       Groups : Group_Maps.Map;
       Result : Group_Vectors.Vector;
-
-      --  The same walk `log` and `rev-list` use: newest first in committer-
-      --  date order, which is git's default and what the per-group reversal
-      --  below relies on. A depth-first walk of the parent links visits the
-      --  same commits in an order that is neither git's nor reversible into
-      --  it, so reversing one does not yield chronological order.
-      Include : Version.History.Commit_Id_Vectors.Vector;
    begin
-      Include.Append (Tip);
-      for C of Version.History.Rev_List (Repo => Repo, Include => Include) loop
+      for C of Commits loop
          declare
             Obj  : constant Version.Objects.Git_Object :=
               Version.Objects.Read_Object (Repo, C);
             Name : constant String :=
-              Author_Name (Version.Objects.Content (Obj));
+              (if With_Email
+               then Author_Ident (Version.Objects.Content (Obj))
+               else Author_Name (Version.Objects.Content (Obj)));
             Subj : constant String :=
               Version.Objects.Commit_Message_First_Line (Obj);
          begin
@@ -111,6 +147,20 @@ package body Version.Shortlog is
          end;
       end loop;
       return Result;
+   end Summarize;
+
+   function Summarize
+     (Repo : Version.Repository.Repository_Handle;
+      Tip  : Version.Objects.Hex_Object_Id)
+      return Group_Vectors.Vector
+   is
+      --  git's default walk: newest first in committer-date order, which the
+      --  per-group reversal above turns into chronological order.
+      Include : Version.History.Commit_Id_Vectors.Vector;
+   begin
+      Include.Append (Tip);
+      return Summarize
+        (Repo, Version.History.Rev_List (Repo => Repo, Include => Include));
    end Summarize;
 
 end Version.Shortlog;

@@ -1,3 +1,4 @@
+- Git parity: `Version.Shortlog.Summarize` gains a commit-list overload with a With_Email flag (groups by the full "Name <email>" author identity), so `shortlog` can summarize an arbitrary rev-list selection.
 - Git parity: `Log_List_Text` gains an Oneline mode — the oneline header runs straight into each commit's file changes, with no separating or inter-entry blank line, matching `log --oneline --name-only`/`--numstat`/`--raw`/etc.
 - Git parity: `Show_Commit` gains Format_Oneline so a `--pretty=oneline` header runs straight into the diff (no separating blank line), as git does.
 - Git parity: `log --decorate`/`--decorate=short`/`--decorate=full` annotate each commit with the refs that name it — `HEAD -> <branch>`, other branches, `tag: <name>` (tags peeled to their commit), and remotes, in git's decoration order.

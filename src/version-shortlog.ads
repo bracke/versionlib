@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 
 with Version.Objects;
 with Version.Repository;
+with Version.History;
 
 --  `git shortlog`: summarize history grouped by author.
 package Version.Shortlog is
@@ -28,5 +29,16 @@ package Version.Shortlog is
    --  Commits reachable from Tip, grouped by author name (groups sorted by
    --  name); each group lists the commit subjects oldest first (chronological),
    --  matching git shortlog.
+
+   function Summarize
+     (Repo       : Version.Repository.Repository_Handle;
+      Commits    : Version.History.Commit_Id_Vectors.Vector;
+      With_Email : Boolean := False)
+      return Group_Vectors.Vector;
+   --  Same, over an already-selected commit list (so the caller can apply a
+   --  range, pathspec or --no-merges via rev-list). With_Email groups by the
+   --  full "Name <email>" author identity, as `shortlog -e` does. The list is
+   --  expected newest-first (rev-list order); each group's subjects are
+   --  reversed to chronological order.
 
 end Version.Shortlog;
