@@ -1,3 +1,4 @@
+- Git parity: `Version.Show.Show_Object` shows any object type — a commit via Show_Commit, an annotated tag as its tag/Tagger/Date header + message followed by the object it points at, a tree as `tree <spec>` + top-level entries, and a blob verbatim.
 - Git parity: `Version.Shortlog.Summarize` gains a commit-list overload with a With_Email flag (groups by the full "Name <email>" author identity), so `shortlog` can summarize an arbitrary rev-list selection.
 - Git parity: `Log_List_Text` gains an Oneline mode — the oneline header runs straight into each commit's file changes, with no separating or inter-entry blank line, matching `log --oneline --name-only`/`--numstat`/`--raw`/etc.
 - Git parity: `Show_Commit` gains Format_Oneline so a `--pretty=oneline` header runs straight into the diff (no separating blank line), as git does.
