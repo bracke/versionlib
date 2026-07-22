@@ -17,8 +17,12 @@ package Version.Ref_Format is
       Format      : String := "";
       Sort_Key    : String := "";
       Count       : Natural := 0;
-      Ignore_Case : Boolean := False)
+      Ignore_Case : Boolean := False;
+      Quote       : String := "")
       return String_Vectors.Vector;
+   --  Quote names git's host-language quoting of each atom's value: "shell"
+   --  and "perl"/"python" single-quote it, "tcl" double-quotes it, each with
+   --  that language's escaping; "" (default) leaves values unquoted.
    --  One element per emitted ref line (no trailing newline). Patterns empty
    --  means "all refs". Sort_Key empty means ascending refname. Count 0 means
    --  unlimited. Raises Constraint_Error on an unknown %(atom) or --sort key,

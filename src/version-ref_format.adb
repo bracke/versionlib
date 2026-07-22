@@ -616,11 +616,55 @@ package body Version.Ref_Format is
       Format : String;
       Ref    : String;
       Id     : String;
-      Head   : String)
+      Head   : String;
+      Quote  : String := "")
       return String
    is
       Result : Unbounded_String;
       I      : Natural := Format'First;
+
+      --  for-each-ref's host-language modes quote each atom's VALUE (not the
+      --  literal text between atoms): --shell/--perl/--python in single quotes,
+      --  --tcl in double quotes, each with that language's escaping.
+      function Quote_Value (S : String) return String is
+         Out_Text : Unbounded_String;
+      begin
+         if Quote = "" then
+            return S;
+         elsif Quote = "tcl" then
+            Append (Out_Text, '"');
+            for C of S loop
+               if C = '"' or else C = '\' or else C = '$'
+                 or else C = '[' or else C = ']'
+               then
+                  Append (Out_Text, '\');
+               end if;
+               Append (Out_Text, C);
+            end loop;
+            Append (Out_Text, '"');
+         elsif Quote = "shell" then
+            Append (Out_Text, ''');
+            for C of S loop
+               if C = ''' then
+                  Append (Out_Text, "'\''");
+               else
+                  Append (Out_Text, C);
+               end if;
+            end loop;
+            Append (Out_Text, ''');
+         else
+            --  perl and python: single quotes, backslash-escaping ' and \.
+            Append (Out_Text, ''');
+            for C of S loop
+               if C = ''' or else C = '\' then
+                  Append (Out_Text, '\');
+               end if;
+               Append (Out_Text, C);
+            end loop;
+            Append (Out_Text, ''');
+         end if;
+         return To_String (Out_Text);
+      end Quote_Value;
 
       Obj  : constant Version.Objects.Git_Object :=
         Version.Objects.Read_Object (Repo, Version.Objects.To_Object_Id (Id));
@@ -1263,7 +1307,7 @@ package body Version.Ref_Format is
                               end if;
                            end;
                         else
-                           Append (Result, Atom_Value (Inner));
+                           Append (Result, Quote_Value (Atom_Value (Inner)));
                            I := Close + 1;
                         end if;
                      end;
@@ -1362,7 +1406,8 @@ package body Version.Ref_Format is
       Format      : String := "";
       Sort_Key    : String := "";
       Count       : Natural := 0;
-      Ignore_Case : Boolean := False)
+      Ignore_Case : Boolean := False;
+      Quote       : String := "")
       return String_Vectors.Vector
    is
       Rows     : Row_Vectors.Vector := Enumerate (Repo);
@@ -1454,7 +1499,7 @@ package body Version.Ref_Format is
             exit when Count /= 0 and then Emitted >= Count;
             Result.Append
               (Expand (Repo, Tmpl, To_String (R.Name), To_String (R.Id),
-                       Head));
+                       Head, Quote));
             Emitted := Emitted + 1;
          end loop;
       end;
