@@ -450,8 +450,14 @@ package body Version.Apply is
       function PLine (N : Positive) return String is
         (To_String (PLines.Element (N)));
 
+      --  A hunk line always carries a leading marker (' ' for context, even a
+      --  blank line is written " "). A completely empty line is not part of a
+      --  hunk -- it is the blank that ends one, e.g. the trailing line of a
+      --  format-patch mail before the next "diff --git" -- so it must not be
+      --  consumed as a context line (which, on a newly created file with no
+      --  old content, would falsely read as a context mismatch).
       function Is_Body_Line (S : String) return Boolean is
-        (S'Length = 0 or else S (S'First) in ' ' | '+' | '-' | '\');
+        (S'Length >= 1 and then S (S'First) in ' ' | '+' | '-' | '\');
 
       --  Parse a "--- "/"+++ " unified-diff body starting at Idx (which points
       --  at the "--- " line). Returns the computed File_Result fields.
