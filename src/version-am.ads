@@ -22,16 +22,22 @@ package Version.Am is
    --  Raised when the input is not a recognisable mailbox or patch at all.
    --  git reports "Patch format detection failed." and applies nothing.
 
+   --  What `am` does with a mail that has no diff, git's `--empty=<mode>`:
+   --  Stop (the default) halts with "Patch is empty."; Drop skips it silently
+   --  bar a "Skipping:" line; Keep records it as an empty commit.
+   type Empty_Action is (Stop, Drop, Keep_Empty);
+
    --  git's per-session flags. Quiet silences the "Applying: <subject>" line
    --  git prints for each patch; Signoff appends a Signed-off-by trailer;
-   --  Keep leaves the subject's "[PATCH]" prefix in place; and
+   --  Keep leaves the subject's "[PATCH]" prefix in place;
    --  Committer_Date_Is_Author_Date dates the commit from the patch rather
-   --  than from now.
+   --  than from now; and Empty selects the diff-less-mail behaviour.
    type Am_Options is record
       Quiet   : Boolean := False;
       Signoff : Boolean := False;
       Keep    : Boolean := False;
       Committer_Date_Is_Author_Date : Boolean := False;
+      Empty   : Empty_Action := Stop;
    end record;
 
    procedure Apply_Mailbox

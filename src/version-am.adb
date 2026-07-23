@@ -24,6 +24,7 @@ package body Version.Am is
    use Ada.Strings.Unbounded;
 
    LF : constant Character := Character'Val (10);
+   HT : constant Character := Character'Val (9);
 
    package Str_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,
@@ -258,6 +259,33 @@ package body Version.Am is
       Version.Files.Write_Binary_File (State_Path (Repo, Name), Content);
    end Write_State;
 
+   --  The session's flags outlive the invocation that set them: --continue
+   --  resumes a session started by an earlier command line, so they are kept
+   --  beside the patches rather than passed down the call chain.
+   function Session_Quiet
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Version.Files.Is_Ordinary_File (State_Path (Repo, "quiet")));
+
+   function Session_Signoff
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Version.Files.Is_Ordinary_File (State_Path (Repo, "sign")));
+
+   function Session_Keep
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Version.Files.Is_Ordinary_File (State_Path (Repo, "keep")));
+
+   function Session_Cdiad
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+     (Version.Files.Is_Ordinary_File (State_Path (Repo, "cdiad")));
+
+   function Session_Empty
+     (Repo : Version.Repository.Repository_Handle) return Empty_Action is
+     (if not Version.Files.Is_Ordinary_File (State_Path (Repo, "empty"))
+      then Stop
+      elsif Read_State (Repo, "empty") = "drop" then Drop
+      elsif Read_State (Repo, "empty") = "keep" then Keep_Empty
+      else Stop);
+
    ------------------------------  patch pieces  ----------------------------
 
    --  The mail parsing lives in Version.Mailbox (mailsplit/mailinfo use the
@@ -268,7 +296,8 @@ package body Version.Am is
       Author_Line : out Unbounded_String;
       Subject     : out Unbounded_String;
       Message     : out Unbounded_String;
-      Diff        : out Unbounded_String)
+      Diff        : out Unbounded_String;
+      Keep_Subject : Boolean := False)
    is
       Text : Unbounded_String;
    begin
@@ -279,21 +308,45 @@ package body Version.Am is
 
       declare
          Mail : constant Version.Mailbox.Message :=
-           Version.Mailbox.Parse (To_String (Text));
+           Version.Mailbox.Parse (To_String (Text), Keep_Subject);
 
          Patch : constant String := To_String (Mail.Patch);
          First : Natural := Patch'First;
 
-         --  The commit message stops before the mail's trailing blank lines.
+         --  git's default commit-message cleanup on the mail body: strip the
+         --  trailing whitespace off every line (so a "-- " signature line
+         --  becomes "--"), then drop the trailing blank lines. `mailinfo`
+         --  leaves the body verbatim; the cleanup is `am`'s.
          function Trimmed_Body return String is
-            B    : constant String := To_String (Mail.Body_Text);
-            Last : Integer := B'Last;
+            B      : constant String := To_String (Mail.Body_Text);
+            Out_S  : Unbounded_String;
+            Start  : Positive := B'First;
          begin
-            while Last >= B'First and then B (Last) = LF loop
-               Last := Last - 1;
+            for I in B'Range loop
+               if B (I) = LF then
+                  declare
+                     Stop : Integer := I - 1;
+                  begin
+                     while Stop >= Start
+                       and then (B (Stop) = ' ' or else B (Stop) = HT)
+                     loop
+                        Stop := Stop - 1;
+                     end loop;
+                     Append (Out_S, B (Start .. Stop) & LF);
+                  end;
+                  Start := I + 1;
+               end if;
             end loop;
 
-            return B (B'First .. Last);
+            declare
+               S    : constant String := To_String (Out_S);
+               Last : Integer := S'Last;
+            begin
+               while Last >= S'First and then S (Last) = LF loop
+                  Last := Last - 1;
+               end loop;
+               return S (S'First .. Last);
+            end;
          end Trimmed_Body;
 
          Body_Text : constant String := Trimmed_Body;
@@ -392,6 +445,29 @@ package body Version.Am is
       end loop;
    end Stage_Diff;
 
+   --  The "<ts> <tz>" tail of an author line "Name <email> <ts> <tz>": the
+   --  last two space-separated tokens. Used to date the committer from the
+   --  author under --committer-date-is-author-date.
+   function Date_Tail (Author_Line : String) return String is
+      Sp2 : Natural := 0;
+      Sp1 : Natural := 0;
+   begin
+      for I in reverse Author_Line'Range loop
+         if Author_Line (I) = ' ' then
+            if Sp2 = 0 then
+               Sp2 := I;
+            else
+               Sp1 := I;
+               exit;
+            end if;
+         end if;
+      end loop;
+      if Sp1 = 0 then
+         return "";
+      end if;
+      return Author_Line (Sp1 + 1 .. Author_Line'Last);
+   end Date_Tail;
+
    procedure Commit_From_Index
      (Repo        : Version.Repository.Repository_Handle;
       Author_Line : String;
@@ -407,26 +483,34 @@ package body Version.Am is
          Parents.Append (Version.Objects.To_Object_Id (Old));
       end if;
       declare
-         New_Commit : constant Version.Objects.Hex_Object_Id :=
-           Version.Write.Write_Commit_With_Author
-             (Repo, Tree, Parents, Author_Line, Message);
+         --  --committer-date-is-author-date: keep the configured committer
+         --  identity but stamp it with the patch author's date.
+         function New_Commit return Version.Objects.Hex_Object_Id is
+         begin
+            if Session_Cdiad (Repo) then
+               declare
+                  Ident : constant Version.Config.Identity :=
+                    Version.Config.User_Identity (Repo);
+                  Committer : constant String :=
+                    To_String (Ident.Name) & " <" & To_String (Ident.Email)
+                    & "> " & Date_Tail (Author_Line);
+               begin
+                  return Version.Write.Write_Commit_Raw
+                    (Repo, Tree, Parents, Author_Line, Committer, Message);
+               end;
+            else
+               return Version.Write.Write_Commit_With_Author
+                 (Repo, Tree, Parents, Author_Line, Message);
+            end if;
+         end New_Commit;
+
+         C : constant Version.Objects.Hex_Object_Id := New_Commit;
       begin
-         Advance_Head (Repo, New_Commit, Old, "am: " & Subject);
+         Advance_Head (Repo, C, Old, "am: " & Subject);
       end;
    end Commit_From_Index;
 
    --  Apply patch N's diff and commit it; raises Data_Error if it fails.
-   --  The session's flags outlive the invocation that set them: --continue
-   --  resumes a session started by an earlier command line, so they are kept
-   --  beside the patches rather than passed down the call chain.
-   function Session_Quiet
-     (Repo : Version.Repository.Repository_Handle) return Boolean is
-     (Version.Files.Is_Ordinary_File (State_Path (Repo, "quiet")));
-
-   function Session_Signoff
-     (Repo : Version.Repository.Repository_Handle) return Boolean is
-     (Version.Files.Is_Ordinary_File (State_Path (Repo, "sign")));
-
    procedure Apply_And_Commit
      (Repo  : Version.Repository.Repository_Handle;
       Lines : Str_Vectors.Vector;
@@ -434,12 +518,32 @@ package body Version.Am is
    is
       Author_Line, Subject, Message, Diff : Unbounded_String;
    begin
-      Parse_Patch (Lines, Author_Line, Subject, Message, Diff);
+      Parse_Patch
+        (Lines, Author_Line, Subject, Message, Diff,
+         Keep_Subject => Session_Keep (Repo));
 
-      --  A mail with no diff is an empty patch: git prints "Patch is empty."
-      --  (no "Applying:" line) and stops, leaving the session in progress.
+      --  A mail with no diff is an empty patch. --empty selects what happens:
+      --  Stop (default) halts with "Patch is empty." and exit 128; Drop skips
+      --  it with a "Skipping:" line; Keep records it as an empty commit.
       if Length (Diff) = 0 then
-         raise Am_Empty with "Patch is empty.";
+         case Session_Empty (Repo) is
+            when Stop =>
+               raise Am_Empty with "Patch is empty.";
+            when Drop =>
+               if not Session_Quiet (Repo) then
+                  Ada.Text_IO.Put_Line ("Skipping: " & To_String (Subject));
+               end if;
+               return;
+            when Keep_Empty =>
+               if not Session_Quiet (Repo) then
+                  Ada.Text_IO.Put_Line
+                    ("Creating an empty commit: " & To_String (Subject));
+               end if;
+               Commit_From_Index
+                 (Repo, To_String (Author_Line), To_String (Subject),
+                  To_String (Message));
+               return;
+         end case;
       end if;
 
       --  git names each patch as it starts it, before anything can fail, so
@@ -593,6 +697,17 @@ package body Version.Am is
       if Options.Signoff then
          Write_State (Repo, "sign", "");
       end if;
+      if Options.Keep then
+         Write_State (Repo, "keep", "");
+      end if;
+      if Options.Committer_Date_Is_Author_Date then
+         Write_State (Repo, "cdiad", "");
+      end if;
+      case Options.Empty is
+         when Stop       => null;
+         when Drop       => Write_State (Repo, "empty", "drop");
+         when Keep_Empty => Write_State (Repo, "empty", "keep");
+      end case;
 
       Write_State (Repo, "orig-head", Version.Refs.Current_Commit_Id (Repo));
       Write_State (Repo, "last",

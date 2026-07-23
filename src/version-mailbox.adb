@@ -384,6 +384,19 @@ package body Version.Mailbox is
       Result.Author :=
         To_Unbounded_String (Decode_RFC2047 (To_String (Result.Author)));
 
+      --  git's mailinfo strips trailing whitespace off the subject line.
+      declare
+         S    : constant String := To_String (Result.Subject);
+         Last : Integer := S'Last;
+      begin
+         while Last >= S'First
+           and then (S (Last) = ' ' or else S (Last) = Character'Val (9))
+         loop
+            Last := Last - 1;
+         end loop;
+         Result.Subject := To_Unbounded_String (S (S'First .. Last));
+      end;
+
       --  "Name <mail>" -> the two halves.
       declare
          Author : constant String := To_String (Result.Author);
