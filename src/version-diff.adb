@@ -1602,13 +1602,16 @@ package body Version.Diff is
               (Files, Show_Stat => True, Show_Summary => False,
                Min_Count_Width => 4, Apply_Style => True);
 
+         when Summary_Diffstat =>
+            return Emit_Stat
+              (Files, Show_Stat => True, Show_Summary => False);
+
          when Summary_Shortstat =>
             return Emit_Stat
               (Files, Show_Stat => False, Show_Summary => False,
                Show_Shortstat => True);
       end case;
    end Summarize_Patch;
-
 
    function Diff_Sides
      (Repo        : Version.Repository.Repository_Handle;

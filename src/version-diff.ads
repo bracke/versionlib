@@ -185,8 +185,11 @@ package Version.Diff is
       New_Text : String;
       Context  : Natural := 3) return String;
 
-   type Patch_Summary_Mode is (Summary_Stat, Summary_Numstat,
+   type Patch_Summary_Mode is (Summary_Stat, Summary_Diffstat, Summary_Numstat,
                               Summary_Shortstat, Summary_Names);
+   --  Summary_Stat is `git apply --stat` (dest-only renames, a wider count
+   --  column, "Bin" for binaries); Summary_Diffstat is the plain `git diff
+   --  --stat` diffstat (rename "{old => new}", the graph scaled to the input).
 
    function Summarize_Patch
      (Patch : String;

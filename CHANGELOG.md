@@ -1,3 +1,4 @@
+- Git parity: `Version.Diff.Summarize_Patch` gains a `Summary_Diffstat` mode -- the plain `git diff --stat` diffstat (rename "{old => new}", graph scaled to the input) as distinct from the `apply --stat` `Summary_Stat`.
 - Git parity: `am -k` keeps the subject's bracket prefix; `--committer-date-is-author-date` stamps the committer with the patch author's date; and `--empty=drop`/`--empty=keep` skip or record a diff-less mail ("Skipping:" / "Creating an empty commit:") instead of stopping.
 - Git parity: `am` applies git's commit-message cleanup -- trailing whitespace is stripped from every body line (so a "-- " signature becomes "--"), matching git's message bytes.
 - Git parity: `mailinfo` (and `am`) strip trailing whitespace off the decoded subject line.
