@@ -428,11 +428,19 @@ package body Version.Am is
      (Version.Files.Is_Ordinary_File (State_Path (Repo, "sign")));
 
    procedure Apply_And_Commit
-     (Repo : Version.Repository.Repository_Handle; Lines : Str_Vectors.Vector)
+     (Repo  : Version.Repository.Repository_Handle;
+      Lines : Str_Vectors.Vector;
+      Number : Natural)
    is
       Author_Line, Subject, Message, Diff : Unbounded_String;
    begin
       Parse_Patch (Lines, Author_Line, Subject, Message, Diff);
+
+      --  A mail with no diff is an empty patch: git prints "Patch is empty."
+      --  (no "Applying:" line) and stops, leaving the session in progress.
+      if Length (Diff) = 0 then
+         raise Am_Empty with "Patch is empty.";
+      end if;
 
       --  git names each patch as it starts it, before anything can fail, so
       --  the last line printed is the patch that broke.
@@ -440,7 +448,16 @@ package body Version.Am is
          Ada.Text_IO.Put_Line ("Applying: " & To_String (Subject));
       end if;
 
-      Version.Apply.Apply_Patch (Repo, To_String (Diff));
+      begin
+         Version.Apply.Apply_Patch (Repo, To_String (Diff));
+      exception
+         when Ada.IO_Exceptions.Data_Error =>
+            --  git's "Patch failed at <NNNN> <subject>" (stdout); the session
+            --  is left in progress for --continue / --skip / --abort.
+            raise Am_Conflict
+              with "Patch failed at " & Pad4 (Number) & " "
+                   & To_String (Subject);
+      end;
       Stage_Diff (Repo, To_String (Diff));
 
       declare
@@ -487,13 +504,7 @@ package body Version.Am is
                Lines : Str_Vectors.Vector;
             begin
                Split_Lines (Patch, Lines);
-               begin
-                  Apply_And_Commit (Repo, Lines);
-               exception
-                  when Ada.IO_Exceptions.Data_Error =>
-                     raise Am_Conflict
-                       with "Patch failed at " & Pad4 (N);
-               end;
+               Apply_And_Commit (Repo, Lines, N);
             end;
             Write_State
               (Repo, "next",
@@ -529,8 +540,38 @@ package body Version.Am is
                 & " (--continue / --skip / --abort)";
       end if;
 
-      Version.Files.Create_Directory_If_Missing (State_Dir (Repo));
       Split_Lines (Mailbox, Lines);
+
+      --  Format detection: git accepts an mbox ("From " line), a bare mail
+      --  (with headers) or a raw patch (a diff). Input that is none of these
+      --  is rejected up front with "Patch format detection failed." -- nothing
+      --  is applied and no session is started.
+      declare
+         Recognised : Boolean := False;
+      begin
+         for N in Lines.First_Index .. Lines.Last_Index loop
+            declare
+               L : constant String := To_String (Lines.Element (N));
+            begin
+               if Is_From_Line (L)
+                 or else Ada.Strings.Fixed.Index (L, "diff --git ") = L'First
+                 or else (L'Length >= 4
+                          and then L (L'First .. L'First + 3) = "--- ")
+                 or else Ada.Strings.Fixed.Index (L, "Subject:") = L'First
+                 or else Ada.Strings.Fixed.Index (L, "From:") = L'First
+               then
+                  Recognised := True;
+                  exit;
+               end if;
+            end;
+         end loop;
+         if not Recognised then
+            raise Format_Detection_Failed
+              with "Patch format detection failed.";
+         end if;
+      end;
+
+      Version.Files.Create_Directory_If_Missing (State_Dir (Repo));
       for N in Lines.First_Index .. Lines.Last_Index loop
          if Is_From_Line (To_String (Lines.Element (N))) and then Length (Current) > 0
          then

@@ -10,7 +10,17 @@ package Version.Am is
    Am_Conflict : exception;
    --  Raised by Apply_Mailbox / Continue / Skip when a patch fails to apply.
    --  The session is left in progress (`.git/rebase-apply`) for the user to
-   --  resolve and then Continue, Skip, or Abort_Am.
+   --  resolve and then Continue, Skip, or Abort_Am. The message is git's
+   --  "Patch failed at <NNNN> <subject>" line, which git prints to stdout.
+
+   Am_Empty : exception;
+   --  Raised when a mail carries a commit message but no diff (an empty patch).
+   --  git stops with "Patch is empty." and leaves the session in progress so
+   --  it can be resumed with --allow-empty / --skip / --abort.
+
+   Format_Detection_Failed : exception;
+   --  Raised when the input is not a recognisable mailbox or patch at all.
+   --  git reports "Patch format detection failed." and applies nothing.
 
    --  git's per-session flags. Quiet silences the "Applying: <subject>" line
    --  git prints for each patch; Signoff appends a Signed-off-by trailer;
