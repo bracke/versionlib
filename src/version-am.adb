@@ -25,6 +25,24 @@ package body Version.Am is
 
    LF : constant Character := Character'Val (10);
    HT : constant Character := Character'Val (9);
+   CR : constant Character := Character'Val (13);
+
+   --  Strip surrounding whitespace INCLUDING the newline. Ada.Strings.Fixed
+   --  .Trim(Both) removes only spaces/tabs, not LF/CR, and git writes every
+   --  state value ("1", "t", a sha) with a trailing newline -- so a plain
+   --  Trim leaves the LF on and Natural'Value / a revision lookup then fails.
+   function Chomp (S : String) return String is
+      First : Natural := S'First;
+      Last  : Natural := S'Last;
+   begin
+      while Last >= First and then S (Last) in ' ' | HT | LF | CR loop
+         Last := Last - 1;
+      end loop;
+      while First <= Last and then S (First) in ' ' | HT | LF | CR loop
+         First := First + 1;
+      end loop;
+      return S (First .. Last);
+   end Chomp;
 
    package Str_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Positive,
@@ -249,8 +267,7 @@ package body Version.Am is
      (Repo : Version.Repository.Repository_Handle; Name : String) return Natural
    is
    begin
-      return Natural'Value
-        (Ada.Strings.Fixed.Trim (Read_State (Repo, Name), Ada.Strings.Both));
+      return Natural'Value (Chomp (Read_State (Repo, Name)));
    end Read_Int;
 
    procedure Write_State
@@ -261,29 +278,37 @@ package body Version.Am is
 
    --  The session's flags outlive the invocation that set them: --continue
    --  resumes a session started by an earlier command line, so they are kept
-   --  beside the patches rather than passed down the call chain.
+   --  beside the patches rather than passed down the call chain. git writes
+   --  each as a one-byte "t"/"f" file (not the file's mere presence), so an
+   --  am session that git itself left behind reads back correctly here.
+   function Session_Flag
+     (Repo : Version.Repository.Repository_Handle; Name : String)
+      return Boolean is
+     (Version.Files.Is_Ordinary_File (State_Path (Repo, Name))
+      and then Chomp (Read_State (Repo, Name)) = "t");
+
    function Session_Quiet
      (Repo : Version.Repository.Repository_Handle) return Boolean is
-     (Version.Files.Is_Ordinary_File (State_Path (Repo, "quiet")));
+     (Session_Flag (Repo, "quiet"));
 
    function Session_Signoff
      (Repo : Version.Repository.Repository_Handle) return Boolean is
-     (Version.Files.Is_Ordinary_File (State_Path (Repo, "sign")));
+     (Session_Flag (Repo, "sign"));
 
    function Session_Keep
      (Repo : Version.Repository.Repository_Handle) return Boolean is
-     (Version.Files.Is_Ordinary_File (State_Path (Repo, "keep")));
+     (Session_Flag (Repo, "keep"));
 
    function Session_Cdiad
      (Repo : Version.Repository.Repository_Handle) return Boolean is
-     (Version.Files.Is_Ordinary_File (State_Path (Repo, "cdiad")));
+     (Session_Flag (Repo, "cdiad"));
 
    function Session_Empty
      (Repo : Version.Repository.Repository_Handle) return Empty_Action is
      (if not Version.Files.Is_Ordinary_File (State_Path (Repo, "empty"))
       then Stop
-      elsif Read_State (Repo, "empty") = "drop" then Drop
-      elsif Read_State (Repo, "empty") = "keep" then Keep_Empty
+      elsif Chomp (Read_State (Repo, "empty")) = "drop" then Drop
+      elsif Chomp (Read_State (Repo, "empty")) = "keep" then Keep_Empty
       else Stop);
 
    ------------------------------  patch pieces  ----------------------------
@@ -691,25 +716,27 @@ package body Version.Am is
          return;
       end if;
 
-      if Options.Quiet then
-         Write_State (Repo, "quiet", "");
-      end if;
-      if Options.Signoff then
-         Write_State (Repo, "sign", "");
-      end if;
-      if Options.Keep then
-         Write_State (Repo, "keep", "");
-      end if;
-      if Options.Committer_Date_Is_Author_Date then
-         Write_State (Repo, "cdiad", "");
-      end if;
+      --  git records each flag as a "t"/"f" byte, always present; match that
+      --  so the state this writes is readable by git and vice versa.
+      Write_State (Repo, "quiet", (if Options.Quiet then "t" else "f"));
+      Write_State (Repo, "sign", (if Options.Signoff then "t" else "f"));
+      Write_State (Repo, "keep", (if Options.Keep then "t" else "f"));
+      Write_State
+        (Repo, "cdiad",
+         (if Options.Committer_Date_Is_Author_Date then "t" else "f"));
       case Options.Empty is
          when Stop       => null;
          when Drop       => Write_State (Repo, "empty", "drop");
          when Keep_Empty => Write_State (Repo, "empty", "keep");
       end case;
 
+      --  Both our own resume path and git's --abort read the pre-am tip; git
+      --  keeps it in .git/ORIG_HEAD, so write there too.
       Write_State (Repo, "orig-head", Version.Refs.Current_Commit_Id (Repo));
+      Version.Files.Write_Binary_File
+        (Version.Files.Join
+           (Version.Repository.Git_Dir (Repo), "ORIG_HEAD"),
+         Version.Refs.Current_Commit_Id (Repo) & LF);
       Write_State (Repo, "last",
                    Ada.Strings.Fixed.Trim (Natural'Image (Count),
                                            Ada.Strings.Left));
@@ -729,7 +756,14 @@ package body Version.Am is
          Author_Line, Subject, Message, Diff : Unbounded_String;
       begin
          Split_Lines (Read_State (Repo, Pad4 (N)), Lines);
-         Parse_Patch (Lines, Author_Line, Subject, Message, Diff);
+         Parse_Patch
+           (Lines, Author_Line, Subject, Message, Diff,
+            Keep_Subject => Session_Keep (Repo));
+         --  git names the patch it is finishing, as it does when first
+         --  applying one, so `am --continue` reports "Applying: <subject>".
+         if not Session_Quiet (Repo) then
+            Ada.Text_IO.Put_Line ("Applying: " & To_String (Subject));
+         end if;
          Commit_From_Index
            (Repo, To_String (Author_Line), To_String (Subject),
             To_String (Message));
@@ -757,6 +791,21 @@ package body Version.Am is
       Run_Queue (Repo);
    end Skip;
 
+   --  The tip the session started at: our own sessions keep it beside the
+   --  patches as `orig-head`; git only writes .git/ORIG_HEAD, so fall back to
+   --  it so `am --abort` works on a session git itself left behind.
+   function Original_Head
+     (Repo : Version.Repository.Repository_Handle) return String is
+   begin
+      if Version.Files.Is_Ordinary_File (State_Path (Repo, "orig-head")) then
+         return Chomp (Read_State (Repo, "orig-head"));
+      end if;
+      return Chomp
+               (Version.Files.Read_Binary_File
+                  (Version.Files.Join
+                     (Version.Repository.Git_Dir (Repo), "ORIG_HEAD")));
+   end Original_Head;
+
    procedure Abort_Am (Repo : Version.Repository.Repository_Handle) is
    begin
       if not In_Progress (Repo) then
@@ -764,10 +813,35 @@ package body Version.Am is
            with "am: no session in progress";
       end if;
       Version.Reset.Reset_To_Commit
-        (Repo, Version.Reset.Hard,
-         Ada.Strings.Fixed.Trim (Read_State (Repo, "orig-head"),
-                                 Ada.Strings.Both));
+        (Repo, Version.Reset.Hard, Original_Head (Repo));
       Version.Files.Delete_Directory_Tree_If_Exists (State_Dir (Repo));
    end Abort_Am;
+
+   procedure Quit (Repo : Version.Repository.Repository_Handle) is
+   begin
+      if not In_Progress (Repo) then
+         raise Ada.IO_Exceptions.Use_Error
+           with "am: no session in progress";
+      end if;
+      --  `git am --quit`: drop the session but leave HEAD, index and tree
+      --  exactly where they are -- no reset, unlike --abort.
+      Version.Files.Delete_Directory_Tree_If_Exists (State_Dir (Repo));
+   end Quit;
+
+   function Current_Patch
+     (Repo : Version.Repository.Repository_Handle;
+      Diff_Only : Boolean) return String is
+   begin
+      if not In_Progress (Repo) then
+         raise Ada.IO_Exceptions.Use_Error
+           with "am: no session in progress";
+      end if;
+      --  --show-current-patch=diff prints the applied diff (`patch`);
+      --  the default / =raw prints the whole mail (the numbered patch file).
+      if Diff_Only then
+         return Version.Files.Read_Binary_File (State_Path (Repo, "patch"));
+      end if;
+      return Read_State (Repo, Pad4 (Read_Int (Repo, "next")));
+   end Current_Patch;
 
 end Version.Am;

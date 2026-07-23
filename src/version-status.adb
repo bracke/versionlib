@@ -1856,6 +1856,24 @@ package body Version.Status is
          Print_Rebase_Status (Repo);
       else
          Print_Head_Line (Repo);
+
+         --  An interrupted `git am` leaves .git/rebase-apply with an
+         --  `applying` marker (a rebase using the same directory writes
+         --  `rebasing` instead). HEAD is not detached, so the branch line
+         --  stands and git adds an am block under it.
+         if Version.Files.Is_Ordinary_File
+              (Version.Files.Join
+                 (Version.Repository.Git_Dir (Repo), "rebase-apply/applying"))
+         then
+            Ada.Text_IO.Put_Line ("You are in the middle of an am session.");
+            Ada.Text_IO.Put_Line
+              ("  (fix conflicts and then run ""git am --continue"")");
+            Ada.Text_IO.Put_Line
+              ("  (use ""git am --skip"" to skip this patch)");
+            Ada.Text_IO.Put_Line
+              ("  (use ""git am --abort"" to restore the original branch)");
+            Ada.Text_IO.New_Line;
+         end if;
       end if;
 
       if Is_Initial then

@@ -63,6 +63,17 @@ package Version.Am is
    --  `git am --abort`: reset HEAD, index and working tree to where the session
    --  started and remove the session state.
 
+   procedure Quit
+     (Repo : Version.Repository.Repository_Handle);
+   --  `git am --quit`: remove the session state but leave HEAD, index and the
+   --  working tree untouched (no reset), unlike Abort_Am.
+
+   function Current_Patch
+     (Repo : Version.Repository.Repository_Handle;
+      Diff_Only : Boolean) return String;
+   --  `git am --show-current-patch[=raw|diff]`: the mail of the patch that
+   --  stopped the session (raw, the default) or just its diff (Diff_Only).
+
    function In_Progress
      (Repo : Version.Repository.Repository_Handle) return Boolean;
    --  True when an am session is interrupted (`.git/rebase-apply` exists).
