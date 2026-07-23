@@ -16,8 +16,10 @@ package Version.Show is
       No_Patch     : Boolean := False;
       Oneline      : Boolean := False;
       Format       : String := "";
-      Format_Oneline : Boolean := False)
+      Format_Oneline : Boolean := False;
+      Date_Mode    : String := "")
       return String;
+   --  Date_Mode is git's --date=<mode> for the plain %ad/%cd date atoms.
    --  Format_Oneline marks a `--pretty=oneline` format so the header runs
    --  straight into the diff (no separating blank line), as git does.
    --  Options are forwarded to the embedded diff (e.g. Stat for `show --stat`).
@@ -32,7 +34,8 @@ package Version.Show is
       No_Patch     : Boolean := False;
       Oneline      : Boolean := False;
       Format       : String := "";
-      Format_Oneline : Boolean := False)
+      Format_Oneline : Boolean := False;
+      Date_Mode    : String := "")
       return String;
    --  `git show <object>` for any object type: a commit via Show_Commit, an
    --  annotated tag as its "tag/Tagger/Date" header and message followed by the

@@ -16,7 +16,12 @@ package Version.Pretty_Format is
    function Expand
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
-      Format    : String)
+      Format    : String;
+      Date_Mode : String := "")
       return String;
+   --  Date_Mode is git's --date=<mode>: it changes what the plain %ad/%cd
+   --  atoms render ("iso"/"iso8601", "iso-strict", "short", "raw", "unix",
+   --  "relative", "human"); "" keeps git's default date. The explicit date
+   --  atoms (%ai/%as/%at/...) are unaffected.
 
 end Version.Pretty_Format;

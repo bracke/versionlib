@@ -29,7 +29,8 @@ package body Version.Show is
       No_Patch     : Boolean := False;
       Oneline      : Boolean := False;
       Format       : String := "";
-      Format_Oneline : Boolean := False)
+      Format_Oneline : Boolean := False;
+      Date_Mode    : String := "")
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -51,10 +52,12 @@ package body Version.Show is
          Append
            (Result,
             Version.Log.Log_Formatted_From_Commit
-              (Repo, Commit_Id, Format, Max_Count => 1));
-         --  git's oneline pretty format runs straight into the diff; other
-         --  formats get a blank line separating them from it.
-         if not Format_Oneline then
+              (Repo, Commit_Id, Format, Max_Count => 1,
+               Date_Mode => Date_Mode));
+         --  Other formats get a blank line separating them from the diff --
+         --  but only when there is a diff (not under -s) and not for the
+         --  oneline pretty form, which runs straight in.
+         if not Format_Oneline and then not No_Patch then
             Append (Result, Character'Val (10));
          end if;
       else
@@ -105,7 +108,8 @@ package body Version.Show is
       No_Patch     : Boolean := False;
       Oneline      : Boolean := False;
       Format       : String := "";
-      Format_Oneline : Boolean := False)
+      Format_Oneline : Boolean := False;
+      Date_Mode    : String := "")
       return String
    is
       Raw : constant Version.Objects.Hex_Object_Id :=
@@ -144,7 +148,8 @@ package body Version.Show is
       case Version.Objects.Kind (Obj) is
          when Version.Objects.Commit_Object =>
             return Show_Commit
-              (Repo, Raw, Options, No_Patch, Oneline, Format, Format_Oneline);
+              (Repo, Raw, Options, No_Patch, Oneline, Format, Format_Oneline,
+               Date_Mode);
 
          when Version.Objects.Tag_Object =>
             declare
@@ -183,7 +188,8 @@ package body Version.Show is
                     (Repo,
                      Version.Objects.To_String
                        (Version.Objects.Tag_Target_Id (Obj)),
-                     Options, No_Patch, Oneline, Format, Format_Oneline));
+                     Options, No_Patch, Oneline, Format, Format_Oneline,
+                     Date_Mode));
                return To_String (Result);
             end;
 

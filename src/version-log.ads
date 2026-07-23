@@ -43,7 +43,8 @@ package Version.Log is
      (Repo    : Version.Repository.Repository_Handle;
       Commits : Version.History.Commit_Id_Vectors.Vector;
       Format  : String;
-      Terminate_Records : Boolean := True) return String;
+      Terminate_Records : Boolean := True;
+      Date_Mode : String := "") return String;
    --  Render an already-selected list of commits. The caller does the
    --  revision walk, so ranges, exclusions, path limits and ordering are
    --  decided once and shared with rev-list rather than re-derived here.
@@ -91,7 +92,8 @@ package Version.Log is
       Commit_Id : Version.Objects.Hex_Object_Id;
       Format    : String;
       Terminate_Records : Boolean := True;
-      Max_Count : Natural := 0)
+      Max_Count : Natural := 0;
+      Date_Mode : String := "")
       return String;
    --  Walk first-parent history from Commit_Id, expanding each commit through
    --  Version.Pretty_Format with Format. Terminate_Records = True appends a

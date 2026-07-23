@@ -467,6 +467,11 @@ package body Version.Pretty_Format is
       return Img (Integer (Id.Epoch));
    end Date_Unix;
 
+   function Date_Raw (Id : Identity) return String is
+   begin
+      return Img (Integer (Id.Epoch)) & " " & To_String (Id.TZ);
+   end Date_Raw;
+
    --  Current time as a Unix timestamp.
    function Now_Unix return Long_Long_Integer is
    begin
@@ -1160,7 +1165,8 @@ package body Version.Pretty_Format is
    function Expand
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
-      Format    : String)
+      Format    : String;
+      Date_Mode : String := "")
       return String
    is
       Cache  : Version.Object_Cache.Object_Cache;
@@ -1324,7 +1330,27 @@ package body Version.Pretty_Format is
             when 'E' => return Mapped_Email;
             when 'l' => return Email_Local_Part (To_String (Id.Email));
             when 'L' => return Email_Local_Part (Mapped_Email);
-            when 'd' => return Date_Default (Id);
+            when 'd' =>
+               --  git's --date=<mode> overrides the plain %ad/%cd rendering.
+               if Date_Mode = "iso" or else Date_Mode = "iso8601" then
+                  return Date_ISO (Id);
+               elsif Date_Mode = "iso-strict"
+                 or else Date_Mode = "iso8601-strict"
+               then
+                  return Date_ISO_Strict (Id);
+               elsif Date_Mode = "short" then
+                  return Date_Short (Id);
+               elsif Date_Mode = "raw" then
+                  return Date_Raw (Id);
+               elsif Date_Mode = "unix" then
+                  return Date_Unix (Id);
+               elsif Date_Mode = "relative" then
+                  return Show_Relative (Now_Unix - Id.Epoch);
+               elsif Date_Mode = "human" then
+                  return Show_Human (Id);
+               else
+                  return Date_Default (Id);
+               end if;
             when 'D' => return Date_RFC2822 (Id);
             when 'i' => return Date_ISO (Id);
             when 'I' => return Date_ISO_Strict (Id);

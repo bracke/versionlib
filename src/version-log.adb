@@ -951,7 +951,8 @@ package body Version.Log is
      (Repo    : Version.Repository.Repository_Handle;
       Commits : Version.History.Commit_Id_Vectors.Vector;
       Format  : String;
-      Terminate_Records : Boolean := True) return String
+      Terminate_Records : Boolean := True;
+      Date_Mode : String := "") return String
    is
       LF      : constant Character := Character'Val (10);
       Result  : Unbounded_String;
@@ -965,7 +966,7 @@ package body Version.Log is
             end if;
             First := False;
             Append (Result, Version.Pretty_Format.Expand
-                              (Repo, Current_Id, Format));
+                              (Repo, Current_Id, Format, Date_Mode));
             if Terminate_Records then
                Append (Result, LF);
             end if;
@@ -979,7 +980,8 @@ package body Version.Log is
       Commit_Id : Version.Objects.Hex_Object_Id;
       Format    : String;
       Terminate_Records : Boolean := True;
-      Max_Count : Natural := 0) return String
+      Max_Count : Natural := 0;
+      Date_Mode : String := "") return String
    is
       Objects : Version.Object_Cache.Object_Cache;
    begin
@@ -987,7 +989,7 @@ package body Version.Log is
         (Repo,
          To_Commit_List (Collect_History
                            (Repo, Objects, Commit_Id, Max_Count)),
-         Format, Terminate_Records);
+         Format, Terminate_Records, Date_Mode);
    end Log_Formatted_From_Commit;
 
 end Version.Log;
