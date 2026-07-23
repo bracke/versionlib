@@ -1,3 +1,4 @@
+- Git parity: a commit's message keeps exactly one trailing newline when non-empty and none when empty (Commit_Content_From_Header), matching git's `commit-tree </dev/null`.
 - Git parity: `--date=<mode>` (iso/iso-strict/short/raw/unix/relative/human) now drives the plain `%ad`/`%cd` pretty-format atoms, threaded through Pretty_Format.Expand, Log_Formatted and Show_Commit/Show_Object; and a `--format` header no longer emits a trailing blank line under `-s` (no diff follows).
 - Git parity: `Version.Show.Show_Object` shows any object type — a commit via Show_Commit, an annotated tag as its tag/Tagger/Date header + message followed by the object it points at, a tree as `tree <spec>` + top-level entries, and a blob verbatim.
 - Git parity: `Version.Shortlog.Summarize` gains a commit-list overload with a With_Email flag (groups by the full "Name <email>" author identity), so `shortlog` can summarize an arbitrary rev-list selection.

@@ -571,9 +571,15 @@ package body Version.Write is
          Append (Content, GPGSig_Header (Signature));
       end if;
 
+      --  The blank line separating the header from the message. git's message
+      --  ends with exactly one newline when there is one, and adds none for an
+      --  empty message (as `commit-tree </dev/null` produces); callers pass the
+      --  message without its trailing newline.
       Append (Content, Character'Val (10));
-      Append (Content, Message);
-      Append (Content, Character'Val (10));
+      if Message'Length > 0 then
+         Append (Content, Message);
+         Append (Content, Character'Val (10));
+      end if;
 
       return To_String (Content);
    end Commit_Content_From_Header;
