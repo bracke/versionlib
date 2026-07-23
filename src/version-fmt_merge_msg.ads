@@ -14,8 +14,12 @@ package Version.Fmt_Merge_Msg is
      (Repo           : Version.Repository.Repository_Handle;
       Input          : String;
       Current_Branch : String;
-      Log_Entries    : Integer := 0)
+      Log_Entries    : Integer := 0;
+      Subject        : String := "")
       return String;
+   --  Subject is `-m <message>`: when non-empty it replaces the computed
+   --  "Merge ..." subject line, while any --log shortlog and tag messages
+   --  still follow it.
    --  Log_Entries is `--log[=<n>]`: 0 for no shortlog (the default), -1 for
    --  `--log` with no limit, or a positive count. The shortlog lists the
    --  subjects of the commits being merged, newest first, under a "* <branch>:"

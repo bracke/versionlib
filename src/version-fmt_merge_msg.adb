@@ -77,19 +77,27 @@ package body Version.Fmt_Merge_Msg is
       return To_String (Result);
    end Names_List;
 
-   --  Parse a FETCH_HEAD description ("branch 'x' of URL", "tag 'x'", ...).
+   --  Parse a FETCH_HEAD description. git only gives "branch 'x' of URL" and
+   --  "tag 'x' of URL" the name/source treatment; every other shape (a bare
+   --  "HEAD of URL", a "commit 'sha' of URL", a raw URL) is merged as an
+   --  opaque commit and printed verbatim after the word "commit". Signalled
+   --  here by leaving Name empty for the caller's raw-commit path.
    procedure Parse_Description
      (Desc      : String;
       Type_Word : out Unbounded_String;
       Name      : out Unbounded_String;
       Src       : out Unbounded_String)
    is
+      function Leads (Prefix : String) return Boolean is
+        (Desc'Length >= Prefix'Length
+         and then Desc (Desc'First .. Desc'First + Prefix'Length - 1)
+                  = Prefix);
       Q1 : constant Natural := Ada.Strings.Fixed.Index (Desc, "'");
    begin
       Type_Word := Null_Unbounded_String;
       Name      := Null_Unbounded_String;
       Src       := Null_Unbounded_String;
-      if Q1 = 0 then
+      if Q1 = 0 or else not (Leads ("branch ") or else Leads ("tag ")) then
          return;
       end if;
       Type_Word :=
@@ -153,7 +161,8 @@ package body Version.Fmt_Merge_Msg is
      (Repo           : Version.Repository.Repository_Handle;
       Input          : String;
       Current_Branch : String;
-      Log_Entries    : Integer := 0)
+      Log_Entries    : Integer := 0;
+      Subject        : String := "")
       return String
    is
       Log_Written : Boolean := False;
@@ -192,6 +201,8 @@ package body Version.Fmt_Merge_Msg is
       Entries : Entry_Vectors.Vector;
       Groups  : Group_Vectors.Vector;
       Result  : Unbounded_String;
+      --  The auto-generated subject is built here; `-m <msg>` replaces it.
+      Subj    : Unbounded_String;
    begin
       --  Parse for-merge lines.
       for Line of Lines loop
@@ -221,11 +232,23 @@ package body Version.Fmt_Merge_Msg is
                                 (Entry_Rec'
                                    (Type_Word => TW, Name => NM, Src => SR,
                                     Sha => To_Unbounded_String (Sha)));
+                           elsif Ada.Strings.Fixed.Index (Desc, " of ") > 0 then
+                              --  A "<what> of <url>" that is neither a branch
+                              --  nor a tag (e.g. "HEAD of ../src",
+                              --  "commit 'sha' of ../src") is merged as an
+                              --  opaque commit and printed verbatim after the
+                              --  word "commit".
+                              Entries.Append
+                                (Entry_Rec'
+                                   (Type_Word => To_Unbounded_String ("commit"),
+                                    Name      => To_Unbounded_String (Desc),
+                                    Src       => Null_Unbounded_String,
+                                    Sha       => To_Unbounded_String (Sha)));
                            else
-                              --  A description that is just a URL is a fetch
-                              --  of that remote's HEAD; git reports it as the
-                              --  URL alone, or as "HEAD" beside named refs
-                              --  from the same URL.
+                              --  A description that is just a URL is a fetch of
+                              --  that remote's HEAD; git reports it as the URL
+                              --  alone, or as "HEAD" beside named refs from the
+                              --  same URL.
                               Entries.Append
                                 (Entry_Rec'
                                    (Type_Word => Null_Unbounded_String,
@@ -274,7 +297,7 @@ package body Version.Fmt_Merge_Msg is
          return "";
       end if;
 
-      Append (Result, "Merge ");
+      Append (Subj, "Merge ");
 
       --  git groups by source: every kind fetched from one URL is listed
       --  together and the "of <url>" is written once, after all of them.
@@ -318,6 +341,15 @@ package body Version.Fmt_Merge_Msg is
                            end if;
                            if Is_Head then
                               Append (Part, "HEAD");
+                           elsif To_String (G.Type_Word) = "commit" then
+                              --  An opaque commit: git prints the raw
+                              --  description verbatim, unquoted, after
+                              --  "commit" (no "of <src>" is appended).
+                              Only_Head := False;
+                              Append
+                                (Part,
+                                 "commit "
+                                 & G.Names.Element (G.Names.First_Index));
                            else
                               Only_Head := False;
                               Append (Part, Word & " " & Names_List (G.Names));
@@ -328,7 +360,7 @@ package body Version.Fmt_Merge_Msg is
                   end loop;
 
                   if Emitted > 0 then
-                     Append (Result, "; ");
+                     Append (Subj, "; ");
                   end if;
 
                   --  A source that contributed nothing but its HEAD is
@@ -337,11 +369,11 @@ package body Version.Fmt_Merge_Msg is
                   --  came from here -- "Merge branch 'topic'", not
                   --  "Merge branch 'topic' of .".
                   if Only_Head and then Length (Src) > 0 then
-                     Append (Result, To_String (Src));
+                     Append (Subj, To_String (Src));
                   else
-                     Append (Result, To_String (Part));
+                     Append (Subj, To_String (Part));
                      if Length (Src) > 0 and then To_String (Src) /= "." then
-                        Append (Result, " of " & To_String (Src));
+                        Append (Subj, " of " & To_String (Src));
                      end if;
                   end if;
                   Emitted := Emitted + 1;
@@ -355,8 +387,12 @@ package body Version.Fmt_Merge_Msg is
         and then Current_Branch /= "master"
         and then Current_Branch /= "main"
       then
-         Append (Result, " into " & Current_Branch);
+         Append (Subj, " into " & Current_Branch);
       end if;
+
+      --  `-m <msg>` replaces the whole computed subject line; the log and any
+      --  tag messages below still follow.
+      Append (Result, (if Subject'Length > 0 then Subject else To_String (Subj)));
 
       --  `--log`: under the subject, the commits each merged ref brings that
       --  the current branch does not already have, newest first. A limit that
@@ -376,7 +412,14 @@ package body Version.Fmt_Merge_Msg is
                   else Natural'Min (Total, Log_Entries));
             begin
                if Total > 0 then
-                  Append (Result, LF & LF & "* " & To_String (E.Name) & ":");
+                  --  git heads each list with the merged ref's description:
+                  --  "'<name>' of <src>" (or just "'<name>'" for a local ref).
+                  Append
+                    (Result,
+                     LF & LF & "* '" & To_String (E.Name) & "'"
+                     & (if Length (E.Src) > 0
+                        then " of " & To_String (E.Src) else "")
+                     & ":");
                   if Shown < Total then
                      Append
                        (Result,
