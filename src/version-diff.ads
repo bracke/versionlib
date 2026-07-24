@@ -16,6 +16,7 @@ package Version.Diff is
       Name_Status    : Boolean := False;
       Numstat        : Boolean := False;
       Shortstat      : Boolean := False;
+      Raw            : Boolean := False;
       Detect_Renames : Rename_Detection := Renames_Default;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;

@@ -1626,6 +1626,7 @@ package body Version.Diff is
       Name_Status : Boolean := False;
       Numstat     : Boolean := False;
       Shortstat   : Boolean := False;
+      Raw         : Boolean := False;
       Detect_Renames : Boolean := False;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
@@ -1637,7 +1638,20 @@ package body Version.Diff is
       New_Map  : constant Side_Entry_Maps.Map := To_Map (New_Side);
       As_Stat  : constant Boolean :=
         Stat or else Summary or else Numstat or else Shortstat;
-      As_List  : constant Boolean := Name_Only or else Name_Status;
+      As_List  : constant Boolean :=
+        Name_Only or else Name_Status or else Raw;
+
+      --  git's `--raw` line: ":<mode1> <mode2> <sha1> <sha2> <status>" then a
+      --  tab and the path(s). Modes are six digits, ids abbreviated to seven,
+      --  an absent side is all zeros, and a rename names both paths.
+      function Pad6 (M : String) return String is
+        ((1 .. Integer'Max (0, 6 - M'Length) => '0') & M);
+      function Ab7 (Present : Boolean;
+                    Id : Version.Objects.Hex_Object_Id) return String is
+        (if not Present then "0000000"
+         else Version.Objects.To_String (Id)
+                (Version.Objects.To_String (Id)'First ..
+                 Version.Objects.To_String (Id)'First + 6));
       Paths    : Path_Sets.Map;
       Result   : Unbounded_String;
       Stats    : Stat_Vectors.Vector;
@@ -1824,24 +1838,49 @@ package body Version.Diff is
                         Result      => Entry_Stat,
                         Changed     => Changed);
                      if Changed or else Is_Rename_Dest then
-                        if Name_Status then
-                           if Is_Rename_Dest then
-                              --  git pads the score to three digits and names
-                              --  both sides.
+                        if Raw then
+                           declare
+                              OP : constant Boolean :=
+                                Entry_Stat.Old_Present;
+                              NP : constant Boolean :=
+                                Entry_Stat.New_Present;
+                              Status : constant String :=
+                                (if Is_Rename_Dest
+                                 then "R" & Score_Image (Rn.Score)
+                                 elsif not OP then "A"
+                                 elsif not NP then "D"
+                                 else "M");
+                           begin
                               Append
                                 (Result,
-                                 "R" & Score_Image (Rn.Score) & HT
-                                 & Rn_Path & HT);
-                           else
-                              Append
-                                (Result,
-                                 (if not Entry_Stat.Old_Present then 'A'
-                                  elsif not Entry_Stat.New_Present then 'D'
-                                  else 'M')
-                                 & HT);
+                                 ":" & Pad6 (To_String (Src_E.Mode)) & " "
+                                 & Pad6 (To_String (New_E.Mode)) & " "
+                                 & Ab7 (OP, Src_E.Id) & " "
+                                 & Ab7 (NP, New_E.Id) & " " & Status & HT
+                                 & (if Is_Rename_Dest then Rn_Path & HT
+                                    else "")
+                                 & Path & NL);
+                           end;
+                        else
+                           if Name_Status then
+                              if Is_Rename_Dest then
+                                 --  git pads the score to three digits and
+                                 --  names both sides.
+                                 Append
+                                   (Result,
+                                    "R" & Score_Image (Rn.Score) & HT
+                                    & Rn_Path & HT);
+                              else
+                                 Append
+                                   (Result,
+                                    (if not Entry_Stat.Old_Present then 'A'
+                                     elsif not Entry_Stat.New_Present then 'D'
+                                     else 'M')
+                                    & HT);
+                              end if;
                            end if;
+                           Append (Result, Path & NL);
                         end if;
-                        Append (Result, Path & NL);
                      end if;
                   end;
                elsif As_Stat then
@@ -1934,6 +1973,7 @@ package body Version.Diff is
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
+                 Raw            => Options.Raw,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
@@ -1978,6 +2018,7 @@ package body Version.Diff is
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
+                 Raw            => Options.Raw,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
@@ -2013,6 +2054,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
+              Raw            => Options.Raw,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2053,6 +2095,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
+              Raw            => Options.Raw,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2105,6 +2148,7 @@ package body Version.Diff is
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
+           Raw            => Options.Raw,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
@@ -2134,6 +2178,7 @@ package body Version.Diff is
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
+           Raw            => Options.Raw,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
@@ -2166,6 +2211,7 @@ package body Version.Diff is
            Stat => Options.Stat, Summary => Options.Summary,
            Name_Only => Options.Name_Only,
            Name_Status => Options.Name_Status,
+           Raw            => Options.Raw,
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
@@ -2207,6 +2253,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
+              Raw            => Options.Raw,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2258,6 +2305,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
+              Raw            => Options.Raw,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2294,6 +2342,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
+              Raw            => Options.Raw,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2337,6 +2386,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
+              Raw            => Options.Raw,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
