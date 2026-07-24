@@ -1161,7 +1161,8 @@ package body Version.Diff is
       Show_Shortstat  : Boolean := False;
       Min_Count_Width : Natural := 0;
       Apply_Style     : Boolean := False;
-      Compact         : Boolean := False) return String
+      Compact         : Boolean := False;
+      Stat_Width      : Natural := 0) return String
    is
       --  `git --compact-summary` annotates the name column: "(new)"/"(gone)"
       --  for a created/deleted file and "(mode +x)"/"(mode -x)" for an exec
@@ -1300,7 +1301,8 @@ package body Version.Diff is
       Count_W := Natural'Max (Count_W, Min_Count_Width);
 
       --  git's width budget: name + number + 6 constant columns + graph.
-      Width := Term_Columns;
+      --  `--stat=<width>` fixes the total width instead of the terminal's.
+      Width := (if Stat_Width > 0 then Stat_Width else Term_Columns);
       if Width < 16 + 6 + Count_W then
          Width := 16 + 6 + Count_W;
       end if;
@@ -1649,6 +1651,7 @@ package body Version.Diff is
       Shortstat   : Boolean := False;
       Raw         : Boolean := False;
       Compact     : Boolean := False;
+      Stat_Width  : Natural := 0;
       Detect_Renames : Boolean := False;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
@@ -1961,7 +1964,7 @@ package body Version.Diff is
          return Emit_Stat
            (Stats, Show_Stat => Stat, Show_Summary => Summary,
             Show_Numstat => Numstat, Show_Shortstat => Shortstat,
-            Compact => Compact);
+            Compact => Compact, Stat_Width => Stat_Width);
       end if;
       return To_String (Result);
    end Diff_Sides;
@@ -1998,6 +2001,7 @@ package body Version.Diff is
                  Name_Status => Options.Name_Status,
                  Raw            => Options.Raw,
                  Compact        => Options.Compact_Summary,
+                 Stat_Width     => Options.Stat_Width,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
@@ -2044,6 +2048,7 @@ package body Version.Diff is
                  Name_Status => Options.Name_Status,
                  Raw            => Options.Raw,
                  Compact        => Options.Compact_Summary,
+                 Stat_Width     => Options.Stat_Width,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
@@ -2081,6 +2086,7 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
+              Stat_Width     => Options.Stat_Width,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2123,6 +2129,7 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
+              Stat_Width     => Options.Stat_Width,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2177,6 +2184,7 @@ package body Version.Diff is
            Name_Status => Options.Name_Status,
            Raw            => Options.Raw,
            Compact        => Options.Compact_Summary,
+           Stat_Width     => Options.Stat_Width,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
@@ -2208,6 +2216,7 @@ package body Version.Diff is
            Name_Status => Options.Name_Status,
            Raw            => Options.Raw,
            Compact        => Options.Compact_Summary,
+           Stat_Width     => Options.Stat_Width,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
@@ -2242,6 +2251,7 @@ package body Version.Diff is
            Name_Status => Options.Name_Status,
            Raw            => Options.Raw,
            Compact        => Options.Compact_Summary,
+           Stat_Width     => Options.Stat_Width,
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
@@ -2285,6 +2295,7 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
+              Stat_Width     => Options.Stat_Width,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2338,6 +2349,7 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
+              Stat_Width     => Options.Stat_Width,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2376,6 +2388,7 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
+              Stat_Width     => Options.Stat_Width,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2421,6 +2434,7 @@ package body Version.Diff is
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
+              Stat_Width     => Options.Stat_Width,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,

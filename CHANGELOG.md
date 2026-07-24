@@ -1,3 +1,4 @@
+- Git parity: `Version.Diff` honours a `Stat_Width` (git's `--stat=<width>`), fixing the diffstat's total line width instead of the terminal's for graph scaling.
 - Git parity: `Version.Diff` renders `--compact-summary` (a `Compact_Summary` option) -- the diffstat with the name column annotated "(new)"/"(gone)"/"(mode +x|-x)" for created/deleted/exec-bit-changed files.
 - Git parity: `Version.Diff` renders the `--raw` format (a `Raw` option on Diff_Options) -- ":<mode1> <mode2> <sha1> <sha2> <status>TAB<path>" with six-digit modes, seven-hex abbreviated ids, zeros for an absent side, and rename pairing ("R<score>TAB<old>TAB<new>") through the existing rename-aware engine.
 - Git parity: `format-patch`'s signature version tracks the validated git release (2.43 -> 2.54); `Patch_For_Commit` gains subject-prefix (`--subject-prefix`/`--rfc`), numbering (`-n`/`-N`/Auto), reroll (`-v<N>`) and signature (`--signature`/`--no-signature`) options.
