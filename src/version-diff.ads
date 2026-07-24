@@ -142,6 +142,24 @@ package Version.Diff is
       Recursive : Boolean := True)
       return String;
 
+   --  git's `--dirstat`: the share of the change that each directory holds,
+   --  printed as "  NN.N% <dir>/" for directories at or above Permille (git's
+   --  default is 30 = 3%). By_File counts files, By_Line counts added/removed
+   --  lines (binary in 64-byte chunks), and the default (neither set) uses
+   --  git's content "damage" (diffcore_count_changes). Renames are detected
+   --  first, as the porcelain does. Cumulative rolls a subtree's share up into
+   --  its parents. A faithful port of show_dirstat/gather_dirstat in diff.c.
+   function Dir_Stat
+     (Repo       : Version.Repository.Repository_Handle;
+      Old_Tree   : Version.Objects.Hex_Object_Id;
+      Has_Base   : Boolean;
+      New_Tree   : Version.Objects.Hex_Object_Id;
+      By_File    : Boolean := False;
+      By_Line    : Boolean := False;
+      Permille   : Natural := 30;
+      Cumulative : Boolean := False)
+      return String;
+
    --  Raw diff of a tree against the index (`git diff-index --cached`, when
    --  Cached is True) or against the working tree (`git diff-index`, when
    --  False -- the second object id is all-zero, as git prints for a working

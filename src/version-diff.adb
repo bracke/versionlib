@@ -2552,6 +2552,312 @@ package body Version.Diff is
       return To_String (Result);
    end Raw_Diff_Trees;
 
+   function Dir_Stat
+     (Repo       : Version.Repository.Repository_Handle;
+      Old_Tree   : Version.Objects.Hex_Object_Id;
+      Has_Base   : Boolean;
+      New_Tree   : Version.Objects.Hex_Object_Id;
+      By_File    : Boolean := False;
+      By_Line    : Boolean := False;
+      Permille   : Natural := 30;
+      Cumulative : Boolean := False)
+      return String
+   is
+      LF : constant Character := Character'Val (10);
+
+      type Blob_Info is record
+         Sha  : Unbounded_String;
+         Id   : Version.Objects.Object_Id_Storage;
+         Mode : Unbounded_String;
+      end record;
+      package Blob_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => Blob_Info);
+
+      function Load (Tid : Version.Objects.Hex_Object_Id; Present : Boolean)
+        return Blob_Maps.Map
+      is
+         M : Blob_Maps.Map;
+      begin
+         if Present then
+            for E of Version.Objects.Flatten_Tree (Repo, Tid) loop
+               if E.Kind /= Version.Objects.Tree_Directory then
+                  M.Include
+                    (To_String (E.Path),
+                     (Sha  => To_Unbounded_String
+                                (Version.Objects.To_String (E.Id)),
+                      Id   => E.Id,
+                      Mode => E.Mode));
+               end if;
+            end loop;
+         end if;
+         return M;
+      end Load;
+
+      Old_M : constant Blob_Maps.Map := Load (Old_Tree, Has_Base);
+      New_M : constant Blob_Maps.Map := Load (New_Tree, True);
+
+      function Content (Sha : String) return String is
+        (Version.Objects.Content
+           (Version.Objects.Read_Object
+              (Repo, Version.Objects.To_Object_Id (Sha))));
+
+      --  One file's damage in git's chosen mode. Callers pass "" for an
+      --  absent side (an add or a delete).
+      function Damage_Of (Old_Sha, New_Sha : String) return Natural is
+      begin
+         if Old_Sha = New_Sha then
+            return 0;   --  content unchanged (e.g. a mode-only change)
+         elsif By_File then
+            return 1;
+         end if;
+         declare
+            Old_C : constant String :=
+              (if Old_Sha = "" then "" else Content (Old_Sha));
+            New_C : constant String :=
+              (if New_Sha = "" then "" else Content (New_Sha));
+         begin
+            if By_Line then
+               --  git's show_dirstat_by_line: damage is the number of added
+               --  plus deleted lines from the actual diff; a binary file
+               --  counts in 64-byte chunks instead.
+               if Version.Rename_Detect.Is_Binary (Old_C)
+                 or else Version.Rename_Detect.Is_Binary (New_C)
+               then
+                  return (Old_C'Length + New_C'Length + 63) / 64;
+               end if;
+               declare
+                  Patch  : constant String :=
+                    Unified_Text_Diff ("x", Old_C, New_C, 0);
+                  D      : Natural := 0;
+                  At_Bol : Boolean := True;
+                  In_Body : Boolean := False;   --  past the ---/+++ headers
+               begin
+                  --  Count body +/- lines. The "---"/"+++" file headers also
+                  --  begin with -/+, so start counting only after the first
+                  --  "@@" hunk marker; skip subsequent "@@" markers too.
+                  for K in Patch'Range loop
+                     if At_Bol then
+                        if K + 1 <= Patch'Last
+                          and then Patch (K) = '@' and then Patch (K + 1) = '@'
+                        then
+                           In_Body := True;
+                        elsif In_Body
+                          and then (Patch (K) = '+' or else Patch (K) = '-')
+                        then
+                           D := D + 1;
+                        end if;
+                     end if;
+                     At_Bol := Patch (K) = LF;
+                  end loop;
+                  return D;
+               end;
+            else
+               --  Default "changes" mode: git's content-damage measure.
+               declare
+                  D : constant Natural :=
+                    Version.Rename_Detect.Change_Damage (Old_C, New_C);
+               begin
+                  return (if D = 0 then 1 else D);
+               end;
+            end if;
+         end;
+      end Damage_Of;
+
+      type File_Rec is record
+         Name   : Unbounded_String;
+         Damage : Natural;
+      end record;
+      package File_Vecs is new
+        Ada.Containers.Vectors (Natural, File_Rec);
+      function Rec_Less (L, R : File_Rec) return Boolean is
+        (To_String (L.Name) < To_String (R.Name));
+      package File_Sort is new File_Vecs.Generic_Sorting ("<" => Rec_Less);
+      Files : File_Vecs.Vector;
+      Total : Natural := 0;
+
+      procedure Add (Name : String; Damage : Natural) is
+      begin
+         Files.Append
+           (File_Rec'(Name   => To_Unbounded_String (Name),
+                      Damage => Damage));
+         Total := Total + Damage;
+      end Add;
+
+      --  Rename detection over the deletion/creation cross product, exactly
+      --  as the porcelain runs diffcore_rename before show_dirstat: a renamed
+      --  file's damage is the source-to-destination change, charged to the
+      --  destination directory, and its deletion is not counted separately.
+      function Side_Text
+        (Side : Version.Rename_Detect.Rename_Side) return String is
+        (Content (Version.Objects.To_String (Side.Id)));
+      function Detect_Pairs is
+        new Version.Rename_Detect.Detect (Content_Of => Side_Text);
+
+      package Str_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+      Renamed_From : Str_Sets.Set;   --  deletion paths consumed as sources
+   begin
+      --  Modifications (both sides) are charged in place; deletions are
+      --  collected for rename detection below.
+      for C in Old_M.Iterate loop
+         declare
+            Path : constant String := Blob_Maps.Key (C);
+         begin
+            if New_M.Contains (Path) then
+               Add (Path, Damage_Of (To_String (Old_M (C).Sha),
+                                     To_String (New_M (Path).Sha)));
+            end if;
+         end;
+      end loop;
+
+      declare
+         Sources, Dests : Version.Rename_Detect.Side_Vectors.Vector;
+      begin
+         for C in Old_M.Iterate loop
+            if not New_M.Contains (Blob_Maps.Key (C)) then
+               Sources.Append
+                 (Version.Rename_Detect.Rename_Side'
+                    (Path => To_Unbounded_String (Blob_Maps.Key (C)),
+                     Id   => Old_M (C).Id,
+                     Mode => Old_M (C).Mode));
+            end if;
+         end loop;
+         for C in New_M.Iterate loop
+            if not Old_M.Contains (Blob_Maps.Key (C)) then
+               Dests.Append
+                 (Version.Rename_Detect.Rename_Side'
+                    (Path => To_Unbounded_String (Blob_Maps.Key (C)),
+                     Id   => New_M (C).Id,
+                     Mode => New_M (C).Mode));
+            end if;
+         end loop;
+
+         declare
+            Pairs : constant Version.Rename_Detect.Pair_Vectors.Vector :=
+              Detect_Pairs (Sources, Dests);
+            Paired_Dest : Str_Sets.Set;
+         begin
+            for P of Pairs loop
+               declare
+                  Src : constant Version.Rename_Detect.Rename_Side :=
+                    Sources.Element (P.Source);
+                  Dst : constant Version.Rename_Detect.Rename_Side :=
+                    Dests.Element (P.Dest);
+               begin
+                  Renamed_From.Include (To_String (Src.Path));
+                  Paired_Dest.Include (To_String (Dst.Path));
+                  Add (To_String (Dst.Path),
+                       Damage_Of (Version.Objects.To_String (Src.Id),
+                                  Version.Objects.To_String (Dst.Id)));
+               end;
+            end loop;
+
+            --  Unpaired deletions and additions keep their own damage.
+            for C in Old_M.Iterate loop
+               if not New_M.Contains (Blob_Maps.Key (C))
+                 and then not Renamed_From.Contains (Blob_Maps.Key (C))
+               then
+                  Add (Blob_Maps.Key (C),
+                       Damage_Of (To_String (Old_M (C).Sha), ""));
+               end if;
+            end loop;
+            for C in New_M.Iterate loop
+               if not Old_M.Contains (Blob_Maps.Key (C))
+                 and then not Paired_Dest.Contains (Blob_Maps.Key (C))
+               then
+                  Add (Blob_Maps.Key (C),
+                       Damage_Of ("", To_String (New_M (C).Sha)));
+               end if;
+            end loop;
+         end;
+      end;
+
+      File_Sort.Sort (Files);
+
+      if Total = 0 then
+         return "";
+      end if;
+
+      --  gather_dirstat: recurse over the sorted paths, printing every
+      --  directory (baselen > 0) that is not a lone pass-through and whose
+      --  share reaches the threshold.
+      declare
+         Result : Unbounded_String;
+         Idx    : Natural := Files.First_Index;
+
+         function Gather (Base : String; Baselen : Natural) return Natural is
+            Sum     : Natural := 0;
+            Sources : Natural := 0;
+         begin
+            while Idx <= Files.Last_Index loop
+               declare
+                  Name : constant String := To_String (Files (Idx).Name);
+                  Slash : Natural := 0;
+               begin
+                  exit when Name'Length < Baselen;
+                  exit when Name (Name'First .. Name'First + Baselen - 1)
+                            /= Base (Base'First .. Base'First + Baselen - 1);
+                  for K in Name'First + Baselen .. Name'Last loop
+                     if Name (K) = '/' then
+                        Slash := K;
+                        exit;
+                     end if;
+                  end loop;
+                  if Slash /= 0 then
+                     declare
+                        New_Baselen : constant Natural :=
+                          Slash - Name'First + 1;
+                     begin
+                        Sum := Sum
+                          + Gather
+                              (Name (Name'First .. Slash), New_Baselen);
+                     end;
+                     Sources := Sources + 1;
+                  else
+                     Sum := Sum + Files (Idx).Damage;
+                     Idx := Idx + 1;
+                     Sources := Sources + 2;
+                  end if;
+               end;
+            end loop;
+
+            if Baselen /= 0 and then Sources /= 1 and then Sum > 0 then
+               declare
+                  P : constant Natural := Sum * 1000 / Total;
+                  function Img (N : Natural) return String is
+                    (Ada.Strings.Fixed.Trim
+                       (Natural'Image (N), Ada.Strings.Left));
+               begin
+                  if P >= Permille then
+                     declare
+                        Whole : constant Natural := P / 10;
+                        Frac  : constant Natural := P mod 10;
+                        --  git prints the integer part in a 4-wide field
+                        --  ("%4d"): right-justified, no extra leading space.
+                        Pad   : constant String :=
+                          [1 .. Integer'Max (0, 4 - Img (Whole)'Length) => ' '];
+                     begin
+                        Append
+                          (Result,
+                           Pad & Img (Whole) & "." & Img (Frac) & "% "
+                           & Base (Base'First .. Base'First + Baselen - 1)
+                           & LF);
+                     end;
+                     if not Cumulative then
+                        return 0;
+                     end if;
+                  end if;
+               end;
+            end if;
+            return Sum;
+         end Gather;
+
+         Ignore : Natural;
+      begin
+         Ignore := Gather ("", 0);
+         return To_String (Result);
+      end;
+   end Dir_Stat;
+
    --  Shared helpers for the index/working raw diffs below.
    function Pad6 (Mode : String) return String is
      ((1 .. 6 - Mode'Length => '0') & Mode);

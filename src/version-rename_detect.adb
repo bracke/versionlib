@@ -150,6 +150,16 @@ package body Version.Rename_Detect is
       end loop;
    end Count_Changes;
 
+   function Change_Damage (Source, Dest : String) return Natural is
+      Copied, Added : Unsigned_64;
+   begin
+      Count_Changes (Source, Dest, Copied, Added);
+      --  git: damage = (one->size - copied) + added.
+      return Natural
+        ((if Copied >= Unsigned_64 (Source'Length) then 0
+          else Unsigned_64 (Source'Length) - Copied) + Added);
+   end Change_Damage;
+
    function Estimate_Similarity
      (Source        : String;
       Dest          : String;

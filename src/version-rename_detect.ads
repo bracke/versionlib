@@ -25,6 +25,14 @@ package Version.Rename_Detect is
    --  git's buffer_is_binary(): a NUL within the first 8000 bytes. Note this
    --  deliberately ignores NULs beyond that point, as git does.
 
+   function Change_Damage (Source, Dest : String) return Natural;
+   --  git's `--dirstat` (default "changes" mode) per-file damage:
+   --  (Source'Length - copied) + added, where copied/added are the byte
+   --  counts diffcore_count_changes reports (how much of Dest was copied
+   --  from Source and how much is new). This is the content-movement-aware
+   --  measure git accumulates per directory, distinct from added+removed
+   --  lines.
+
    function Estimate_Similarity
      (Source        : String;
       Dest          : String;
