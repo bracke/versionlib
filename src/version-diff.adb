@@ -1160,14 +1160,35 @@ package body Version.Diff is
       Show_Numstat    : Boolean := False;
       Show_Shortstat  : Boolean := False;
       Min_Count_Width : Natural := 0;
-      Apply_Style     : Boolean := False) return String
+      Apply_Style     : Boolean := False;
+      Compact         : Boolean := False) return String
    is
+      --  `git --compact-summary` annotates the name column: "(new)"/"(gone)"
+      --  for a created/deleted file and "(mode +x)"/"(mode -x)" for an exec
+      --  bit change (a rename keeps its "old => new" with no annotation).
+      function Annotation (F : Stat_Entry) return String is
+        (if not Compact or else Is_Rename (F) then ""
+         elsif not F.Old_Present then
+           " (new"
+           & (if To_String (F.New_Mode) = "100755" then " +x"
+              elsif To_String (F.New_Mode) = "120000" then " +l" else "")
+           & ")"
+         elsif not F.New_Present then " (gone)"
+         elsif F.Old_Mode /= F.New_Mode then
+           " (mode "
+           & (if To_String (F.New_Mode) = "100755" then "+x"
+              elsif To_String (F.Old_Mode) = "100755" then "-x"
+              else "changed")
+           & ")"
+         else "");
+
       --  `git apply --stat` differs from a diffstat: a rename is shown by its
       --  destination path alone (no "old => new"), a binary file is just "Bin"
       --  with no byte counts, and the graph separator space follows the count
       --  even when nothing changed.
       function Disp_Name (F : Stat_Entry) return String is
-        (if Apply_Style then To_String (F.Path) else Stat_Name (F));
+        (if Apply_Style then To_String (F.Path)
+         else Stat_Name (F) & Annotation (F));
 
       --  apply --stat sizes the name column from the rename's source path even
       --  though it shows only the destination -- git's own quirk.
@@ -1627,6 +1648,7 @@ package body Version.Diff is
       Numstat     : Boolean := False;
       Shortstat   : Boolean := False;
       Raw         : Boolean := False;
+      Compact     : Boolean := False;
       Detect_Renames : Boolean := False;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
@@ -1938,7 +1960,8 @@ package body Version.Diff is
       if As_Stat then
          return Emit_Stat
            (Stats, Show_Stat => Stat, Show_Summary => Summary,
-            Show_Numstat => Numstat, Show_Shortstat => Shortstat);
+            Show_Numstat => Numstat, Show_Shortstat => Shortstat,
+            Compact => Compact);
       end if;
       return To_String (Result);
    end Diff_Sides;
@@ -1974,6 +1997,7 @@ package body Version.Diff is
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
                  Raw            => Options.Raw,
+                 Compact        => Options.Compact_Summary,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
@@ -2019,6 +2043,7 @@ package body Version.Diff is
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
                  Raw            => Options.Raw,
+                 Compact        => Options.Compact_Summary,
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
@@ -2055,6 +2080,7 @@ package body Version.Diff is
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
+              Compact        => Options.Compact_Summary,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2096,6 +2122,7 @@ package body Version.Diff is
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
+              Compact        => Options.Compact_Summary,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2149,6 +2176,7 @@ package body Version.Diff is
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
            Raw            => Options.Raw,
+           Compact        => Options.Compact_Summary,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
@@ -2179,6 +2207,7 @@ package body Version.Diff is
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
            Raw            => Options.Raw,
+           Compact        => Options.Compact_Summary,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
@@ -2212,6 +2241,7 @@ package body Version.Diff is
            Name_Only => Options.Name_Only,
            Name_Status => Options.Name_Status,
            Raw            => Options.Raw,
+           Compact        => Options.Compact_Summary,
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
@@ -2254,6 +2284,7 @@ package body Version.Diff is
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
+              Compact        => Options.Compact_Summary,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2306,6 +2337,7 @@ package body Version.Diff is
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
+              Compact        => Options.Compact_Summary,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2343,6 +2375,7 @@ package body Version.Diff is
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
+              Compact        => Options.Compact_Summary,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
@@ -2387,6 +2420,7 @@ package body Version.Diff is
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
               Raw            => Options.Raw,
+              Compact        => Options.Compact_Summary,
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
