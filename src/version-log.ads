@@ -22,7 +22,9 @@ package Version.Log is
       Shortstat      : Boolean := False;
       Raw            : Boolean := False;
       Context        : Natural := 3;
-      Oneline        : Boolean := False) return String;
+      Oneline        : Boolean := False;
+      Date_Mode      : String := "") return String;
+   --  Date_Mode is `--date=<mode>` for the "Date:" header (iso/short/raw/...).
    --  Oneline replaces each commit's header with git's oneline form and runs
    --  the file changes straight after it (no separating blank), as
    --  `log --oneline --name-only`/`--numstat`/`--raw`/... do.

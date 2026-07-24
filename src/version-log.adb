@@ -222,11 +222,10 @@ package body Version.Log is
       return Author (Last_GT + 2 .. Author'Last);
    end Author_Date;
 
-   function Format_Git_Date (Raw : String) return String is
-      --  Raw is "<epoch-seconds> <±HHMM>" from a commit author line. Render
-      --  git's default log format: "Www Mmm D HH:MM:SS YYYY ±HHMM", with the
-      --  day space-padded to width 2 (strftime %e) and the wall clock in the
-      --  commit's own timezone.
+   function Format_Git_Date (Raw : String; Mode : String := "") return String is
+      --  Raw is "<epoch-seconds> <±HHMM>" from a commit author line. The
+      --  default renders git's log format "Www Mmm D HH:MM:SS YYYY ±HHMM";
+      --  Mode selects `--date=<mode>` variants (iso/iso-strict/short/raw/unix).
       Weekdays : constant array (0 .. 6) of String (1 .. 3) :=
         ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
       Months   : constant array (1 .. 12) of String (1 .. 3) :=
@@ -242,6 +241,13 @@ package body Version.Log is
       end loop;
       if Sep = 0 then
          return Raw;
+      end if;
+
+      --  These two need no calendar arithmetic.
+      if Mode = "raw" then
+         return Raw;
+      elsif Mode = "unix" then
+         return Raw (Raw'First .. Sep - 1);
       end if;
 
       declare
@@ -323,6 +329,23 @@ package body Version.Log is
                   return Trim (V);
                end Day_Pad;
             begin
+               if Mode = "short" then
+                  return Trim (Y) & "-" & Pad2 (M) & "-" & Pad2 (D);
+               elsif Mode = "iso" or else Mode = "iso8601" then
+                  return
+                    Trim (Y) & "-" & Pad2 (M) & "-" & Pad2 (D) & " "
+                    & Pad2 (HH) & ":" & Pad2 (Mn) & ":" & Pad2 (Sc)
+                    & " " & Tz;
+               elsif Mode = "iso-strict" or else Mode = "iso8601-strict" then
+                  return
+                    Trim (Y) & "-" & Pad2 (M) & "-" & Pad2 (D) & "T"
+                    & Pad2 (HH) & ":" & Pad2 (Mn) & ":" & Pad2 (Sc)
+                    & (if Tz = "+0000" or else Tz = "-0000" then "Z"
+                       elsif Tz'Length = 5
+                       then Tz (Tz'First .. Tz'First + 2) & ":"
+                            & Tz (Tz'First + 3 .. Tz'Last)
+                       else Tz);
+               end if;
                return
                  Weekdays (Natural (Wd)) & " "
                  & Months (Natural (M)) & " "
@@ -418,7 +441,8 @@ package body Version.Log is
       Cache          : in out Version.Object_Cache.Object_Cache;
       Commit_Id      : Version.Objects.Hex_Object_Id;
       Full_Message   : Boolean := False;
-      Show_Signature : Boolean := False) return String
+      Show_Signature : Boolean := False;
+      Date_Mode      : String := "") return String
    is
       use type Version.Verify.Verify_Result;
       Obj     : constant Version.Objects.Git_Object :=
@@ -476,7 +500,8 @@ package body Version.Log is
       end if;
       Append_Line (Result, "Author: " & Author_Name_Date (Content));
       Append_Line
-        (Result, "Date:   " & Format_Git_Date (Author_Date (Content)));
+        (Result,
+         "Date:   " & Format_Git_Date (Author_Date (Content), Date_Mode));
       Append_Line (Result, "");
       Append_Indented_Message (Result, Message);
 
@@ -718,7 +743,8 @@ package body Version.Log is
       Shortstat      : Boolean := False;
       Raw            : Boolean := False;
       Context        : Natural := 3;
-      Oneline        : Boolean := False) return String
+      Oneline        : Boolean := False;
+      Date_Mode      : String := "") return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
@@ -748,7 +774,8 @@ package body Version.Log is
                     (Repo           => Repo,
                      Cache          => Objects,
                      Commit_Id      => Current_Id,
-                     Show_Signature => Show_Signature));
+                     Show_Signature => Show_Signature,
+                     Date_Mode      => Date_Mode));
             end if;
             if (Stat or else Patch or else Name_Only or else Name_Status
                 or else Numstat or else Shortstat or else Raw)

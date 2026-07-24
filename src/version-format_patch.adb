@@ -113,10 +113,15 @@ package body Version.Format_Patch is
    end Format_Date;
 
    function Patch_For_Commit
-     (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id;
-      Number    : Positive := 1;
-      Total     : Positive := 1)
+     (Repo         : Version.Repository.Repository_Handle;
+      Commit_Id    : Version.Objects.Hex_Object_Id;
+      Number       : Positive := 1;
+      Total        : Positive := 1;
+      Prefix       : String := "PATCH";
+      Numbering    : Numbering_Mode := Auto;
+      Reroll       : Natural := 0;
+      Emit_Signature : Boolean := True;
+      Signature    : String := "2.54.0")
       return String
    is
       Obj     : constant Version.Objects.Git_Object :=
@@ -218,13 +223,22 @@ package body Version.Format_Patch is
                Body_Text : constant String :=
                  (if Rest'Length >= 1 and then Rest (Rest'First) = LF
                   then Rest (Rest'First + 1 .. Rest'Last) else Rest);
+               function Trim (V : Integer) return String is
+                 (Ada.Strings.Fixed.Trim
+                    (Integer'Image (V), Ada.Strings.Left));
+               --  Whether to show the "n/m" counter: forced On, suppressed
+               --  Off, and Auto shows it for a series (Total > 1) only.
+               Show_Number : constant Boolean :=
+                 (case Numbering is
+                     when On   => True,
+                     when Off  => False,
+                     when Auto => Total > 1);
                Tag : constant String :=
-                 (if Total > 1
-                  then "[PATCH " & Ada.Strings.Fixed.Trim
-                         (Integer'Image (Number), Ada.Strings.Left) & "/"
-                       & Ada.Strings.Fixed.Trim
-                         (Integer'Image (Total), Ada.Strings.Left) & "]"
-                  else "[PATCH]");
+                 "[" & Prefix
+                 & (if Reroll > 0 then " v" & Trim (Reroll) else "")
+                 & (if Show_Number
+                    then " " & Trim (Number) & "/" & Trim (Total) else "")
+                 & "]";
             begin
                Append (Result,
                  "From " & To_String (Commit_Id)
@@ -255,8 +269,13 @@ package body Version.Format_Patch is
                if Diff'Length > 0 and then Diff (Diff'Last) /= LF then
                   Append (Result, LF);
                end if;
-               Append (Result, "-- " & LF);
-               Append (Result, "2.43.0" & LF & LF);
+               --  format-patch closes with a "-- \n<signature>" trailer;
+               --  git's default signature is its version (tracked at 2.54),
+               --  --signature=<s> overrides it, --no-signature drops it.
+               if Emit_Signature then
+                  Append (Result, "-- " & LF);
+                  Append (Result, Signature & LF & LF);
+               end if;
             end;
          end;
       end;
