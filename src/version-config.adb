@@ -908,6 +908,41 @@ package body Version.Config is
       Write_All (Repo => Repo, Entries => Result);
    end Remove_Section;
 
+   procedure Rename_Section
+     (Repo     : Version.Repository.Repository_Handle;
+      Old_Name : String;
+      New_Name : String)
+   is
+      Existing : constant Config_Entry_Vectors.Vector :=
+        Read_File_Entries (Config_Path (Repo));
+      Result   : Config_Entry_Vectors.Vector;
+      Found    : Boolean := False;
+   begin
+      Require_Config_Section (Old_Name);
+      Require_Config_Section (New_Name);
+
+      if not Existing.Is_Empty then
+         for I in Existing.First_Index .. Existing.Last_Index loop
+            declare
+               Item : Config_Entry := Existing.Element (I);
+            begin
+               if Lower (To_String (Item.Section)) = Lower (Old_Name) then
+                  Found := True;
+                  Item.Section := To_Unbounded_String (New_Name);
+               end if;
+               Result.Append (Item);
+            end;
+         end loop;
+      end if;
+
+      if not Found then
+         raise Ada.IO_Exceptions.Data_Error
+           with "config section does not exist: " & Old_Name;
+      end if;
+
+      Write_All (Repo => Repo, Entries => Result);
+   end Rename_Section;
+
    function Config_Entry_Name (Current_Entry : Config_Entry) return String is
       Section     : constant String := To_String (Current_Entry.Section);
       Key         : constant String := To_String (Current_Entry.Key);
@@ -1141,18 +1176,20 @@ package body Version.Config is
       Result         : Config_Entry_Vectors.Vector := Items;
       Target_Section : Unbounded_String;
       Target_Key     : Unbounded_String;
-      Wanted         : constant String := Lower (Name);
       Last_Match     : Integer := -1;
    begin
       Require_Config_Name (Name);
       Require_Config_Scalar (Value, "config value");
       Split_Config_Name (Name, Target_Section, Target_Key);
 
-      --  Insert the new value right after the last existing one for the key,
-      --  so a key's values stay contiguous the way git keeps them.
+      --  git appends the new value at the end of the key's section block (not
+      --  next to the other values for that key), so track the last entry in
+      --  the same section.
       if not Items.Is_Empty then
          for I in Items.First_Index .. Items.Last_Index loop
-            if Lower (Config_Entry_Name (Items.Element (I))) = Wanted then
+            if Lower (To_String (Items.Element (I).Section)) =
+                 Lower (To_String (Target_Section))
+            then
                Last_Match := I;
             end if;
          end loop;

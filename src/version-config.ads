@@ -155,4 +155,11 @@ package Version.Config is
      (Repo    : Version.Repository.Repository_Handle;
       Section : String);
 
+   --  Rename a config section (git's `config rename-section`), keeping each
+   --  variable's position. Raises Data_Error when no section matches Old_Name.
+   procedure Rename_Section
+     (Repo     : Version.Repository.Repository_Handle;
+      Old_Name : String;
+      New_Name : String);
+
 end Version.Config;
