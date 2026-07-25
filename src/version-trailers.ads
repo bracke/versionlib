@@ -14,6 +14,13 @@ package Version.Trailers is
 
    type Placement is (Placement_After, Placement_Before);
 
+   --  What to do with a `--trailer` whose token already appears in the block
+   --  (`--if-exists`) or does not (`--if-missing`), matching git's actions.
+   type If_Exists_Mode is
+     (IE_Add, IE_Add_If_Different, IE_Add_If_Different_Neighbor,
+      IE_Replace, IE_Do_Nothing);
+   type If_Missing_Mode is (IM_Add, IM_Do_Nothing);
+
    --  Apply `interpret-trailers` to Input.
    --
    --  Trailers holds the raw `--trailer` arguments (each `token<sep>value`,
@@ -26,13 +33,17 @@ package Version.Trailers is
    --  Trailers arguments (so the result reflects the input alone); Unfold
    --  joins continuation lines into their trailer. `--parse` is the
    --  combination Only_Trailers + Only_Input + Unfold.
+   --  If_Exists / If_Missing follow git's defaults (add-if-different when the
+   --  token is already present, add when it is missing).
    function Interpret
      (Input         : String;
       Trailers      : String_Vectors.Vector := String_Vectors.Empty_Vector;
       Where         : Placement := Placement_After;
       Only_Trailers : Boolean   := False;
       Only_Input    : Boolean   := False;
-      Unfold        : Boolean   := False)
+      Unfold        : Boolean   := False;
+      If_Exists     : If_Exists_Mode := IE_Add_If_Different;
+      If_Missing    : If_Missing_Mode := IM_Add)
       return String;
 
 end Version.Trailers;

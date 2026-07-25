@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Characters.Latin_1;
 with Ada.Strings;
 with Ada.Strings.Fixed;
@@ -109,13 +110,29 @@ package body Version.Trailers is
       end;
    end Normalize_Trailer;
 
+   --  The lower-cased token of a trailer line ("Signed-off-by: A" -> "signed-
+   --  off-by"), or "" when the line is not a trailer. git matches tokens
+   --  case-insensitively.
+   function Token_Of (Line : String) return String is
+      Sep : constant Natural := Trailer_Sep_Pos (Line);
+   begin
+      if Sep = 0 then
+         return "";
+      end if;
+      return Ada.Characters.Handling.To_Lower
+        (Ada.Strings.Fixed.Trim
+           (Line (Line'First .. Sep - 1), Ada.Strings.Both));
+   end Token_Of;
+
    function Interpret
      (Input         : String;
       Trailers      : String_Vectors.Vector := String_Vectors.Empty_Vector;
       Where         : Placement := Placement_After;
       Only_Trailers : Boolean   := False;
       Only_Input    : Boolean   := False;
-      Unfold        : Boolean   := False)
+      Unfold        : Boolean   := False;
+      If_Exists     : If_Exists_Mode := IE_Add_If_Different;
+      If_Missing    : If_Missing_Mode := IM_Add)
       return String
    is
       Lines : Line_Vectors.Vector := Split_Lines (Input);
@@ -229,6 +246,32 @@ package body Version.Trailers is
          end Block_Has_Trailer;
 
          Is_Block : Boolean;
+
+         --  Block lines dropped by `--if-exists replace`.
+         Removed : array (1 .. Lines.Last_Index) of Boolean :=
+           (others => False);
+
+         function Block_Has_Token (Tok : String) return Boolean is
+         begin
+            for I in BS .. Last loop
+               if Is_Trailer_Line (Lines (I))
+                 and then Token_Of (Lines (I)) = Tok
+               then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Block_Has_Token;
+
+         function Block_Has_Line (L : String) return Boolean is
+         begin
+            for I in BS .. Last loop
+               if Lines (I) = L then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Block_Has_Line;
       begin
          while BS > 1 and then not Is_Blank (Lines (BS - 1)) loop
             BS := BS - 1;
@@ -236,6 +279,52 @@ package body Version.Trailers is
 
          --  A trailer block cannot be the first paragraph.
          Is_Block := BS > 1 and then Block_Has_Trailer;
+
+         --  Apply git's --if-exists / --if-missing: an added trailer whose
+         --  token is already in the block is added, skipped, or replaces the
+         --  existing lines per If_Exists; a missing one is added per If_Missing.
+         if Is_Block and then not Added.Is_Empty then
+            declare
+               Kept : Line_Vectors.Vector;
+            begin
+               for T of Added loop
+                  declare
+                     Tok    : constant String := Token_Of (T);
+                     Exists : constant Boolean :=
+                       Tok /= "" and then Block_Has_Token (Tok);
+                  begin
+                     if Exists then
+                        case If_Exists is
+                           when IE_Add =>
+                              Kept.Append (T);
+                           when IE_Add_If_Different
+                              | IE_Add_If_Different_Neighbor =>
+                              if not Block_Has_Line (T) then
+                                 Kept.Append (T);
+                              end if;
+                           when IE_Replace =>
+                              for I in BS .. Last loop
+                                 if Is_Trailer_Line (Lines (I))
+                                   and then Token_Of (Lines (I)) = Tok
+                                 then
+                                    Removed (I) := True;
+                                 end if;
+                              end loop;
+                              Kept.Append (T);
+                           when IE_Do_Nothing =>
+                              null;
+                        end case;
+                     else
+                        case If_Missing is
+                           when IM_Add        => Kept.Append (T);
+                           when IM_Do_Nothing => null;
+                        end case;
+                     end if;
+                  end;
+               end loop;
+               Added := Kept;
+            end;
+         end if;
 
          if Only_Trailers then
             declare
@@ -286,7 +375,9 @@ package body Version.Trailers is
                   --  Emit through Insert_At, the added trailers, then the rest.
                   for I in 1 .. Insert_At loop
                      if I >= BS then
-                        Emit_Unfolded (Lines (I));
+                        if not Removed (I) then
+                           Emit_Unfolded (Lines (I));
+                        end if;
                      else
                         Emit (Lines (I));
                      end if;
@@ -295,7 +386,9 @@ package body Version.Trailers is
                      Emit (L);
                   end loop;
                   for I in Insert_At + 1 .. Last loop
-                     Emit_Unfolded (Lines (I));
+                     if not Removed (I) then
+                        Emit_Unfolded (Lines (I));
+                     end if;
                   end loop;
                else
                   Insert_At := BS;
@@ -306,7 +399,9 @@ package body Version.Trailers is
                   end loop;
                   for I in 1 .. Insert_At - 1 loop
                      if I >= BS then
-                        Emit_Unfolded (Lines (I));
+                        if not Removed (I) then
+                           Emit_Unfolded (Lines (I));
+                        end if;
                      else
                         Emit (Lines (I));
                      end if;
@@ -315,7 +410,9 @@ package body Version.Trailers is
                      Emit (L);
                   end loop;
                   for I in Insert_At .. Last loop
-                     Emit_Unfolded (Lines (I));
+                     if not Removed (I) then
+                        Emit_Unfolded (Lines (I));
+                     end if;
                   end loop;
                end if;
             end;
