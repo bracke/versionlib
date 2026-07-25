@@ -20,7 +20,9 @@ package Version.Format_Patch is
       Numbering    : Numbering_Mode := Auto;
       Reroll       : Natural := 0;
       Emit_Signature : Boolean := True;
-      Signature    : String := "2.54.0")
+      Signature    : String := "2.54.0";
+      Context      : Natural := 3;
+      Show_Summary : Boolean := True)
       return String;
    --  The mbox text for one commit: a "From <sha> Mon Sep 17 ..." line, From:/
    --  Date: (RFC2822, author date) / Subject: "[<prefix> [vN] n/m]" headers,

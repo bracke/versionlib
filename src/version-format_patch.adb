@@ -121,7 +121,9 @@ package body Version.Format_Patch is
       Numbering    : Numbering_Mode := Auto;
       Reroll       : Natural := 0;
       Emit_Signature : Boolean := True;
-      Signature    : String := "2.54.0")
+      Signature    : String := "2.54.0";
+      Context      : Natural := 3;
+      Show_Summary : Boolean := True)
       return String
    is
       Obj     : constant Version.Objects.Git_Object :=
@@ -135,7 +137,7 @@ package body Version.Format_Patch is
       --  format-patch implies git's --binary, so a binary change travels as
       --  an appliable patch rather than a "differ" line.
       Bin_Opts : constant Version.Diff.Diff_Options :=
-        (Binary_Patch => True, others => <>);
+        (Binary_Patch => True, Context_Lines => Context, others => <>);
 
       Diff : constant String :=
         (if Parents.Is_Empty
@@ -146,8 +148,10 @@ package body Version.Format_Patch is
       --  git format-patch puts a diffstat + summary block between the "---"
       --  line and the patch body (the same content as `git diff --stat
       --  --summary`).
+      --  git's default shows the diffstat and the create/delete/mode summary;
+      --  an explicit --stat suppresses the summary half.
       Stat_Opts : constant Version.Diff.Diff_Options :=
-        (Stat => True, Summary => True, others => <>);
+        (Stat => True, Summary => Show_Summary, others => <>);
       Stat : constant String :=
         (if Parents.Is_Empty
          then Version.Diff.Diff_Root_Commit (Repo, Commit_Id, Stat_Opts)
