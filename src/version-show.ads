@@ -17,7 +17,8 @@ package Version.Show is
       Oneline      : Boolean := False;
       Format       : String := "";
       Format_Oneline : Boolean := False;
-      Date_Mode    : String := "")
+      Date_Mode    : String := "";
+      First_Parent : Boolean := False)
       return String;
    --  Date_Mode is git's --date=<mode> for the plain %ad/%cd date atoms.
    --  Format_Oneline marks a `--pretty=oneline` format so the header runs
@@ -35,7 +36,8 @@ package Version.Show is
       Oneline      : Boolean := False;
       Format       : String := "";
       Format_Oneline : Boolean := False;
-      Date_Mode    : String := "")
+      Date_Mode    : String := "";
+      First_Parent : Boolean := False)
       return String;
    --  `git show <object>` for any object type: a commit via Show_Commit, an
    --  annotated tag as its "tag/Tagger/Date" header and message followed by the

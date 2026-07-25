@@ -30,7 +30,8 @@ package body Version.Show is
       Oneline      : Boolean := False;
       Format       : String := "";
       Format_Oneline : Boolean := False;
-      Date_Mode    : String := "")
+      Date_Mode    : String := "";
+      First_Parent : Boolean := False)
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -79,8 +80,11 @@ package body Version.Show is
       --  more than one parent there is no single "the" diff, and picking the
       --  first parent silently presents one side's changes as the commit's.
       --  A --stat is still produced, and matches git's combined stat.
+      --  --first-parent picks the first parent's diff for a merge, so it is
+      --  no longer skipped.
       if Natural (Version.Objects.Commit_Parent_Ids (Obj).Length) > 1
         and then not Options.Stat
+        and then not First_Parent
       then
          return To_String (Result);
       end if;
@@ -109,7 +113,8 @@ package body Version.Show is
       Oneline      : Boolean := False;
       Format       : String := "";
       Format_Oneline : Boolean := False;
-      Date_Mode    : String := "")
+      Date_Mode    : String := "";
+      First_Parent : Boolean := False)
       return String
    is
       Raw : constant Version.Objects.Hex_Object_Id :=
@@ -149,7 +154,7 @@ package body Version.Show is
          when Version.Objects.Commit_Object =>
             return Show_Commit
               (Repo, Raw, Options, No_Patch, Oneline, Format, Format_Oneline,
-               Date_Mode);
+               Date_Mode, First_Parent);
 
          when Version.Objects.Tag_Object =>
             declare
