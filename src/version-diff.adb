@@ -565,7 +565,8 @@ package body Version.Diff is
       Context     : Natural;
       Old_Path     : String := "";
       Rename_Score : Natural := 0;
-      Binary_Patch : Boolean := False) return String
+      Binary_Patch : Boolean := False;
+      As_Text      : Boolean := False) return String
    is
       Head_A : constant String :=
         (if Old_Path'Length > 0 then Old_Path else Path);
@@ -618,7 +619,9 @@ package body Version.Diff is
          Eff_New_Mode : constant String :=
            (if New_Mode'Length > 0 then New_Mode else Eff_Old_Mode);
       begin
-         if Contains_Nul (Old_Text) or else Contains_Nul (New_Text) then
+         if not As_Text
+           and then (Contains_Nul (Old_Text) or else Contains_Nul (New_Text))
+         then
             declare
                R : Unbounded_String;
             begin
@@ -1652,10 +1655,12 @@ package body Version.Diff is
       Raw         : Boolean := False;
       Compact     : Boolean := False;
       Stat_Width  : Natural := 0;
+      Diff_Filter : String := "";
       Detect_Renames : Boolean := False;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
-      Binary_Patch   : Boolean := False) return String
+      Binary_Patch   : Boolean := False;
+      Text           : Boolean := False) return String
    is
       HT       : constant Character := Character'Val (9);
       NL       : constant Character := Character'Val (10);
@@ -1677,6 +1682,31 @@ package body Version.Diff is
          else Version.Objects.To_String (Id)
                 (Version.Objects.To_String (Id)'First ..
                  Version.Objects.To_String (Id)'First + 6));
+      --  git's `--diff-filter`: an uppercase letter includes that status, a
+      --  lowercase one excludes it. With only excludes, everything else
+      --  passes; with any include, only the listed statuses do.
+      function Filter_Passes (Status : Character) return Boolean is
+         Has_Include : Boolean := False;
+         Included    : Boolean := False;
+      begin
+         if Diff_Filter = "" then
+            return True;
+         end if;
+         for C of Diff_Filter loop
+            if C in 'A' .. 'Z' then
+               Has_Include := True;
+               if C = Status then
+                  Included := True;
+               end if;
+            elsif C in 'a' .. 'z' then
+               if Ada.Characters.Handling.To_Upper (C) = Status then
+                  return False;
+               end if;
+            end if;
+         end loop;
+         return (if Has_Include then Included else True);
+      end Filter_Passes;
+
       Paths    : Path_Sets.Map;
       Result   : Unbounded_String;
       Stats    : Stat_Vectors.Vector;
@@ -1832,6 +1862,13 @@ package body Version.Diff is
                Src_E : constant Side_Entry :=
                  (if Is_Rename_Dest and then Old_Map.Contains (Rn_Path)
                   then Old_Map.Element (Rn_Path) else Old_E);
+
+               --  Change letter for `--diff-filter`, from side presence.
+               Status_Char : constant Character :=
+                 (if Is_Rename_Dest then 'R'
+                  elsif not Old_E.Present then 'A'
+                  elsif not New_E.Present then 'D'
+                  else 'M');
             begin
                if Renamed_From.Contains (Path) then
                   --  Consumed as a rename source; reported at its destination.
@@ -1843,6 +1880,9 @@ package body Version.Diff is
                then
                   --  Sparse-excluded (skip-worktree) paths are absent from the
                   --  working tree by design, not deleted; git omits them.
+                  null;
+               elsif not Filter_Passes (Status_Char) then
+                  --  Excluded by --diff-filter.
                   null;
                elsif As_List then
                   declare
@@ -1952,7 +1992,8 @@ package body Version.Diff is
                         Old_Path     =>
                           (if Is_Rename_Dest then Rn_Path else ""),
                         Rename_Score => Rn.Score,
-                        Binary_Patch => Binary_Patch));
+                        Binary_Patch => Binary_Patch,
+                        As_Text      => Text));
                end if;
             end;
 
@@ -2002,10 +2043,12 @@ package body Version.Diff is
                  Raw            => Options.Raw,
                  Compact        => Options.Compact_Summary,
                  Stat_Width     => Options.Stat_Width,
+                 Diff_Filter => To_String (Options.Diff_Filter),
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
-                 Binary_Patch   => Options.Binary_Patch);
+                 Binary_Patch   => Options.Binary_Patch,
+                 Text            => Options.Diff_Text);
          end;
       end;
    end Diff_Working_Tree;
@@ -2049,10 +2092,12 @@ package body Version.Diff is
                  Raw            => Options.Raw,
                  Compact        => Options.Compact_Summary,
                  Stat_Width     => Options.Stat_Width,
+                 Diff_Filter => To_String (Options.Diff_Filter),
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
-                 Binary_Patch   => Options.Binary_Patch);
+                 Binary_Patch   => Options.Binary_Patch,
+                 Text            => Options.Diff_Text);
          end;
       end;
    end Diff_Working_Tree;
@@ -2087,11 +2132,13 @@ package body Version.Diff is
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
-              Binary_Patch   => Options.Binary_Patch);
+              Binary_Patch   => Options.Binary_Patch,
+              Text            => Options.Diff_Text);
       end;
    end Diff_Staged;
 
@@ -2130,11 +2177,13 @@ package body Version.Diff is
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
-              Binary_Patch   => Options.Binary_Patch);
+              Binary_Patch   => Options.Binary_Patch,
+              Text            => Options.Diff_Text);
       end;
    end Diff_Staged;
 
@@ -2185,10 +2234,12 @@ package body Version.Diff is
            Raw            => Options.Raw,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
+           Diff_Filter => To_String (Options.Diff_Filter),
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
-           Binary_Patch   => Options.Binary_Patch);
+           Binary_Patch   => Options.Binary_Patch,
+           Text            => Options.Diff_Text);
    end Diff_Tree_Vs_Working;
 
    function Diff_Tree_Vs_Index
@@ -2217,10 +2268,12 @@ package body Version.Diff is
            Raw            => Options.Raw,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
+           Diff_Filter => To_String (Options.Diff_Filter),
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
-           Binary_Patch   => Options.Binary_Patch);
+           Binary_Patch   => Options.Binary_Patch,
+           Text            => Options.Diff_Text);
    end Diff_Tree_Vs_Index;
 
    function Diff_Trees
@@ -2252,11 +2305,13 @@ package body Version.Diff is
            Raw            => Options.Raw,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
+           Diff_Filter => To_String (Options.Diff_Filter),
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
-           Binary_Patch   => Options.Binary_Patch);
+           Binary_Patch   => Options.Binary_Patch,
+           Text            => Options.Diff_Text);
    end Diff_Trees;
 
    function Diff_Commits
@@ -2296,11 +2351,13 @@ package body Version.Diff is
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
-              Binary_Patch   => Options.Binary_Patch);
+              Binary_Patch   => Options.Binary_Patch,
+              Text            => Options.Diff_Text);
       end;
    end Diff_Commits;
 
@@ -2350,11 +2407,13 @@ package body Version.Diff is
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
-              Binary_Patch   => Options.Binary_Patch);
+              Binary_Patch   => Options.Binary_Patch,
+              Text            => Options.Diff_Text);
       end;
    end Diff_Commits;
 
@@ -2389,11 +2448,13 @@ package body Version.Diff is
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
-              Binary_Patch   => Options.Binary_Patch);
+              Binary_Patch   => Options.Binary_Patch,
+              Text            => Options.Diff_Text);
       end;
    end Diff_Root_Commit;
 
@@ -2435,11 +2496,13 @@ package body Version.Diff is
               Raw            => Options.Raw,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
-              Binary_Patch   => Options.Binary_Patch);
+              Binary_Patch   => Options.Binary_Patch,
+              Text            => Options.Diff_Text);
       end;
    end Diff_Root_Commit;
 
@@ -3124,6 +3187,77 @@ package body Version.Diff is
          New_Mode    => New_Mode,
          Context     => Context);
    end Unified_Blob_Diff;
+
+   function No_Index_Diff
+     (Old_Path    : String;
+      New_Path    : String;
+      Old_Text    : String;
+      New_Text    : String;
+      Old_Present : Boolean := True;
+      New_Present : Boolean := True;
+      Context     : Natural := 3)
+      return String
+   is
+      Mode   : constant String := "100644";
+      Old_Id : constant Version.Objects.Hex_Object_Id :=
+        (if Old_Present
+         then Version.Objects.Compute_Object_Id
+                (Version.Hash.Sha1, "blob", Old_Text)
+         else Short_Zero);
+      New_Id : constant Version.Objects.Hex_Object_Id :=
+        (if New_Present
+         then Version.Objects.Compute_Object_Id
+                (Version.Hash.Sha1, "blob", New_Text)
+         else Short_Zero);
+      R : Unbounded_String;
+   begin
+      if Old_Present and then New_Present and then Old_Text = New_Text then
+         return "";
+      end if;
+      Append_Line (R, "diff --git a/" & Old_Path & " b/" & New_Path);
+      if not Old_Present then
+         Append_Line (R, "new file mode " & Mode);
+         Append_Line
+           (R, "index " & Abbrev (Short_Zero) & ".." & Abbrev (New_Id));
+      elsif not New_Present then
+         Append_Line (R, "deleted file mode " & Mode);
+         Append_Line
+           (R, "index " & Abbrev (Old_Id) & ".." & Abbrev (Short_Zero));
+      else
+         Append_Line
+           (R, "index " & Abbrev (Old_Id) & ".." & Abbrev (New_Id)
+            & " " & Mode);
+      end if;
+      if Contains_Nul (Old_Text) or else Contains_Nul (New_Text) then
+         Append_Line
+           (R,
+            "Binary files "
+            & (if Old_Present then "a/" & Old_Path else "/dev/null")
+            & " and "
+            & (if New_Present then "b/" & New_Path else "/dev/null")
+            & " differ");
+         return To_String (R);
+      end if;
+      --  The `---`/`+++` lines and hunks, with the two distinct names (git's
+      --  --no-index shows a/<old> and b/<new>); Git_Header off since the
+      --  diff --git/index lines are already emitted above.
+      Append
+        (R,
+         Unified_File_Diff
+           (Path        => New_Path,
+            Old_Text    => Old_Text,
+            New_Text    => New_Text,
+            Old_Present => Old_Present,
+            New_Present => New_Present,
+            Old_Id      => Old_Id,
+            New_Id      => New_Id,
+            Old_Mode    => Mode,
+            New_Mode    => Mode,
+            Context     => Context,
+            Git_Header  => False,
+            Old_Path    => Old_Path));
+      return To_String (R);
+   end No_Index_Diff;
 
    function Unified_Text_Diff
      (Path     : String;

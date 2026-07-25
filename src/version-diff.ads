@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+
 with Version.Objects;
 with Version.Repository;
 with Version.Pathspec;
@@ -19,10 +21,13 @@ package Version.Diff is
       Raw            : Boolean := False;
       Compact_Summary : Boolean := False;
       Stat_Width      : Natural := 0;
+      Diff_Filter     : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.Null_Unbounded_String;
       Detect_Renames : Rename_Detection := Renames_Default;
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
       Binary_Patch   : Boolean := False;
+      Diff_Text      : Boolean := False;
    end record;
    --  Name_Only lists just the changed paths; Name_Status prefixes each with
    --  git's status letter (A/D/M/R) and a tab. Both suppress the patch body.
@@ -194,6 +199,21 @@ package Version.Diff is
       New_Id      : Version.Objects.Hex_Object_Id;
       Old_Mode    : String;
       New_Mode    : String;
+      Context     : Natural := 3)
+      return String;
+
+   --  git's `diff --no-index <old> <new>`: a full patch between two files that
+   --  need not live in any repository. The header names the two paths
+   --  separately (`a/<old> b/<new>`), and the blob ids on the `index` line are
+   --  SHA-1 over the file content (git's default outside a repo). An absent
+   --  side (a missing file) is rendered as an add/delete against /dev/null.
+   function No_Index_Diff
+     (Old_Path    : String;
+      New_Path    : String;
+      Old_Text    : String;
+      New_Text    : String;
+      Old_Present : Boolean := True;
+      New_Present : Boolean := True;
       Context     : Natural := 3)
       return String;
 
