@@ -108,7 +108,8 @@ package body Version.Describe is
       All_Tags : Boolean := False;
       Long     : Boolean := False;
       Abbrev   : Natural := 7;
-      Pattern  : String  := "")
+      Pattern  : String  := "";
+      Exclude  : String  := "")
       return String
    is
       Tags      : constant Version.Tags.Tag_Name_Vectors.Vector :=
@@ -195,9 +196,11 @@ package body Version.Describe is
          declare
             Name       : constant String := To_String (Tag);
             --  --match: a tag whose name does not match the glob is not a
-            --  candidate at all, so it cannot become the best.
+            --  candidate at all, so it cannot become the best. --exclude drops
+            --  a tag whose name matches the exclude glob.
             Matches    : constant Boolean :=
-              Pattern'Length = 0 or else Glob (Name, Pattern);
+              (Pattern'Length = 0 or else Glob (Name, Pattern))
+              and then (Exclude'Length = 0 or else not Glob (Name, Exclude));
             Annotated  : constant Boolean :=
               Matches and then Is_Annotated (Name);
             Tag_Commit : constant Version.Objects.Hex_Object_Id :=
@@ -293,7 +296,8 @@ package body Version.Describe is
       Commit  : Version.Objects.Hex_Object_Id;
       Long    : Boolean := False;
       Abbrev  : Natural := 7;
-      Pattern : String  := "")
+      Pattern : String  := "";
+      Exclude : String  := "")
       return String
    is
       --  Every ref, as "<namespace>/<name>" the way --all reports it. Only
@@ -310,6 +314,9 @@ package body Version.Describe is
          if Pattern'Length > 0
            and then not Glob (Display, Pattern)
          then
+            return;
+         end if;
+         if Exclude'Length > 0 and then Glob (Display, Exclude) then
             return;
          end if;
 

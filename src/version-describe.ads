@@ -10,8 +10,11 @@ package Version.Describe is
       All_Tags : Boolean := False;
       Long     : Boolean := False;
       Abbrev   : Natural := 7;
-      Pattern  : String  := "")
+      Pattern  : String  := "";
+      Exclude  : String  := "")
       return String;
+   --  Exclude, when non-empty, drops candidate tags whose short name matches
+   --  the glob (git's --exclude).
    --  Long forces the "<tag>-<N>-g<short>" form even for an exactly-tagged
    --  commit, as git's --long does. Abbrev is how many hex digits the short id
    --  carries (git's --abbrev; 0 drops the "-g<short>" suffix entirely).
@@ -30,7 +33,8 @@ package Version.Describe is
       Commit  : Version.Objects.Hex_Object_Id;
       Long    : Boolean := False;
       Abbrev  : Natural := 7;
-      Pattern : String  := "")
+      Pattern : String  := "";
+      Exclude : String  := "")
       return String;
    --  git's --all: name Commit by the nearest reachable ref of any kind, not
    --  only tags, with the namespace kept ("tags/v2", "heads/main"). The tail
