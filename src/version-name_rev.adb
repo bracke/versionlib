@@ -169,11 +169,28 @@ package body Version.Name_Rev is
    function Describe_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Target    : Version.Objects.Hex_Object_Id;
-      Tags_Only : Boolean := False)
+      Tags_Only : Boolean := False;
+      Refs_Pattern : String := "")
       return String
    is
       Objects : Version.Object_Cache.Object_Cache;
       Names   : Name_Maps.Map;
+
+      --  git's --refs glob (shell wildmatch, `*` spanning '/'): does the full
+      --  refname match the pattern?
+      function Ref_Matches (Name : String) return Boolean is
+         function M (P, N : Natural) return Boolean is
+           (if P > Refs_Pattern'Last then N > Name'Last
+            elsif Refs_Pattern (P) = '*'
+            then M (P + 1, N)
+                 or else (N <= Name'Last and then M (P, N + 1))
+            elsif N > Name'Last then False
+            elsif Refs_Pattern (P) = '?' or else Refs_Pattern (P) = Name (N)
+            then M (P + 1, N + 1)
+            else False);
+      begin
+         return Refs_Pattern'Length = 0 or else M (Refs_Pattern'First, Name'First);
+      end Ref_Matches;
 
       --  Record a name for Id when it beats whatever is there, reporting
       --  whether the walk should continue through it (git's
@@ -314,59 +331,61 @@ package body Version.Name_Rev is
       for Refname of Version.Ref_Format.For_Each_Ref
         (Repo, Patterns, Format => "%(refname)")
       loop
-         declare
-            Tags_Prefix  : constant String := "refs/tags/";
-            Heads_Prefix : constant String := "refs/heads/";
-            Is_Tag_Ref : constant Boolean :=
-              Refname'Length > Tags_Prefix'Length
-              and then Refname (Refname'First
-                                .. Refname'First + Tags_Prefix'Length - 1)
-                       = Tags_Prefix;
-            Short : constant String :=
-              (if Is_Tag_Ref
-               then "tags/" & Refname (Refname'First + Tags_Prefix'Length
-                                       .. Refname'Last)
-               elsif Refname'Length > Heads_Prefix'Length
-                 and then Refname (Refname'First
-                                   .. Refname'First + Heads_Prefix'Length - 1)
-                          = Heads_Prefix
-               then Refname (Refname'First + Heads_Prefix'Length
-                             .. Refname'Last)
-               else Refname);
-         begin
+         if Ref_Matches (Refname) then
             declare
-               Peeled : constant Version.Objects.Hex_Object_Id :=
-                 Version.Revisions.Resolve_Commit (Repo, Refname);
-               Raw : constant Version.Objects.Hex_Object_Id :=
-                 Version.Refs.Resolve_Ref (Repo, Refname);
-               Raw_Obj : constant Version.Objects.Git_Object :=
-                 Version.Object_Cache.Read_Object (Repo, Objects, Raw);
-               --  An annotated tag names a tag object, so git appends "^0"
-               --  to say the name refers to the commit it peels to.
-               Deref : constant Boolean :=
-                 Version.Objects.Kind (Raw_Obj)
-                 = Version.Objects.Tag_Object;
-               Stamp : constant Long_Long_Integer :=
-                 (if Deref
-                  then Tagger_Time (Version.Objects.Content (Raw_Obj))
-                  else Version.Objects.Commit_Committer_Time
-                         (Version.Object_Cache.Read_Object
-                            (Repo, Objects, Peeled)));
+               Tags_Prefix  : constant String := "refs/tags/";
+               Heads_Prefix : constant String := "refs/heads/";
+               Is_Tag_Ref : constant Boolean :=
+                 Refname'Length > Tags_Prefix'Length
+                 and then Refname (Refname'First
+                                   .. Refname'First + Tags_Prefix'Length - 1)
+                          = Tags_Prefix;
+               Short : constant String :=
+                 (if Is_Tag_Ref
+                  then "tags/" & Refname (Refname'First + Tags_Prefix'Length
+                                          .. Refname'Last)
+                  elsif Refname'Length > Heads_Prefix'Length
+                    and then Refname (Refname'First
+                                      .. Refname'First + Heads_Prefix'Length - 1)
+                             = Heads_Prefix
+                  then Refname (Refname'First + Heads_Prefix'Length
+                                .. Refname'Last)
+                  else Refname);
             begin
-               Tips.Append
-                 (Tip_Entry'
-                    (Commit_Id  => Peeled,
-                     Tip_Name   =>
-                       To_Unbounded_String
-                         (if Deref then Short & "^0" else Short),
-                     Taggerdate => Stamp,
-                     From_Tag   => Is_Tag_Ref));
+               declare
+                  Peeled : constant Version.Objects.Hex_Object_Id :=
+                    Version.Revisions.Resolve_Commit (Repo, Refname);
+                  Raw : constant Version.Objects.Hex_Object_Id :=
+                    Version.Refs.Resolve_Ref (Repo, Refname);
+                  Raw_Obj : constant Version.Objects.Git_Object :=
+                    Version.Object_Cache.Read_Object (Repo, Objects, Raw);
+                  --  An annotated tag names a tag object, so git appends "^0"
+                  --  to say the name refers to the commit it peels to.
+                  Deref : constant Boolean :=
+                    Version.Objects.Kind (Raw_Obj)
+                    = Version.Objects.Tag_Object;
+                  Stamp : constant Long_Long_Integer :=
+                    (if Deref
+                     then Tagger_Time (Version.Objects.Content (Raw_Obj))
+                     else Version.Objects.Commit_Committer_Time
+                            (Version.Object_Cache.Read_Object
+                               (Repo, Objects, Peeled)));
+               begin
+                  Tips.Append
+                    (Tip_Entry'
+                       (Commit_Id  => Peeled,
+                        Tip_Name   =>
+                          To_Unbounded_String
+                            (if Deref then Short & "^0" else Short),
+                        Taggerdate => Stamp,
+                        From_Tag   => Is_Tag_Ref));
+               end;
+            exception
+               --  A ref that does not resolve to a commit is simply not a tip.
+               when others =>
+                  null;
             end;
-         exception
-            --  A ref that does not resolve to a commit is simply not a tip.
-            when others =>
-               null;
-         end;
+         end if;
       end loop;
 
       Tip_Sorting.Sort (Tips);
