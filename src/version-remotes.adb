@@ -79,7 +79,8 @@ package body Version.Remotes is
 
       Version.Config.Require_Config_Scalar (Name, "remote name");
       Version.Config.Require_Config_Scalar (Url, "remote url");
-      Version.Transport.Require_Supported_Url (Url);
+      --  git stores whatever URL string it is given; a bad scheme is only
+      --  diagnosed later, when a fetch or push tries to use it.
 
       declare
          Existing : constant Remote_Vectors.Vector := List_Remotes;
@@ -143,7 +144,8 @@ package body Version.Remotes is
 
       Version.Config.Require_Config_Scalar (Name, "remote name");
       Version.Config.Require_Config_Scalar (Url, "remote url");
-      Version.Transport.Require_Supported_Url (Url);
+      --  git stores whatever URL string it is given; a bad scheme is only
+      --  diagnosed later, when a fetch or push tries to use it.
 
       if not Existing.Is_Empty then
          for I in Existing.First_Index .. Existing.Last_Index loop
