@@ -19,9 +19,15 @@ package Version.Cherry is
    function Status
      (Repo     : Version.Repository.Repository_Handle;
       Upstream : Version.Objects.Hex_Object_Id;
-      Head     : Version.Objects.Hex_Object_Id)
+      Head     : Version.Objects.Hex_Object_Id;
+      Limit    : Version.Objects.Hex_Object_Id :=
+        Version.Objects.Zero_Object_Id)
       return Cherry_Vectors.Vector;
    --  Head-only commits, oldest first, each marked equivalent-in-upstream or
-   --  not, by comparing patch-ids against the upstream-only commits.
+   --  not, by comparing patch-ids against the upstream-only commits. When Limit
+   --  is a real commit (git's third `cherry` argument), the reported commits
+   --  are restricted to those reachable from Head but not from Limit
+   --  (`Limit..Head`) instead of `Upstream..Head`; the equivalence check still
+   --  compares against the upstream-only commits.
 
 end Version.Cherry;

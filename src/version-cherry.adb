@@ -40,13 +40,19 @@ package body Version.Cherry is
    function Status
      (Repo     : Version.Repository.Repository_Handle;
       Upstream : Version.Objects.Hex_Object_Id;
-      Head     : Version.Objects.Hex_Object_Id)
+      Head     : Version.Objects.Hex_Object_Id;
+      Limit    : Version.Objects.Hex_Object_Id :=
+        Version.Objects.Zero_Object_Id)
       return Cherry_Vectors.Vector
    is
+      use type Version.Objects.Hex_Object_Id;
       Up_Only   : constant Version.History.Commit_Id_Vectors.Vector :=
         Only_In (Repo, Upstream, Head);
+      --  git's third argument limits the reported commits to Limit..Head.
       Head_Only : constant Version.History.Commit_Id_Vectors.Vector :=
-        Only_In (Repo, Head, Upstream);
+        (if Limit = Version.Objects.Zero_Object_Id
+         then Only_In (Repo, Head, Upstream)
+         else Only_In (Repo, Head, Limit));
 
       Up_Pids : Id_Vectors.Vector;
       Result  : Cherry_Vectors.Vector;
