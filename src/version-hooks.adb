@@ -1,6 +1,7 @@
 with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
+with Ada.Text_IO;
 with GNAT.OS_Lib;
 with GNAT.Strings;
 
@@ -323,10 +324,17 @@ package body Version.Hooks is
               (Version.Repository.Root_Path (Repo)));
 
          if Blocking then
-            Status :=
-              GNAT.OS_Lib.Spawn
-                (Program_Name => Version.Files.To_Native_Path (Path),
-                 Args         => Args);
+            --  git connects a hook's stdout to its own stderr, so hook chatter
+            --  never contaminates porcelain output on stdout; mirror that by
+            --  pointing the child's stdout at our stderr (fd 2). The child's
+            --  stderr is left inheriting our stderr unchanged.
+            Ada.Text_IO.Flush;
+            GNAT.OS_Lib.Spawn
+              (Program_Name           => Version.Files.To_Native_Path (Path),
+               Args                   => Args,
+               Output_File_Descriptor => GNAT.OS_Lib.Standerr,
+               Return_Code            => Status,
+               Err_To_Out             => False);
          else
             Pid :=
               GNAT.OS_Lib.Non_Blocking_Spawn
