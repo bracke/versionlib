@@ -653,7 +653,8 @@ package body Version.Cherry_Pick is
       Current_Head  : Version.Objects.Hex_Object_Id;
       Next_Index    : Natural;
       Commits       : Version.Cherry_Pick_State.Commit_Vectors.Vector;
-      Mainline      : Natural)
+      Mainline      : Natural;
+      No_Commit     : Boolean := False)
    is
       Replay_Head : Version.Objects.Hex_Object_Id := Current_Head;
       Index       : Natural := Next_Index;
@@ -702,26 +703,33 @@ package body Version.Cherry_Pick is
                Old_Head : constant Version.Objects.Hex_Object_Id := Replay_Head;
                Message : constant String := "cherry-pick: " & Commit_Subject (Repo, Commit_Id);
             begin
+               --  Chaining still advances through the replayed commits so a
+               --  multi-pick merges each against the last; --no-commit leaves
+               --  HEAD where it was, with the result staged in the index.
                Replay_Head := Result.Commit_Id;
-               Move_Head
-                 (Repo     => Repo,
-                  Kind     => Kind,
-                  Head_Ref => Head_Ref,
-                  Old_Head => Old_Head,
-                  New_Head => Replay_Head,
-                  Message  => Message);
+               if not No_Commit then
+                  Move_Head
+                    (Repo     => Repo,
+                     Kind     => Kind,
+                     Head_Ref => Head_Ref,
+                     Old_Head => Old_Head,
+                     New_Head => Replay_Head,
+                     Message  => Message);
+               end if;
             end;
 
             Index := Index + 1;
-            Version.Cherry_Pick_State.Write_State
-              (Repo          => Repo,
-               Kind          => Kind,
-               Head_Ref      => Head_Ref,
-               Original_Head => Original_Head,
-               Current_Head  => Replay_Head,
-               Next_Index    => Index,
-               Commits       => Commits,
-               Mainline      => Mainline);
+            if not No_Commit then
+               Version.Cherry_Pick_State.Write_State
+                 (Repo          => Repo,
+                  Kind          => Kind,
+                  Head_Ref      => Head_Ref,
+                  Original_Head => Original_Head,
+                  Current_Head  => Replay_Head,
+                  Next_Index    => Index,
+                  Commits       => Commits,
+                  Mainline      => Mainline);
+            end if;
          end;
       end loop;
 
@@ -731,7 +739,8 @@ package body Version.Cherry_Pick is
 
    procedure Start
      (Revisions : Version.Cherry_Pick_State.Commit_Vectors.Vector;
-      Mainline  : Natural := 0)
+      Mainline  : Natural := 0;
+      No_Commit : Boolean := False)
    is
       Repo : constant Version.Repository.Repository_Handle := Version.Repository.Open;
       Kind : Version.Cherry_Pick_State.Head_Kind;
@@ -787,7 +796,8 @@ package body Version.Cherry_Pick is
             Current_Head  => Original_Head,
             Next_Index    => 0,
             Commits       => Revisions,
-            Mainline      => Mainline);
+            Mainline      => Mainline,
+            No_Commit     => No_Commit);
       exception
          when others =>
             declare
