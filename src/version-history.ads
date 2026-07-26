@@ -36,6 +36,16 @@ package Version.History is
       Right : Version.Objects.Hex_Object_Id)
       return Version.Objects.Hex_Object_Id;
 
+   function Merge_Bases_Many
+     (Repo : Version.Repository.Repository_Handle;
+      One  : Version.Objects.Hex_Object_Id;
+      Rest : Commit_Id_Vectors.Vector)
+      return Commit_Id_Vectors.Vector;
+   --  git's get_merge_bases_many: the best common ancestors of One and the
+   --  union of the Rest's histories (what `git merge-base A B C...` computes,
+   --  which is not the octopus reduction -- a commit reachable from One and
+   --  from any single one of Rest qualifies). Empty when there is none.
+
    package Path_Vectors is new Ada.Containers.Indefinite_Vectors
      (Index_Type => Positive, Element_Type => String);
 

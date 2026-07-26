@@ -257,6 +257,74 @@ package body Version.History is
       return Bases.First_Element;
    end Merge_Base;
 
+   function Merge_Bases_Many
+     (Repo : Version.Repository.Repository_Handle;
+      One  : Version.Objects.Hex_Object_Id;
+      Rest : Commit_Id_Vectors.Vector)
+      return Commit_Id_Vectors.Vector
+   is
+      One_Ancestors : constant Commit_Id_Vectors.Vector :=
+        Collect_Ancestors (Repo => Repo, Start_Id => One);
+      One_Set    : Object_Id_Sets.Set;
+      Common     : Commit_Id_Vectors.Vector;
+      Common_Set : Object_Id_Sets.Set;
+      Result     : Commit_Id_Vectors.Vector;
+   begin
+      for I in One_Ancestors.First_Index .. One_Ancestors.Last_Index loop
+         One_Set.Include (One_Ancestors.Element (I));
+      end loop;
+
+      --  A commit qualifies as a common ancestor if it is reachable from One
+      --  and from at least one of Rest (the union of their histories).
+      for R of Rest loop
+         declare
+            R_Ancestors : constant Commit_Id_Vectors.Vector :=
+              Collect_Ancestors (Repo => Repo, Start_Id => R);
+         begin
+            for I in R_Ancestors.First_Index .. R_Ancestors.Last_Index loop
+               declare
+                  Candidate : constant Version.Objects.Hex_Object_Id :=
+                    R_Ancestors.Element (I);
+               begin
+                  if One_Set.Contains (Candidate)
+                    and then not Common_Set.Contains (Candidate)
+                  then
+                     Common.Append (Candidate);
+                     Common_Set.Include (Candidate);
+                  end if;
+               end;
+            end loop;
+         end;
+      end loop;
+
+      --  Keep only the maximal common ancestors (drop any that is an ancestor
+      --  of another candidate).
+      for I in Common.First_Index .. Common.Last_Index loop
+         declare
+            Candidate : constant Version.Objects.Hex_Object_Id :=
+              Common.Element (I);
+            Dominated : Boolean := False;
+         begin
+            for J in Common.First_Index .. Common.Last_Index loop
+               if I /= J
+                 and then Is_Ancestor
+                            (Repo       => Repo,
+                             Base_Id    => Candidate,
+                             Derived_Id => Common.Element (J))
+               then
+                  Dominated := True;
+                  exit;
+               end if;
+            end loop;
+            if not Dominated then
+               Result.Append (Candidate);
+            end if;
+         end;
+      end loop;
+
+      return Result;
+   end Merge_Bases_Many;
+
    procedure Collect_Tree
      (Repo    : Version.Repository.Repository_Handle;
       Objects : in out Version.Object_Cache.Object_Cache;
