@@ -300,7 +300,9 @@ package body Version.Diff is
       --  Rename source path ("" when this is not a rename) and the score the
       --  pairing settled on, for git's "similarity index" block.
       Old_Path     : String := "";
-      Rename_Score : Natural := 0) return String
+      Rename_Score : Natural := 0;
+      Src_Prefix   : String := "a/";
+      Dst_Prefix   : String := "b/") return String
    is
       --  git names the a/ side after the path the content came from.
       Head_A : constant String :=
@@ -333,7 +335,9 @@ package body Version.Diff is
       end if;
 
       if Git_Header then
-         Append_Line (Result, "diff --git a/" & Head_A & " b/" & Path);
+         Append_Line
+           (Result,
+            "diff --git " & Src_Prefix & Head_A & " " & Dst_Prefix & Path);
          if Old_Path'Length > 0 then
             --  git orders a rename header as mode lines, then the similarity
             --  block, then index.
@@ -380,9 +384,11 @@ package body Version.Diff is
          end if;
       end if;
       Append_Line
-        (Result, "--- " & (if Old_Present then "a/" & Head_A else "/dev/null"));
+        (Result,
+         "--- " & (if Old_Present then Src_Prefix & Head_A else "/dev/null"));
       Append_Line
-        (Result, "+++ " & (if New_Present then "b/" & Path else "/dev/null"));
+        (Result,
+         "+++ " & (if New_Present then Dst_Prefix & Path else "/dev/null"));
 
       Old_At (0) := 0;
       New_At (0) := 0;
@@ -566,7 +572,9 @@ package body Version.Diff is
       Old_Path     : String := "";
       Rename_Score : Natural := 0;
       Binary_Patch : Boolean := False;
-      As_Text      : Boolean := False) return String
+      As_Text      : Boolean := False;
+      Src_Prefix   : String := "a/";
+      Dst_Prefix   : String := "b/") return String
    is
       Head_A : constant String :=
         (if Old_Path'Length > 0 then Old_Path else Path);
@@ -586,7 +594,9 @@ package body Version.Diff is
             if Eff_Old = Eff_New and then Old_Path'Length = 0 then
                return "";
             end if;
-            Append_Line (R, "diff --git a/" & Head_A & " b/" & Path);
+            Append_Line
+              (R,
+               "diff --git " & Src_Prefix & Head_A & " " & Dst_Prefix & Path);
             if Eff_Old /= Eff_New then
                Append_Line (R, "old mode " & Eff_Old);
                Append_Line (R, "new mode " & Eff_New);
@@ -633,7 +643,10 @@ package body Version.Diff is
                   is (if Binary_Patch then Version.Objects.To_String (Id)
                       else Abbrev (Id));
                begin
-                  Append_Line (R, "diff --git a/" & Head_A & " b/" & Path);
+                  Append_Line
+                    (R,
+                     "diff --git "
+                     & Src_Prefix & Head_A & " " & Dst_Prefix & Path);
                   if Old_Path'Length > 0 then
                      Append_Line
                        (R,
@@ -674,9 +687,10 @@ package body Version.Diff is
                   Append_Line
                     (R,
                      "Binary files "
-                     & (if Old_Present then "a/" & Head_A else "/dev/null")
+                     & (if Old_Present then Src_Prefix & Head_A
+                        else "/dev/null")
                      & " and "
-                     & (if New_Present then "b/" & Path else "/dev/null")
+                     & (if New_Present then Dst_Prefix & Path else "/dev/null")
                      & " differ");
                end if;
                return To_String (R);
@@ -696,7 +710,9 @@ package body Version.Diff is
               New_Mode    => Eff_New_Mode,
               Context     => Context,
               Old_Path     => Old_Path,
-              Rename_Score => Rename_Score);
+              Rename_Score => Rename_Score,
+              Src_Prefix   => Src_Prefix,
+              Dst_Prefix   => Dst_Prefix);
       end;
    end One_File_Diff;
 
@@ -1660,7 +1676,9 @@ package body Version.Diff is
       Rename_Score   : Natural := 0;
       Rename_Limit   : Natural := 0;
       Binary_Patch   : Boolean := False;
-      Text           : Boolean := False) return String
+      Text           : Boolean := False;
+      Src_Prefix     : String := "a/";
+      Dst_Prefix     : String := "b/") return String
    is
       HT       : constant Character := Character'Val (9);
       NL       : constant Character := Character'Val (10);
@@ -1993,7 +2011,9 @@ package body Version.Diff is
                           (if Is_Rename_Dest then Rn_Path else ""),
                         Rename_Score => Rn.Score,
                         Binary_Patch => Binary_Patch,
-                        As_Text      => Text));
+                        As_Text      => Text,
+                        Src_Prefix   => Src_Prefix,
+                        Dst_Prefix   => Dst_Prefix));
                end if;
             end;
 
@@ -2048,7 +2068,9 @@ package body Version.Diff is
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
                  Binary_Patch   => Options.Binary_Patch,
-                 Text            => Options.Diff_Text);
+                 Text            => Options.Diff_Text,
+                 Src_Prefix      => To_String (Options.Src_Prefix),
+                 Dst_Prefix      => To_String (Options.Dst_Prefix));
          end;
       end;
    end Diff_Working_Tree;
@@ -2097,7 +2119,9 @@ package body Version.Diff is
                  Rename_Score   => Options.Rename_Score,
                  Rename_Limit   => Options.Rename_Limit,
                  Binary_Patch   => Options.Binary_Patch,
-                 Text            => Options.Diff_Text);
+                 Text            => Options.Diff_Text,
+                 Src_Prefix      => To_String (Options.Src_Prefix),
+                 Dst_Prefix      => To_String (Options.Dst_Prefix));
          end;
       end;
    end Diff_Working_Tree;
@@ -2138,7 +2162,9 @@ package body Version.Diff is
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
               Binary_Patch   => Options.Binary_Patch,
-              Text            => Options.Diff_Text);
+              Text            => Options.Diff_Text,
+              Src_Prefix      => To_String (Options.Src_Prefix),
+              Dst_Prefix      => To_String (Options.Dst_Prefix));
       end;
    end Diff_Staged;
 
@@ -2183,7 +2209,9 @@ package body Version.Diff is
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
               Binary_Patch   => Options.Binary_Patch,
-              Text            => Options.Diff_Text);
+              Text            => Options.Diff_Text,
+              Src_Prefix      => To_String (Options.Src_Prefix),
+              Dst_Prefix      => To_String (Options.Dst_Prefix));
       end;
    end Diff_Staged;
 
@@ -2239,7 +2267,9 @@ package body Version.Diff is
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
            Binary_Patch   => Options.Binary_Patch,
-           Text            => Options.Diff_Text);
+           Text            => Options.Diff_Text,
+           Src_Prefix      => To_String (Options.Src_Prefix),
+           Dst_Prefix      => To_String (Options.Dst_Prefix));
    end Diff_Tree_Vs_Working;
 
    function Diff_Tree_Vs_Index
@@ -2273,7 +2303,9 @@ package body Version.Diff is
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
            Binary_Patch   => Options.Binary_Patch,
-           Text            => Options.Diff_Text);
+           Text            => Options.Diff_Text,
+           Src_Prefix      => To_String (Options.Src_Prefix),
+           Dst_Prefix      => To_String (Options.Dst_Prefix));
    end Diff_Tree_Vs_Index;
 
    function Diff_Trees
@@ -2311,7 +2343,9 @@ package body Version.Diff is
            Rename_Score   => Options.Rename_Score,
            Rename_Limit   => Options.Rename_Limit,
            Binary_Patch   => Options.Binary_Patch,
-           Text            => Options.Diff_Text);
+           Text            => Options.Diff_Text,
+           Src_Prefix      => To_String (Options.Src_Prefix),
+           Dst_Prefix      => To_String (Options.Dst_Prefix));
    end Diff_Trees;
 
    function Diff_Commits
@@ -2357,7 +2391,9 @@ package body Version.Diff is
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
               Binary_Patch   => Options.Binary_Patch,
-              Text            => Options.Diff_Text);
+              Text            => Options.Diff_Text,
+              Src_Prefix      => To_String (Options.Src_Prefix),
+              Dst_Prefix      => To_String (Options.Dst_Prefix));
       end;
    end Diff_Commits;
 
@@ -2413,7 +2449,9 @@ package body Version.Diff is
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
               Binary_Patch   => Options.Binary_Patch,
-              Text            => Options.Diff_Text);
+              Text            => Options.Diff_Text,
+              Src_Prefix      => To_String (Options.Src_Prefix),
+              Dst_Prefix      => To_String (Options.Dst_Prefix));
       end;
    end Diff_Commits;
 
@@ -2454,7 +2492,9 @@ package body Version.Diff is
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
               Binary_Patch   => Options.Binary_Patch,
-              Text            => Options.Diff_Text);
+              Text            => Options.Diff_Text,
+              Src_Prefix      => To_String (Options.Src_Prefix),
+              Dst_Prefix      => To_String (Options.Dst_Prefix));
       end;
    end Diff_Root_Commit;
 
@@ -2502,7 +2542,9 @@ package body Version.Diff is
               Rename_Score   => Options.Rename_Score,
               Rename_Limit   => Options.Rename_Limit,
               Binary_Patch   => Options.Binary_Patch,
-              Text            => Options.Diff_Text);
+              Text            => Options.Diff_Text,
+              Src_Prefix      => To_String (Options.Src_Prefix),
+              Dst_Prefix      => To_String (Options.Dst_Prefix));
       end;
    end Diff_Root_Commit;
 

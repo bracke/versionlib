@@ -28,6 +28,12 @@ package Version.Diff is
       Rename_Limit   : Natural := 0;
       Binary_Patch   : Boolean := False;
       Diff_Text      : Boolean := False;
+      --  git's --src-prefix/--dst-prefix/--no-prefix. Empty strings drop the
+      --  "a/"/"b/" the headers otherwise carry.
+      Src_Prefix     : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String ("a/");
+      Dst_Prefix     : Ada.Strings.Unbounded.Unbounded_String :=
+        Ada.Strings.Unbounded.To_Unbounded_String ("b/");
    end record;
    --  Name_Only lists just the changed paths; Name_Status prefixes each with
    --  git's status letter (A/D/M/R) and a tab. Both suppress the patch body.
