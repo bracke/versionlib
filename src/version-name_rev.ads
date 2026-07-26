@@ -15,7 +15,8 @@ package Version.Name_Rev is
      (Repo      : Version.Repository.Repository_Handle;
       Target    : Version.Objects.Hex_Object_Id;
       Tags_Only : Boolean := False;
-      Refs_Pattern : String := "")
+      Refs_Pattern : String := "";
+      Exclude_Pattern : String := "")
       return String;
    --  The name git's `name-rev` prints for Target: a ref name, optionally
    --  followed by `^<parent>` for each merge parent descended through and

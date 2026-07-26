@@ -170,27 +170,35 @@ package body Version.Name_Rev is
      (Repo      : Version.Repository.Repository_Handle;
       Target    : Version.Objects.Hex_Object_Id;
       Tags_Only : Boolean := False;
-      Refs_Pattern : String := "")
+      Refs_Pattern : String := "";
+      Exclude_Pattern : String := "")
       return String
    is
       Objects : Version.Object_Cache.Object_Cache;
       Names   : Name_Maps.Map;
 
-      --  git's --refs glob (shell wildmatch, `*` spanning '/'): does the full
-      --  refname match the pattern?
-      function Ref_Matches (Name : String) return Boolean is
+      --  Shell wildmatch (`*` spanning '/', `?` any one char).
+      function Wildmatch (Pattern, Name : String) return Boolean is
          function M (P, N : Natural) return Boolean is
-           (if P > Refs_Pattern'Last then N > Name'Last
-            elsif Refs_Pattern (P) = '*'
+           (if P > Pattern'Last then N > Name'Last
+            elsif Pattern (P) = '*'
             then M (P + 1, N)
                  or else (N <= Name'Last and then M (P, N + 1))
             elsif N > Name'Last then False
-            elsif Refs_Pattern (P) = '?' or else Refs_Pattern (P) = Name (N)
+            elsif Pattern (P) = '?' or else Pattern (P) = Name (N)
             then M (P + 1, N + 1)
             else False);
       begin
-         return Refs_Pattern'Length = 0 or else M (Refs_Pattern'First, Name'First);
-      end Ref_Matches;
+         return M (Pattern'First, Name'First);
+      end Wildmatch;
+
+      --  git's --refs / --exclude: a ref is used only when it matches the
+      --  --refs glob (or none given) and matches no --exclude glob.
+      function Ref_Matches (Name : String) return Boolean is
+        ((Refs_Pattern'Length = 0 or else Wildmatch (Refs_Pattern, Name))
+         and then
+           (Exclude_Pattern'Length = 0
+            or else not Wildmatch (Exclude_Pattern, Name)));
 
       --  Record a name for Id when it beats whatever is there, reporting
       --  whether the walk should continue through it (git's
@@ -313,9 +321,12 @@ package body Version.Name_Rev is
          From_Tag   : Boolean := False;
       end record;
 
+      --  git offers refs in alphabetical order and keeps the first name on a
+      --  tie, so among equally-good tips the alphabetically-first ref wins.
       function Tip_Less (L, R : Tip_Entry) return Boolean is
         (if L.From_Tag /= R.From_Tag then L.From_Tag
-         else L.Taggerdate < R.Taggerdate);
+         elsif L.Taggerdate /= R.Taggerdate then L.Taggerdate < R.Taggerdate
+         else L.Tip_Name < R.Tip_Name);
 
       package Tip_Vectors is new Ada.Containers.Vectors
         (Index_Type => Natural, Element_Type => Tip_Entry);
