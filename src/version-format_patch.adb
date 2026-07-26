@@ -1,7 +1,9 @@
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
+with Version.Config;
 with Version.Diff;
+with Version.Shortlog;
 
 package body Version.Format_Patch is
    use Version.Objects;
@@ -286,5 +288,131 @@ package body Version.Format_Patch is
 
       return To_String (Result);
    end Patch_For_Commit;
+
+   function Cover_Letter
+     (Repo         : Version.Repository.Repository_Handle;
+      Commits      : Version.History.Commit_Id_Vectors.Vector;
+      Total        : Positive;
+      Prefix       : String := "PATCH";
+      Numbering    : Numbering_Mode := Auto;
+      Reroll       : Natural := 0;
+      Context      : Natural := 3;
+      Show_Summary : Boolean := True)
+      return String
+   is
+      pragma Unreferenced (Context);
+      Tip     : constant Version.Objects.Hex_Object_Id :=
+        Commits.Last_Element;
+      Oldest  : constant Version.Objects.Git_Object :=
+        Version.Objects.Read_Object (Repo, Commits.First_Element);
+      Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+        Version.Objects.Commit_Parent_Ids (Oldest);
+      Has_Base : constant Boolean := not Parents.Is_Empty;
+
+      Stat_Opts : constant Version.Diff.Diff_Options :=
+        (Stat => True, Summary => Show_Summary, others => <>);
+      Stat : constant String :=
+        (if not Has_Base
+         then Version.Diff.Diff_Root_Commit (Repo, Tip, Stat_Opts)
+         else Version.Diff.Diff_Commits
+                (Repo, Parents.First_Element, Tip, Stat_Opts));
+
+      --  shortlog wants the series newest first (it reverses each group's
+      --  subjects back to chronological order).
+      Newest_First : Version.History.Commit_Id_Vectors.Vector;
+
+      --  The committer identity: "Name <email> <ts> <tz>".
+      Sig     : constant String :=
+        Version.Config.Committer_Signature (Repo);
+      Last_GT : Natural := 0;
+
+      function Trim (V : Integer) return String is
+        (Ada.Strings.Fixed.Trim (Integer'Image (V), Ada.Strings.Left));
+
+      Result : Unbounded_String;
+   begin
+      for C of reverse Commits loop
+         Newest_First.Append (C);
+      end loop;
+
+      for I in reverse Sig'Range loop
+         if Sig (I) = '>' then
+            Last_GT := I;
+            exit;
+         end if;
+      end loop;
+
+      declare
+         Name_Email : constant String :=
+           (if Last_GT = 0 then Sig else Sig (Sig'First .. Last_GT));
+         Date_Field : constant String :=
+           (if Last_GT = 0 or else Last_GT + 2 > Sig'Last then ""
+            else Sig (Last_GT + 2 .. Sig'Last));   --  "<ts> <tz>"
+         Sp       : Natural := 0;
+         RFC_Date : Unbounded_String;
+
+         Show_Number : constant Boolean := Numbering /= Off;
+         Tag : constant String :=
+           "[" & Prefix
+           & (if Reroll > 0 then " v" & Trim (Reroll) else "")
+           & (if Show_Number then " 0/" & Trim (Total) else "")
+           & "]";
+
+         Groups : constant Version.Shortlog.Group_Vectors.Vector :=
+           Version.Shortlog.Summarize (Repo, Newest_First);
+      begin
+         for I in Date_Field'Range loop
+            if Date_Field (I) = ' ' then
+               Sp := I;
+               exit;
+            end if;
+         end loop;
+         if Sp /= 0 then
+            RFC_Date := To_Unbounded_String
+              (Format_Date
+                 (Long_Long_Integer'Value
+                    (Date_Field (Date_Field'First .. Sp - 1)),
+                  Date_Field (Sp + 1 .. Date_Field'Last)));
+         end if;
+
+         Append (Result,
+           "From " & Version.Objects.To_String (Tip)
+           & " Mon Sep 17 00:00:00 2001" & LF);
+         Append (Result, "From: " & Name_Email & LF);
+         Append (Result, "Date: " & To_String (RFC_Date) & LF);
+         Append (Result,
+           "Subject: " & Tag & " *** SUBJECT HERE ***" & LF);
+         Append (Result, "" & LF);
+         Append (Result, "*** BLURB HERE ***" & LF);
+         Append (Result, "" & LF);
+
+         --  The series shortlog, groups blank-line separated.
+         for I in Groups.First_Index .. Groups.Last_Index loop
+            declare
+               G : constant Version.Shortlog.Author_Group :=
+                 Groups.Element (I);
+            begin
+               Append (Result,
+                 To_String (G.Name) & " ("
+                 & Trim (Natural (G.Subjects.Length)) & "):" & LF);
+               for S of G.Subjects loop
+                  Append (Result, "  " & To_String (S) & LF);
+               end loop;
+               if I < Groups.Last_Index then
+                  Append (Result, "" & LF);
+               end if;
+            end;
+         end loop;
+
+         --  A blank line, then the cumulative diffstat.
+         Append (Result, "" & LF);
+         Append (Result, Stat);
+         if Stat'Length > 0 and then Stat (Stat'Last) /= LF then
+            Append (Result, LF);
+         end if;
+      end;
+
+      return To_String (Result);
+   end Cover_Letter;
 
 end Version.Format_Patch;
