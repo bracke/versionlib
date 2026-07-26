@@ -435,6 +435,24 @@ package body Version.Maintenance is
       end;
 
       Result.Object_Count := Natural (Reachable.Length);
+
+      --  "Nothing new to pack" when every reachable object was already in a
+      --  pack before this repack (git's message for a bare repack).
+      declare
+         Packed : Object_Id_Sets.Set;
+      begin
+         for P of Pre_Packed loop
+            Packed.Include (P);
+         end loop;
+         Result.Nothing_New := True;
+         for R of Reachable loop
+            if not Packed.Contains (R) then
+               Result.Nothing_New := False;
+               exit;
+            end if;
+         end loop;
+      end;
+
       return Result;
    exception
       when others =>

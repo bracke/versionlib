@@ -7,6 +7,9 @@ package Version.Maintenance is
       Object_Count      : Natural := 0;
       Unreachable_Count : Natural := 0;
       Deleted_Count     : Natural := 0;
+      --  Repack only: True when every reachable object was already in a pack,
+      --  so the repack adds nothing (git's "Nothing new to pack.").
+      Nothing_New       : Boolean := False;
    end record;
 
    function Verify
