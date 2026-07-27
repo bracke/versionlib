@@ -1377,7 +1377,11 @@ package body Version.Config is
       Existing : constant Config_Entry_Vectors.Vector :=
         Read_File_Entries (Config_Path (Repo));
 
-      Result : Config_Entry_Vectors.Vector;
+      Result   : Config_Entry_Vectors.Vector;
+      --  Rewrite an existing section in place, at the position of its first
+      --  entry, so that -- like git -- editing a section (a new remote URL, a
+      --  renamed remote) does not move its block to the end of the file.
+      Inserted : Boolean := False;
    begin
       Require_Config_Section (Section);
 
@@ -1386,14 +1390,22 @@ package body Version.Config is
             declare
                Item : constant Config_Entry := Existing.Element (I);
             begin
-               if Lower (To_String (Item.Section)) /= Lower (Section) then
+               if Lower (To_String (Item.Section)) = Lower (Section) then
+                  if not Inserted then
+                     for J in Entries.First_Index .. Entries.Last_Index loop
+                        Result.Append (Entries.Element (J));
+                     end loop;
+                     Inserted := True;
+                  end if;
+               else
                   Result.Append (Item);
                end if;
             end;
          end loop;
       end if;
 
-      if not Entries.Is_Empty then
+      --  A section that did not exist yet is appended at the end.
+      if not Inserted and then not Entries.Is_Empty then
          for I in Entries.First_Index .. Entries.Last_Index loop
             Result.Append (Entries.Element (I));
          end loop;
