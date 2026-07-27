@@ -1,3 +1,4 @@
+- Git parity: `Version.Ref_Cache.Read_Loose_Ref` follows a loose symbolic ref (e.g. `refs/remotes/*/HEAD`) to the commit its target resolves to, so `rev-parse`/resolution of a remote symref no longer fails with "invalid ref object id".
 - Git parity: the ref-format engine renders `%(push)` (and `%(push:short)`) — a branch's push destination as a remote-tracking ref, from `branch.<x>.pushRemote`/`remote.pushDefault`/`branch.<x>.remote`.
 - Git parity: `Version.Describe.Describe_By_Any_Ref` breaks a same-commit, same-distance tie between annotated tags by the newest tagger date (as `Describe` already did), so `describe --all` picks the newer tag.
 - Git parity: `Version.Subtree.Split` takes an `Annotate` string that is prepended to each synthesised split commit's message (git subtree's `--annotate`).
