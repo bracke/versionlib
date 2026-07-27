@@ -92,6 +92,12 @@ package Version.Status is
    function Short_Status_Text
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String;
+   --  git's `--porcelain=v2`: one "1"/"2"/"u"/"?"/"!" record per change with
+   --  the XY code, submodule field, HEAD/index/worktree modes and HEAD/index
+   --  object ids.
+   function Porcelain_V2_Status_Text
+     (Result          : Status_Result;
+      Include_Ignored : Boolean := False) return String;
    function Branch_Status_Text
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String;
@@ -113,6 +119,17 @@ package Version.Status is
       All_Untracked   : Boolean := False);
 
    procedure Print_Porcelain_Status
+     (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
+      Include_Ignored : Boolean := False;
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
+
+   procedure Print_Porcelain_V2_Status
+     (Include_Ignored : Boolean := False;
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False);
+
+   procedure Print_Porcelain_V2_Status
      (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
       Include_Ignored : Boolean := False;
       Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;

@@ -267,6 +267,221 @@ package body Version.Status is
       return To_String (Text);
    end Porcelain_Status_Text;
 
+   function Load_Head_Tree
+     (Repo    : Version.Repository.Repository_Handle;
+      Commit  : String;
+      Objects : in out Version.Object_Cache.Object_Cache;
+      Trees   : in out Version.Tree_Cache.Tree_Cache)
+      return Version.Objects.Tree_Entry_Vectors.Vector;
+
+   --  git status --porcelain=v2: one record per change.  Ordinary changes are
+   --  "1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>", renames/copies "2 ...
+   --  <Xscore> <path>\t<orig>", untracked "? <path>" and ignored "! <path>".
+   --  <sub> is "N..." for a regular path and "S<c><m><u>" for a submodule
+   --  (c=C when its commit moved).  A side with no change shows ".".
+   function Porcelain_V2_Status_Text
+     (Result          : Status_Result;
+      Include_Ignored : Boolean := False) return String
+   is
+      LF   : constant Character := Ada.Characters.Latin_1.LF;
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+
+      Object_Cache : Version.Object_Cache.Object_Cache;
+      Ref_Cache    : Version.Ref_Cache.Ref_Cache;
+      Tree_Cache   : Version.Tree_Cache.Tree_Cache;
+
+      Commit : constant String :=
+        Version.Ref_Cache.Current_Commit_Id (Repo, Ref_Cache);
+      Head_Entries : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+        Load_Head_Tree (Repo, Commit, Object_Cache, Tree_Cache);
+      Index_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+      Ignore_Rules  : Version.Ignore.Ignore_Rules := Version.Ignore.Load (Repo);
+      Working_Files : constant
+        Version.Working_Tree.Working_File_Vectors.Vector :=
+          Version.Working_Tree.Scan (Repo, Ignore_Rules, Index_Entries);
+
+      package Str_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => String);
+      Head_Mode, Head_Id, Idx_Mode, Idx_Id, Work_Id : Str_Maps.Map;
+
+      Zero : constant String :=
+        [1 .. (if Commit'Length > 0 then Commit'Length else 40) => '0'];
+
+      function Look (Map : Str_Maps.Map; P, Def : String) return String is
+        (if Map.Contains (P) then Map.Element (P) else Def);
+
+      type Entry_State is record
+         X, Y     : Character := '.';
+         Rename   : Boolean := False;
+         Old_Path : Unbounded_String;
+      end record;
+      package State_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => Entry_State);
+      package Str_Sets is new Ada.Containers.Indefinite_Ordered_Sets
+        (Element_Type => String);
+      Tracked : State_Maps.Map;
+      Text    : Unbounded_String;
+
+      function V2_Code (K : Change_Kind) return Character is
+        (case K is
+            when New_File      => 'A',
+            when Renamed_File  => 'R',
+            when Deleted_File  => 'D',
+            when others        => 'M');
+
+      procedure Set_X (Path : String; C : Character) is
+         S : Entry_State :=
+           (if Tracked.Contains (Path) then Tracked.Element (Path)
+            else (others => <>));
+      begin
+         S.X := C;
+         Tracked.Include (Path, S);
+      end Set_X;
+
+      procedure Set_Y (Path : String; C : Character) is
+         S : Entry_State :=
+           (if Tracked.Contains (Path) then Tracked.Element (Path)
+            else (others => <>));
+      begin
+         S.Y := C;
+         Tracked.Include (Path, S);
+      end Set_Y;
+
+      --  The submodule sub-field: commit-changed is detected by the checkout
+      --  (working id) differing from the recorded gitlink (index id).
+      function Sub_Field (Path : String) return String is
+      begin
+         if Look (Idx_Mode, Path, "") = "160000"
+           or else Look (Head_Mode, Path, "") = "160000"
+         then
+            return "S"
+              & (if Work_Id.Contains (Path)
+                   and then Look (Work_Id, Path, "") /= Look (Idx_Id, Path, "")
+                 then 'C' else '.')
+              & "..";
+         end if;
+         return "N...";
+      end Sub_Field;
+
+      function Work_Mode (Path : String) return String is
+      begin
+         if Look (Idx_Mode, Path, "") = "160000"
+           or else Look (Head_Mode, Path, "") = "160000"
+         then
+            return "160000";
+         elsif Work_Id.Contains (Path) then
+            return Working_Index_Mode (Repo, Path);
+         else
+            return "000000";
+         end if;
+      end Work_Mode;
+   begin
+      for E of Head_Entries loop
+         Head_Mode.Include (To_String (E.Path), To_String (E.Mode));
+         Head_Id.Include
+           (To_String (E.Path), Version.Objects.To_String (E.Id));
+      end loop;
+      for E of Index_Entries loop
+         if E.Stage = 0 then
+            Idx_Mode.Include (To_String (E.Path), To_String (E.Mode));
+            Idx_Id.Include
+              (To_String (E.Path), Version.Objects.To_String (E.Id));
+         end if;
+      end loop;
+      for E of Working_Files loop
+         Work_Id.Include
+           (To_String (E.Path), Version.Objects.To_String (E.Id));
+      end loop;
+
+      for I in Result.Conflicted.First_Index .. Result.Conflicted.Last_Index
+      loop
+         Tracked.Include
+           (To_String (Result.Conflicted.Element (I).Path),
+            ('U', 'U', False, Null_Unbounded_String));
+      end loop;
+      for I in Result.Staged.First_Index .. Result.Staged.Last_Index loop
+         declare
+            E : constant File_Change := Result.Staged.Element (I);
+         begin
+            if E.Kind = Renamed_File then
+               declare
+                  S : Entry_State :=
+                    (if Tracked.Contains (To_String (E.Path))
+                     then Tracked.Element (To_String (E.Path))
+                     else (others => <>));
+               begin
+                  S.X := 'R';
+                  S.Rename := True;
+                  S.Old_Path := E.Old_Path;
+                  Tracked.Include (To_String (E.Path), S);
+               end;
+            else
+               Set_X (To_String (E.Path), V2_Code (E.Kind));
+            end if;
+         end;
+      end loop;
+      for I in Result.Changes.First_Index .. Result.Changes.Last_Index loop
+         Set_Y (To_String (Result.Changes.Element (I).Path),
+                V2_Code (Result.Changes.Element (I).Kind));
+      end loop;
+
+      for C in Tracked.Iterate loop
+         declare
+            Path : constant String := State_Maps.Key (C);
+            S    : constant Entry_State := State_Maps.Element (C);
+            --  For a rename the HEAD columns describe where the content came
+            --  from, so they are read off the original path.
+            Head_Path : constant String :=
+              (if S.Rename then To_String (S.Old_Path) else Path);
+            Cols : constant String :=
+              S.X & S.Y & " " & Sub_Field (Path) & " "
+              & Look (Head_Mode, Head_Path, "000000") & " "
+              & Look (Idx_Mode, Path, "000000") & " "
+              & Work_Mode (Path) & " "
+              & Look (Head_Id, Head_Path, Zero) & " "
+              & Look (Idx_Id, Path, Zero) & " ";
+         begin
+            if S.Rename then
+               --  git records the similarity score; a plain rename is R100.
+               Append
+                 (Text,
+                  "2 " & Cols & "R100 " & Path & ASCII.HT
+                  & To_String (S.Old_Path) & LF);
+            else
+               Append (Text, "1 " & Cols & Path & LF);
+            end if;
+         end;
+      end loop;
+
+      declare
+         S : Str_Sets.Set;
+      begin
+         for I in Result.Untracked.First_Index .. Result.Untracked.Last_Index
+         loop
+            S.Include (To_String (Result.Untracked.Element (I).Path));
+         end loop;
+         for P of S loop
+            Append (Text, "? " & P & LF);
+         end loop;
+      end;
+      if Include_Ignored then
+         declare
+            S : Str_Sets.Set;
+         begin
+            for I in Result.Ignored.First_Index .. Result.Ignored.Last_Index
+            loop
+               S.Include (To_String (Result.Ignored.Element (I).Path));
+            end loop;
+            for P of S loop
+               Append (Text, "! " & P & LF);
+            end loop;
+         end;
+      end if;
+      return To_String (Text);
+   end Porcelain_V2_Status_Text;
+
    function Short_Status_Text
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String
@@ -2059,6 +2274,34 @@ package body Version.Status is
              else Current_Status (Pathspecs, All_Untracked)),
             Include_Ignored));
    end Print_Porcelain_Status;
+
+   procedure Print_Porcelain_V2_Status
+     (Include_Ignored : Boolean := False;
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
+   begin
+      Version.Console.Put
+        (Porcelain_V2_Status_Text
+           ((if Include_Ignored
+             then Current_Status_With_Ignored (Ignored_Mode, All_Untracked)
+             else Current_Status (All_Untracked)),
+            Include_Ignored));
+   end Print_Porcelain_V2_Status;
+
+   procedure Print_Porcelain_V2_Status
+     (Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
+      Include_Ignored : Boolean := False;
+      Ignored_Mode    : Ignored_Display_Mode := Ignored_Traditional;
+      All_Untracked   : Boolean := False) is
+   begin
+      Version.Console.Put
+        (Porcelain_V2_Status_Text
+           ((if Include_Ignored
+             then Current_Status_With_Ignored
+                    (Pathspecs, Ignored_Mode, All_Untracked)
+             else Current_Status (Pathspecs, All_Untracked)),
+            Include_Ignored));
+   end Print_Porcelain_V2_Status;
 
    procedure Print_Short_Status
      (Include_Ignored : Boolean := False;
