@@ -1,3 +1,4 @@
+- Git parity: `Version.Submodules.Status_Line_Git` renders a `submodule status` line in git's format — prefix + shown commit (checkout, or the index commit when Cached) + path + a `describe --all --always` computed inside the submodule; a not-checked-out submodule drops the describe.
 - Git parity: `Version.Fetch.Remote_Head_Symref` returns the refname the remote's HEAD points at (from the upload-pack symref advertisement, or a local source's HEAD), for `ls-remote --symref`.
 - Git parity: `Version.Diff` honours a `Stat_Width` (git's `--stat=<width>`), fixing the diffstat's total line width instead of the terminal's for graph scaling.
 - Git parity: `Version.Diff` renders `--compact-summary` (a `Compact_Summary` option) -- the diffstat with the name column annotated "(new)"/"(gone)"/"(mode +x|-x)" for created/deleted/exec-bit-changed files.

@@ -117,6 +117,18 @@ package Version.Submodules is
      (Item : Submodule_Status)
       return String;
 
+   --  git's `submodule status` line for one submodule:
+   --  "<prefix><sha> <path>[ (<describe>)]".  The sha is the checked-out
+   --  commit, or the index-recorded one when Cached; a not-checked-out
+   --  submodule is "-<sha> <path>" with no describe.  The describe is git's
+   --  `--all --always` computed inside the submodule (a ref name like
+   --  "heads/main"/"tags/v2", else the short id).
+   function Status_Line_Git
+     (Repo   : Version.Repository.Repository_Handle;
+      Item   : Submodule_Status;
+      Cached : Boolean := False)
+      return String;
+
    function Gitlink_Commit
      (Repo : Version.Repository.Repository_Handle;
       Path : String)

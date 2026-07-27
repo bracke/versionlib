@@ -8,6 +8,7 @@ with Ada.Text_IO;
 with GNAT.OS_Lib;
 
 with Version.Clone;
+with Version.Describe;
 with Version.Write;
 with Version.Config;
 with Version.Fetch;
@@ -1359,6 +1360,63 @@ package body Version.Submodules is
             return "!" & Actual & " " & Path & " (dirty)";
       end case;
    end Status_Line;
+
+   --  git names the shown commit with `describe --all --always`, run inside
+   --  the submodule: the nearest reachable ref ("heads/main"/"tags/v2"), or
+   --  the short id when nothing describes it or it is not checked out.
+   function Describe_Submodule_Commit
+     (Repo : Version.Repository.Repository_Handle; Path, Commit : String)
+      return String
+   is
+      function Short return String is
+        (if Commit'Length >= 7
+         then Commit (Commit'First .. Commit'First + 6) else Commit);
+
+      Git_Dir : constant String := Resolved_Submodule_Git_Dir (Repo, Path);
+   begin
+      if Git_Dir'Length = 0
+        or else not Version.Objects.Is_Valid_Hex_Object_Id (Commit)
+      then
+         return Short;
+      end if;
+
+      declare
+         Sub : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open_Git_Dir (Git_Dir);
+      begin
+         return Version.Describe.Describe_By_Any_Ref
+           (Sub, Version.Objects.To_Object_Id (Commit));
+      exception
+         when others =>
+            return Short;
+      end;
+   end Describe_Submodule_Commit;
+
+   function Status_Line_Git
+     (Repo   : Version.Repository.Repository_Handle;
+      Item   : Submodule_Status;
+      Cached : Boolean := False)
+      return String
+   is
+      Path     : constant String := To_String (Item.Path);
+      Expected : constant String := To_String (Item.Expected);
+      Actual   : constant String := To_String (Item.Actual);
+   begin
+      if Item.Kind = Submodule_Missing then
+         --  Not checked out: git shows the index commit with no describe.
+         return "-" & Expected & " " & Path;
+      end if;
+
+      declare
+         Shown : constant String := (if Cached then Expected else Actual);
+         --  `+` when the checkout does not match the index-recorded commit.
+         Prefix : constant Character :=
+           (if Item.Kind = Submodule_New_Commits then '+' else ' ');
+      begin
+         return Prefix & Shown & " " & Path
+           & " (" & Describe_Submodule_Commit (Repo, Path, Shown) & ")";
+      end;
+   end Status_Line_Git;
 
    procedure Status is
       Repo  : constant Version.Repository.Repository_Handle :=
