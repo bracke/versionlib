@@ -60,11 +60,15 @@ package Version.Submodules is
       Paths : Path_Vectors.Vector := Path_Vectors.Empty_Vector);
 
    procedure Update
-     (Recursive : Boolean := False);
+     (Recursive    : Boolean := False;
+      Init_Missing : Boolean := False;
+      Paths        : Path_Vectors.Vector := Path_Vectors.Empty_Vector);
 
    procedure Update
-     (Repo      : Version.Repository.Repository_Handle;
-      Recursive : Boolean := False);
+     (Repo         : Version.Repository.Repository_Handle;
+      Recursive    : Boolean := False;
+      Init_Missing : Boolean := False;
+      Paths        : Path_Vectors.Vector := Path_Vectors.Empty_Vector);
 
    procedure Clone_Recursive
      (Url    : String;

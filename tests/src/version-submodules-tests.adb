@@ -111,7 +111,7 @@ package body Version.Submodules.Tests is
       Ada.Directories.Set_Directory (Root);
       Version.Remotes.Add_Remote (Name => "origin", Url => Remote_Url);
       Add_Gitlink (Version.Repository.Open, Commit);
-      Version.Submodules.Update (Version.Repository.Open, Recursive => False);
+      Version.Submodules.Update (Version.Repository.Open, Recursive => False, Init_Missing => True);
 
       Assert
         (Version.Test_Support.Read_Text_File
@@ -426,7 +426,7 @@ package body Version.Submodules.Tests is
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          begin
-            Version.Submodules.Update (Repo, Recursive => False);
+            Version.Submodules.Update (Repo, Recursive => False, Init_Missing => True);
          exception
             when Ada.IO_Exceptions.Data_Error =>
                Raised := True;
@@ -473,7 +473,7 @@ package body Version.Submodules.Tests is
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          begin
-            Version.Submodules.Update (Repo, Recursive => False);
+            Version.Submodules.Update (Repo, Recursive => False, Init_Missing => True);
          exception
             when Ada.IO_Exceptions.Data_Error =>
                Raised := True;
@@ -1197,7 +1197,7 @@ package body Version.Submodules.Tests is
             Repo : constant Version.Repository.Repository_Handle :=
               Version.Repository.Open;
          begin
-            Version.Submodules.Update (Repo, Recursive => False);
+            Version.Submodules.Update (Repo, Recursive => False, Init_Missing => True);
             Assert
               (Version.Submodules.Submodule_Head (Repo, "deps/libfoo") = Commit,
                "linked submodule update must resolve the checked-out commit");
@@ -1636,7 +1636,7 @@ package body Version.Submodules.Tests is
          Version.Staging.Write (Repo => Repo, Entries => Entries);
 
          begin
-            Version.Submodules.Update (Repo, Recursive => False);
+            Version.Submodules.Update (Repo, Recursive => False, Init_Missing => True);
          exception
             when Ada.IO_Exceptions.Data_Error | Ada.IO_Exceptions.Name_Error =>
                Raised := True;

@@ -1098,16 +1098,40 @@ package body Version.Submodules is
          Relative_Path => Path,
          Is_Directory  => True);
 
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Work_Path))
-      then
-         Version.Clone.Clone (Source => Url, Target => Work_Path);
-         --  The administrative directory is named after the submodule, and
-         --  the submodule's name is its .gitmodules section, not its path.
-         Absorb_Clone_Gitdir (Repo, Path, To_String (Item.Name));
-      end if;
+      declare
+         --  "Populated" means the worktree already holds a real submodule
+         --  repository, not merely a (possibly empty) directory a deinit left
+         --  behind.  Only an unpopulated one is (re)cloned.
+         Populated : constant Boolean :=
+           Resolved_Submodule_Git_Dir (Repo, Path)'Length > 0;
+         Before    : constant String :=
+           (if Populated then Submodule_Head (Repo, Path) else "");
+      begin
+         if not Populated then
+            --  A deinitialised submodule leaves an empty directory in the way;
+            --  clear it so the clone can create the worktree afresh.
+            if Ada.Directories.Exists
+                 (Version.Files.To_Native_Path (Work_Path))
+            then
+               Version.Files.Delete_Directory_Tree_If_Exists (Work_Path);
+            end if;
+            Version.Clone.Clone (Source => Url, Target => Work_Path);
+            --  The administrative directory is named after the submodule, and
+            --  the submodule's name is its .gitmodules section, not its path.
+            Absorb_Clone_Gitdir (Repo, Path, To_String (Item.Name));
+         end if;
 
-      Require_Submodule_Repository (Repo, Path);
-      Checkout_Detached (Repo, Path, Expected);
+         Require_Submodule_Repository (Repo, Path);
+
+         --  git checks out the recorded gitlink commit (detached) and reports
+         --  it whenever it moves HEAD -- a fresh clone always counts.
+         if not Populated or else Before /= To_String (Expected) then
+            Checkout_Detached (Repo, Path, Expected);
+            Ada.Text_IO.Put_Line
+              ("Submodule path '" & Path & "': checked out '"
+               & To_String (Expected) & "'");
+         end if;
+      end;
 
       if Recursive then
          declare
@@ -1224,14 +1248,35 @@ package body Version.Submodules is
    end Init;
 
    procedure Update
-     (Repo      : Version.Repository.Repository_Handle;
-      Recursive : Boolean := False)
+     (Repo         : Version.Repository.Repository_Handle;
+      Recursive    : Boolean := False;
+      Init_Missing : Boolean := False;
+      Paths        : Path_Vectors.Vector := Path_Vectors.Empty_Vector)
    is
       Items : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
         Version.Gitmodules.Read (Repo);
+
+      function Selected (Path : String) return Boolean is
+      begin
+         if Paths.Is_Empty then
+            return True;
+         end if;
+         for P of Paths loop
+            if P = Path then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Selected;
    begin
       if Items.Is_Empty then
          return;
+      end if;
+
+      --  `--init` registers the selected submodules first (as `submodule init`
+      --  does), which is what makes them eligible for the update below.
+      if Init_Missing then
+         Init (Repo, Paths);
       end if;
 
       Preflight_Submodule_Paths
@@ -1239,18 +1284,29 @@ package body Version.Submodules is
 
       for I in Items.First_Index .. Items.Last_Index loop
          declare
+            Name : constant String := To_String (Items.Element (I).Name);
             Path : constant String := To_String (Items.Element (I).Path);
          begin
-            if Version.Sparse.Included (Repo, Path) then
+            --  git updates only initialized submodules (a
+            --  submodule.<name>.url in config); an uninitialised one is
+            --  silently skipped unless --init just registered it.
+            if Version.Sparse.Included (Repo, Path)
+              and then Selected (Path)
+              and then Version.Config.Has_Key
+                         (Repo, "submodule." & Name & ".url")
+            then
                Clone_One (Repo, Items.Element (I), Recursive);
             end if;
          end;
       end loop;
    end Update;
 
-   procedure Update (Recursive : Boolean := False) is
+   procedure Update
+     (Recursive    : Boolean := False;
+      Init_Missing : Boolean := False;
+      Paths        : Path_Vectors.Vector := Path_Vectors.Empty_Vector) is
    begin
-      Update (Version.Repository.Open, Recursive);
+      Update (Version.Repository.Open, Recursive, Init_Missing, Paths);
    end Update;
 
    procedure Clone_Recursive (Url : String; Target : String) is
