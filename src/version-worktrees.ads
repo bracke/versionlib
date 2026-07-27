@@ -20,12 +20,14 @@ package Version.Worktrees is
       Element_Type => Worktree_Info);
 
    procedure Add
-     (Path   : String;
-      Branch : String);
+     (Path        : String;
+      Branch      : String;
+      No_Checkout : Boolean := False);
 
    procedure Add_Detached
-     (Path : String;
-      Rev  : String);
+     (Path        : String;
+      Rev         : String;
+      No_Checkout : Boolean := False);
 
    function List
       return Worktree_Info_Vectors.Vector;

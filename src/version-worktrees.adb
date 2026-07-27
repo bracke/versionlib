@@ -606,7 +606,9 @@ package body Version.Worktrees is
       end if;
    end Cleanup_Failed_Add;
 
-   procedure Add (Path : String; Branch : String) is
+   procedure Add
+     (Path : String; Branch : String; No_Checkout : Boolean := False)
+   is
       Repo           : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
       Work_Path      : constant String := Abs_Path (Path);
@@ -639,7 +641,9 @@ package body Version.Worktrees is
       Version.Files.Write_Binary_File_Atomic
         (Path    => Join (Admin_Path, "HEAD"),
          Content => "ref: refs/heads/" & Branch & Character'Val (10));
-      Checkout_New_Worktree (Work_Path);
+      if not No_Checkout then
+         Checkout_New_Worktree (Work_Path);
+      end if;
    exception
       when others =>
          Cleanup_Failed_Add
@@ -649,7 +653,9 @@ package body Version.Worktrees is
          raise;
    end Add;
 
-   procedure Add_Detached (Path : String; Rev : String) is
+   procedure Add_Detached
+     (Path : String; Rev : String; No_Checkout : Boolean := False)
+   is
       Repo           : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
       Work_Path      : constant String := Abs_Path (Path);
@@ -669,7 +675,9 @@ package body Version.Worktrees is
       Version.Files.Write_Binary_File_Atomic
         (Path    => Join (Admin_Path, "HEAD"),
          Content => To_String (Commit_Id) & Character'Val (10));
-      Checkout_New_Worktree (Work_Path);
+      if not No_Checkout then
+         Checkout_New_Worktree (Work_Path);
+      end if;
    exception
       when others =>
          Cleanup_Failed_Add
