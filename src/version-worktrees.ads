@@ -86,7 +86,8 @@ package Version.Worktrees is
    --  Delete what Prunable reports.
 
    procedure Remove
-     (Path : String);
+     (Path  : String;
+      Force : Boolean := False);
    --  Removes a linked worktree. A worktree whose directory has already been
    --  deleted is reclaimed by dropping its admin entry, which is the only way
    --  back: git accepts that, and refusing left the entry unreclaimable by

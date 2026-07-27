@@ -815,23 +815,36 @@ package body Version.Worktrees is
            with "cannot move the main working tree";
       end if;
 
-      if Ada.Directories.Exists (Native (Dst)) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "target '" & To & "' already exists";
-      end if;
-
       if Is_Locked (Src) then
          raise Ada.IO_Exceptions.Data_Error
            with "cannot move a locked working tree";
       end if;
 
-      Ada.Directories.Rename
-        (Old_Name => Native (Src), New_Name => Native (Dst));
+      declare
+         --  Like `mv`, an existing-directory destination receives the worktree
+         --  under its own name rather than being an error.
+         Final_Dst : constant String :=
+           (if Ada.Directories.Exists (Native (Dst))
+              and then Ada.Directories.Kind (Native (Dst))
+                       = Ada.Directories.Directory
+            then Join (Dst, Ada.Directories.Simple_Name (Native (Src)))
+            else Dst);
+      begin
+         if Ada.Directories.Exists (Native (Final_Dst)) then
+            raise Ada.IO_Exceptions.Data_Error
+              with "target '" & To & "' already exists";
+         end if;
 
-      --  The admin directory keeps its name; its gitdir pointer is what says
-      --  where the worktree lives, so that is the only thing to rewrite.
-      Version.Files.Write_Binary_File_Atomic
-        (Join (Admin, "gitdir"), Join (Dst, ".git") & Character'Val (10));
+         Ada.Directories.Rename
+           (Old_Name => Native (Src), New_Name => Native (Final_Dst));
+
+         --  The admin directory keeps its name; its gitdir pointer is what
+         --  says where the worktree lives, so that is the only thing to
+         --  rewrite.
+         Version.Files.Write_Binary_File_Atomic
+           (Join (Admin, "gitdir"),
+            Join (Final_Dst, ".git") & Character'Val (10));
+      end;
    end Move;
 
    procedure Repair (Path : String) is
@@ -992,7 +1005,7 @@ package body Version.Worktrees is
       end loop;
    end Prune;
 
-   procedure Remove (Path : String) is
+   procedure Remove (Path : String; Force : Boolean := False) is
       Caller        : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
       Work_Path     : constant String := Abs_Path (Path);
@@ -1067,15 +1080,18 @@ package body Version.Worktrees is
 
       --  A locked worktree is one the user asked not to be touched; saying
       --  the tree is unclean instead names the wrong reason and points at
-      --  the wrong remedy.
-      if Is_Locked (Work_Path) then
+      --  the wrong remedy.  A second --force (Force) overrides the lock.
+      if Is_Locked (Work_Path) and then not Force then
          raise Ada.IO_Exceptions.Data_Error with
            "cannot remove a locked working tree;"
            & Character'Val (10)
            & "use 'remove -f -f' to override or unlock first";
       end if;
 
-      Require_Clean (Work_Path);
+      --  --force also lets a worktree with local modifications be removed.
+      if not Force then
+         Require_Clean (Work_Path);
+      end if;
       Version.Files.Delete_Directory_Tree_If_Exists (Work_Path);
       if Ada.Directories.Exists (Native (To_String (Git_Dir_Value))) then
          Version.Files.Delete_Directory_Tree_If_Exists
