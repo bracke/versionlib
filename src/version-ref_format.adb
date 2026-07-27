@@ -4,6 +4,7 @@ with Ada.Strings.Fixed;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded;   use Ada.Strings.Unbounded;
 with Ada.Containers.Vectors;
+with Version.Config;
 with Version.Files;
 with Version.Objects;
 with Version.Refs;
@@ -898,6 +899,37 @@ package body Version.Ref_Format is
                      end;
                   else
                      return Full;
+                  end if;
+               end;
+            else
+               return "";
+            end if;
+         elsif Head_A = "push" then
+            --  Where the branch would be pushed, as a remote-tracking ref: the
+            --  push remote (branch.<x>.pushRemote, else remote.pushDefault,
+            --  else branch.<x>.remote) with the same branch name, which is
+            --  git's default (push.default=simple) mapping.
+            if Ref'Length > 11
+              and then Ref (Ref'First .. Ref'First + 10) = "refs/heads/"
+            then
+               declare
+                  Short : constant String := Short_Name (Ref);
+                  function Cfg (Key : String) return String is
+                    (if Version.Config.Has_Key (Repo, Key)
+                     then Version.Config.Get_Value (Repo, Key) else "");
+                  Remote : constant String :=
+                    (if Cfg ("branch." & Short & ".pushRemote") /= ""
+                     then Cfg ("branch." & Short & ".pushRemote")
+                     elsif Cfg ("remote.pushDefault") /= ""
+                     then Cfg ("remote.pushDefault")
+                     else Cfg ("branch." & Short & ".remote"));
+               begin
+                  if Remote = "" then
+                     return "";
+                  elsif Arg = "short" then
+                     return Remote & "/" & Short;
+                  else
+                     return "refs/remotes/" & Remote & "/" & Short;
                   end if;
                end;
             else

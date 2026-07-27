@@ -1,3 +1,4 @@
+- Git parity: the ref-format engine renders `%(push)` (and `%(push:short)`) — a branch's push destination as a remote-tracking ref, from `branch.<x>.pushRemote`/`remote.pushDefault`/`branch.<x>.remote`.
 - Git parity: `Version.Describe.Describe_By_Any_Ref` breaks a same-commit, same-distance tie between annotated tags by the newest tagger date (as `Describe` already did), so `describe --all` picks the newer tag.
 - Git parity: `Version.Subtree.Split` takes an `Annotate` string that is prepended to each synthesised split commit's message (git subtree's `--annotate`).
 - Git parity: `Version.Worktrees.Add`/`Add_Detached` take a `No_Checkout` flag (git's `worktree add --no-checkout`), skipping the working-tree checkout while still writing the administrative entry.
