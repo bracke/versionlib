@@ -1,3 +1,4 @@
+- Git parity: `Version.Describe.Describe_By_Any_Ref` breaks a same-commit, same-distance tie between annotated tags by the newest tagger date (as `Describe` already did), so `describe --all` picks the newer tag.
 - Git parity: `Version.Subtree.Split` takes an `Annotate` string that is prepended to each synthesised split commit's message (git subtree's `--annotate`).
 - Git parity: `Version.Worktrees.Add`/`Add_Detached` take a `No_Checkout` flag (git's `worktree add --no-checkout`), skipping the working-tree checkout while still writing the administrative entry.
 - Git parity: `Version.Status.Porcelain_V2_Status_Text`/`Print_Porcelain_V2_Status` render `git status --porcelain=v2` — `1`/`2`/`?`/`!` records carrying the XY code, submodule field, HEAD/index/worktree modes and HEAD/index ids (rename HEAD columns come from the original path).

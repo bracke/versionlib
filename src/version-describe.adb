@@ -307,7 +307,49 @@ package body Version.Describe is
       Best_Dist : Natural := Natural'Last;
       Best_Exact : Boolean := False;
       Best_Annotated : Boolean := False;
+      Best_Time  : Long_Long_Integer := Long_Long_Integer'First;
       Any        : Boolean := False;
+
+      --  The tagger timestamp of the annotated tag Ref points at (0 otherwise),
+      --  so two tags on one commit break the tie by date, newest first.
+      function Ref_Tag_Time (Ref : String) return Long_Long_Integer is
+         Obj : constant Version.Objects.Git_Object :=
+           Version.Objects.Read_Object
+             (Repo, Version.Refs.Resolve_Ref (Repo, Ref));
+      begin
+         if Version.Objects.Kind (Obj) /= Version.Objects.Tag_Object then
+            return 0;
+         end if;
+         declare
+            Content : constant String := Version.Objects.Content (Obj);
+            Start   : constant Natural :=
+              Ada.Strings.Fixed.Index (Content, "tagger ");
+            Stop    : Natural;
+            Last_Sp : Natural := 0;
+            Prev_Sp : Natural := 0;
+         begin
+            if Start = 0 then
+               return 0;
+            end if;
+            Stop := Ada.Strings.Fixed.Index
+              (Content (Start .. Content'Last), "" & Character'Val (10));
+            Stop := (if Stop = 0 then Content'Last else Stop - 1);
+            for I in Start .. Stop loop
+               if Content (I) = ' ' then
+                  Prev_Sp := Last_Sp;
+                  Last_Sp := I;
+               end if;
+            end loop;
+            if Prev_Sp = 0 or else Last_Sp <= Prev_Sp + 1 then
+               return 0;
+            end if;
+            return Long_Long_Integer'Value
+              (Content (Prev_Sp + 1 .. Last_Sp - 1));
+         end;
+      exception
+         when others =>
+            return 0;
+      end Ref_Tag_Time;
 
       procedure Consider (Display, Ref : String; Annotated : Boolean) is
       begin
@@ -335,16 +377,23 @@ package body Version.Describe is
                   Dist : constant Natural :=
                     (if Exact then 0
                      else Distance (Repo, Ref_Commit, Commit));
+                  This_Time : constant Long_Long_Integer :=
+                    (if Annotated then Ref_Tag_Time (Ref) else 0);
                begin
-                  --  Nearer wins; on a tie git prefers an annotated tag.
+                  --  Nearer wins; on a tie git prefers an annotated tag, then
+                  --  the newest tagger date.
                   if Dist < Best_Dist
                     or else (Dist = Best_Dist
                              and then Annotated and then not Best_Annotated)
+                    or else (Dist = Best_Dist
+                             and then Annotated = Best_Annotated
+                             and then This_Time > Best_Time)
                   then
                      Best_Dist := Dist;
                      Best_Name := To_Unbounded_String (Display);
                      Best_Exact := Exact;
                      Best_Annotated := Annotated;
+                     Best_Time := This_Time;
                   end if;
                end;
             end if;
