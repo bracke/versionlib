@@ -1157,7 +1157,10 @@ package body Version.Submodules is
         (Repo_Root => Version.Repository.Root_Path (Repo), Paths => Planned);
    end Preflight_Submodule_Paths;
 
-   procedure Init (Repo : Version.Repository.Repository_Handle) is
+   procedure Init
+     (Repo  : Version.Repository.Repository_Handle;
+      Paths : Path_Vectors.Vector := Path_Vectors.Empty_Vector)
+   is
       Items : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
         Version.Gitmodules.Read (Repo);
    begin
@@ -1165,11 +1168,59 @@ package body Version.Submodules is
         (Repo => Repo, Items => Items, Active_Only => False);
 
       Version.Files.Create_Directory_If_Missing (Submodule_Admin_Root (Repo));
+
+      --  git registers each selected submodule's resolved URL in config (an
+      --  idempotent no-op when it is already set) and announces it on stderr.
+      for I in Items.First_Index .. Items.Last_Index loop
+         declare
+            Name : constant String := To_String (Items.Element (I).Name);
+            Path : constant String := To_String (Items.Element (I).Path);
+
+            function Resolved_Url return String is
+            begin
+               return Resolve_Relative_Submodule_Url
+                 (To_String (Items.Element (I).Url));
+            exception
+               when others =>
+                  return To_String (Items.Element (I).Url);
+            end Resolved_Url;
+
+            function Selected return Boolean is
+            begin
+               if Paths.Is_Empty then
+                  return True;
+               end if;
+               for P of Paths loop
+                  if P = Path then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            end Selected;
+
+            Url : constant String := Resolved_Url;
+         begin
+            if Selected then
+               if not Version.Config.Has_Key
+                        (Repo, "submodule." & Name & ".url")
+               then
+                  Version.Config.Set_Key
+                    (Repo, "submodule." & Name & ".url", Url);
+               end if;
+
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "Submodule '" & Name & "' (" & Url
+                  & ") registered for path '" & Path & "'");
+            end if;
+         end;
+      end loop;
    end Init;
 
-   procedure Init is
+   procedure Init
+     (Paths : Path_Vectors.Vector := Path_Vectors.Empty_Vector) is
    begin
-      Init (Version.Repository.Open);
+      Init (Version.Repository.Open, Paths);
    end Init;
 
    procedure Update
@@ -1561,7 +1612,8 @@ package body Version.Submodules is
 
    procedure Sync
      (Repo      : Version.Repository.Repository_Handle;
-      Recursive : Boolean := False)
+      Recursive : Boolean := False;
+      Paths     : Path_Vectors.Vector := Path_Vectors.Empty_Vector)
    is
       Items : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
         Sorted_Submodules (Repo);
@@ -1573,47 +1625,58 @@ package body Version.Submodules is
             Resolved : constant String :=
               Sync_Url (To_String (Items.Element (I).Url));
          begin
-            Ada.Text_IO.Put_Line
-              ("Synchronizing submodule url for '" & Path & "'");
+            --  git only syncs submodules it has initialized (those carrying a
+            --  submodule.<name>.url in config); a deinitialised one is skipped.
+            --  A path filter narrows it further.
+            if Version.Config.Has_Key (Repo, "submodule." & Name & ".url")
+              and then Path_Selected (Path, Paths, All_Submodules =>
+                                        Paths.Is_Empty)
+            then
+               Ada.Text_IO.Put_Line
+                 ("Synchronizing submodule url for '" & Path & "'");
 
-            Version.Config.Set_Key
-              (Repo, "submodule." & Name & ".url", Resolved);
+               Version.Config.Set_Key
+                 (Repo, "submodule." & Name & ".url", Resolved);
 
-            --  Update the submodule's own origin URL when it is checked out.
-            if Submodule_Head (Repo, Path)'Length > 0 then
-               begin
-                  declare
-                     Sub : constant Version.Repository.Repository_Handle :=
-                       Version.Repository.Open_Git_Dir
-                         (Resolved_Submodule_Git_Dir (Repo, Path));
+               --  Update the submodule's own origin URL when it is checked out.
+               if Submodule_Head (Repo, Path)'Length > 0 then
                   begin
-                     Version.Config.Set_Key
-                       (Sub, "remote.origin.url", Resolved);
-                  end;
-               exception
-                  when others =>
-                     null;
-               end;
-
-               if Recursive then
-                  declare
-                     procedure Recurse is
+                     declare
+                        Sub : constant Version.Repository.Repository_Handle :=
+                          Version.Repository.Open_Git_Dir
+                            (Resolved_Submodule_Git_Dir (Repo, Path));
                      begin
-                        Sync (Version.Repository.Open, Recursive => True);
-                     end Recurse;
-                  begin
-                     Version.Files.With_Directory
-                       (Submodule_Worktree_Path (Repo, Path), Recurse'Access);
+                        Version.Config.Set_Key
+                          (Sub, "remote.origin.url", Resolved);
+                     end;
+                  exception
+                     when others =>
+                        null;
                   end;
+
+                  if Recursive then
+                     declare
+                        procedure Recurse is
+                        begin
+                           Sync (Version.Repository.Open, Recursive => True);
+                        end Recurse;
+                     begin
+                        Version.Files.With_Directory
+                          (Submodule_Worktree_Path (Repo, Path),
+                           Recurse'Access);
+                     end;
+                  end if;
                end if;
             end if;
          end;
       end loop;
    end Sync;
 
-   procedure Sync (Recursive : Boolean := False) is
+   procedure Sync
+     (Recursive : Boolean := False;
+      Paths     : Path_Vectors.Vector := Path_Vectors.Empty_Vector) is
    begin
-      Sync (Version.Repository.Open, Recursive);
+      Sync (Version.Repository.Open, Recursive, Paths);
    end Sync;
 
    procedure Deinit
@@ -1624,14 +1687,6 @@ package body Version.Submodules is
    is
       Items : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
         Sorted_Submodules (Repo);
-
-      function Registered_Url (Name, Fallback : String) return String is
-      begin
-         return Version.Config.Get_Value (Repo, "submodule." & Name & ".url");
-      exception
-         when others =>
-            return Fallback;
-      end Registered_Url;
    begin
       if not All_Submodules and then Paths.Is_Empty then
          raise Ada.IO_Exceptions.Data_Error with
@@ -1642,45 +1697,68 @@ package body Version.Submodules is
          declare
             Name : constant String := To_String (Items.Element (I).Name);
             Path : constant String := To_String (Items.Element (I).Path);
+            --  git names the submodule by its .gitmodules URL, kept in the
+            --  form recorded there (a relative "./x" stays relative).
+            Url  : constant String := To_String (Items.Element (I).Url);
+            --  Only a submodule that is still registered gets the
+            --  "unregistered" line; an already-deinitialised one is silently
+            --  re-cleared.
+            Registered : constant Boolean :=
+              Version.Config.Has_Key (Repo, "submodule." & Name & ".url");
          begin
             if Path_Selected (Path, Paths, All_Submodules) then
                declare
-                  Url : constant String :=
-                    Registered_Url (Name, To_String (Items.Element (I).Url));
+                  Checked_Out : constant Boolean :=
+                    Submodule_Head (Repo, Path)'Length > 0;
                begin
-                  if Submodule_Head (Repo, Path)'Length > 0 then
+                  if Checked_Out
+                    and then not Force
+                    and then (Submodule_Is_Dirty (Repo, Path)
+                              or else Submodule_Head_Moved (Repo, Path))
+                  then
                      --  git refuses to clear a submodule whose checkout it
-                     --  could not reconstruct. That covers a dirty work tree
-                     --  and, just as importantly, a HEAD that has moved off
-                     --  the recorded gitlink: the superproject knows only the
-                     --  gitlink, so deleting the directory loses whatever
-                     --  else was checked out there with no way back.
-                     if not Force
-                       and then (Submodule_Is_Dirty (Repo, Path)
-                                 or else Submodule_Head_Moved (Repo, Path))
-                     then
-                        raise Ada.IO_Exceptions.Data_Error with
-                          "submodule work tree '" & Path
-                          & "' contains local modifications;"
-                          & " use --force to discard them";
-                     end if;
-
-                     declare
-                        Work : constant String :=
-                          Submodule_Worktree_Path (Repo, Path);
-                     begin
-                        Version.Files.Delete_Directory_Tree_If_Exists (Work);
-                        Version.Files.Create_Directory_If_Missing (Work);
-                     end;
-                     Ada.Text_IO.Put_Line ("Cleared directory '" & Path & "'");
+                     --  could not reconstruct: a dirty work tree, or a HEAD
+                     --  moved off the recorded gitlink (the superproject knows
+                     --  only the gitlink, so deleting loses the rest).
+                     raise Ada.IO_Exceptions.Data_Error with
+                       "submodule work tree '" & Path
+                       & "' contains local modifications;"
+                       & " use --force to discard them";
                   end if;
 
+                  --  A not-populated submodule has no config to unset
+                  --  core.worktree in, which git reports on stderr.
+                  if not Checked_Out then
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "warning: Could not unset core.worktree setting in"
+                        & " submodule '" & Path & "'");
+                  end if;
+               end;
+
+               --  git empties the working directory whether or not the
+               --  submodule is currently checked out.
+               declare
+                  Work : constant String :=
+                    Submodule_Worktree_Path (Repo, Path);
+               begin
+                  if Ada.Directories.Exists
+                       (Version.Files.To_Native_Path (Work))
+                  then
+                     Version.Files.Delete_Directory_Tree_If_Exists (Work);
+                     Version.Files.Create_Directory_If_Missing (Work);
+                     Ada.Text_IO.Put_Line
+                       ("Cleared directory '" & Path & "'");
+                  end if;
+               end;
+
+               if Registered then
                   Version.Config.Remove_Section
                     (Repo, "submodule """ & Name & """");
                   Ada.Text_IO.Put_Line
                     ("Submodule '" & Name & "' (" & Url
                      & ") unregistered for path '" & Path & "'");
-               end;
+               end if;
             end if;
          end;
       end loop;

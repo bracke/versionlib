@@ -52,9 +52,12 @@ package Version.Submodules is
    --  A Path that is already a repository is adopted rather than cloned over,
    --  as git does; only a non-repository directory in the way is an error.
 
-   procedure Init;
+   procedure Init
+     (Paths : Path_Vectors.Vector := Path_Vectors.Empty_Vector);
 
-   procedure Init (Repo : Version.Repository.Repository_Handle);
+   procedure Init
+     (Repo  : Version.Repository.Repository_Handle;
+      Paths : Path_Vectors.Vector := Path_Vectors.Empty_Vector);
 
    procedure Update
      (Recursive : Boolean := False);
@@ -85,11 +88,14 @@ package Version.Submodules is
    --  Copy each submodule's `.gitmodules` URL into the superproject's
    --  .git/config (submodule.<name>.url) and the submodule's own
    --  remote.origin.url, matching `git submodule sync`.
-   procedure Sync (Recursive : Boolean := False);
+   procedure Sync
+     (Recursive : Boolean := False;
+      Paths     : Path_Vectors.Vector := Path_Vectors.Empty_Vector);
 
    procedure Sync
      (Repo      : Version.Repository.Repository_Handle;
-      Recursive : Boolean := False);
+      Recursive : Boolean := False;
+      Paths     : Path_Vectors.Vector := Path_Vectors.Empty_Vector);
 
    --  Unregister submodules: empty their working trees and remove their
    --  submodule.<name>.* config from the superproject's .git/config (keeping
