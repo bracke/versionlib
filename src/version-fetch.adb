@@ -1310,6 +1310,85 @@ package body Version.Fetch is
       end case;
    end List_Remote_Refs;
 
+   -----------------------
+   -- Remote_Head_Symref --
+   -----------------------
+
+   function Remote_Head_Symref (Remote : String) return String is
+      function Remote_Or_Url return String is
+      begin
+         return Remote_Url (Remote);
+      exception
+         when others =>
+            return Remote;
+      end Remote_Or_Url;
+
+      Url : constant String := Remote_Or_Url;
+   begin
+      case Version.Transport.Detect_Transport (Url) is
+         when Version.Transport.Local_Transport =>
+            declare
+               Git_Dir : constant String :=
+                 Version.Transport.Local.Resolve_Git_Dir
+                   (Version.Transport.Strip_File_Scheme (Url));
+               Remote_Repo : constant Version.Repository.Repository_Handle :=
+                 Version.Repository.Open_Git_Dir (Git_Dir);
+               Head : constant Version.Refs.Head_Info :=
+                 Version.Refs.Read_Head (Remote_Repo);
+            begin
+               if Version.Refs.Is_Attached (Head) then
+                  return "refs/heads/" & Version.Refs.Branch_Name (Head);
+               end if;
+               return "";
+            exception
+               when others =>
+                  return "";
+            end;
+
+         when Version.Transport.Http_Transport =>
+            declare
+               Discovery_Raw : Collecting_Consumer;
+            begin
+               Version.Transport.Http.Discover_Upload_Pack
+                 (Url => Url, Consumer => Discovery_Raw);
+               return To_String
+                 (Version.Upload_Pack.Parse_Discovery
+                    (To_Stream (To_String (Discovery_Raw.Data))).Head_Target);
+            exception
+               when others =>
+                  return "";
+            end;
+
+         when Version.Transport.Ssh_Transport =>
+            declare
+               Stream : Version.Transport.Ssh.Ssh_Stream;
+               Raw    : Ada.Strings.Unbounded.Unbounded_String;
+               Buffer : Ada.Streams.Stream_Element_Array (1 .. 8192);
+               Last   : Ada.Streams.Stream_Element_Offset;
+            begin
+               Version.Transport.Ssh.Open_Upload_Pack (Url, Stream);
+               loop
+                  Version.Transport.Ssh.Read_Some
+                    (Stream => Stream, Buffer => Buffer, Last => Last);
+                  exit when Last < Buffer'First;
+                  Append (Raw, Stream_To_String (Buffer (Buffer'First .. Last)));
+                  exit when Ada.Strings.Fixed.Index (To_String (Raw), "0000")
+                            /= 0;
+               end loop;
+               Version.Transport.Ssh.Close (Stream);
+               return To_String
+                 (Version.Upload_Pack.Parse_Advertisement
+                    (To_Stream (To_String (Raw))).Head_Target);
+            exception
+               when others =>
+                  return "";
+            end;
+
+         when Version.Transport.Unsupported_Transport =>
+            return "";
+      end case;
+   end Remote_Head_Symref;
+
    Scratch_Remote : constant String := "fetch-pack-tmp";
 
    procedure Fetch_Objects_From (Remote : String) is

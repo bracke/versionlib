@@ -13,6 +13,12 @@ package Version.Fetch is
      (Remote : String)
       return Version.Upload_Pack.Advertised_Ref_Vectors.Vector;
 
+   --  The full refname HEAD is a symbolic ref to on the remote (e.g.
+   --  "refs/heads/main"), as advertised by upload-pack's symref capability or,
+   --  for a local source, read from its HEAD.  Empty when HEAD is not a symref
+   --  or the remote does not advertise one.  Used by `ls-remote --symref`.
+   function Remote_Head_Symref (Remote : String) return String;
+
    --  Fetch every object the remote has, updating no local ref -- what
    --  `fetch-pack` does.  Remote is a configured remote name, a path, or a
    --  URL.

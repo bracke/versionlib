@@ -1,3 +1,4 @@
+- Git parity: `Version.Fetch.Remote_Head_Symref` returns the refname the remote's HEAD points at (from the upload-pack symref advertisement, or a local source's HEAD), for `ls-remote --symref`.
 - Git parity: `Version.Diff` honours a `Stat_Width` (git's `--stat=<width>`), fixing the diffstat's total line width instead of the terminal's for graph scaling.
 - Git parity: `Version.Diff` renders `--compact-summary` (a `Compact_Summary` option) -- the diffstat with the name column annotated "(new)"/"(gone)"/"(mode +x|-x)" for created/deleted/exec-bit-changed files.
 - Git parity: `Version.Diff` renders the `--raw` format (a `Raw` option on Diff_Options) -- ":<mode1> <mode2> <sha1> <sha2> <status>TAB<path>" with six-digit modes, seven-hex abbreviated ids, zeros for an absent side, and rename pairing ("R<score>TAB<old>TAB<new>") through the existing rename-aware engine.
