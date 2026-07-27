@@ -145,8 +145,21 @@ package body Version.Repository is
    is
       Root    : constant String := Version.Files.Normalize_Separators (Working_Path);
       Dot_Git : constant String := Join (Root, ".git");
+
+      --  git treats a directory that holds HEAD, objects and refs but no
+      --  worktree as a bare repository (its own git dir).
+      function Is_Bare_Git_Dir return Boolean is
+        (Ada.Directories.Exists
+           (Version.Files.To_Native_Path (Join (Root, "HEAD")))
+         and then Ada.Directories.Exists
+                    (Version.Files.To_Native_Path (Join (Root, "objects")))
+         and then Ada.Directories.Exists
+                    (Version.Files.To_Native_Path (Join (Root, "refs"))));
    begin
       if not Ada.Directories.Exists (Version.Files.To_Native_Path (Dot_Git)) then
+         if Is_Bare_Git_Dir then
+            return Root;
+         end if;
          return "";
       end if;
 

@@ -18,6 +18,15 @@ package Version.Clone is
       Target : String;
       Depth  : Positive);
 
+   --  git's `--bare`/`--mirror`: create a bare repository (no working tree),
+   --  fetch every ref, point HEAD at the remote's default branch and pack the
+   --  refs. Mirror additionally records the remote as a mirror
+   --  (fetch = +refs/*:refs/*, mirror = true, tagOpt = --no-tags).
+   procedure Clone_Bare
+     (Source : String;
+      Target : String;
+      Mirror : Boolean := False);
+
    procedure Clone_Filtered
      (Source : String;
       Target : String;

@@ -745,4 +745,84 @@ package body Version.Clone is
       Clone_Internal (Source, Target, False, 1, Filter => Filter);
    end Clone_Filtered;
 
+   procedure Clone_Bare
+     (Source : String; Target : String; Mirror : Boolean := False)
+   is
+      use Ada.Strings.Unbounded;
+      Norm : constant String :=
+        Ada.Directories.Full_Name
+          (Version.Files.To_Native_Path
+             (Version.Transport.Strip_File_Scheme (Source)));
+      Object_Format : constant Version.Hash.Hash_Algorithm :=
+        Version.Fetch.Remote_Object_Format (Source);
+
+      procedure Populate is
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
+         Default : constant String :=
+           Remote_Default_Branch (Source_Git_Dir_For (Norm));
+         Section : constant String := "remote ""origin""";
+      begin
+         if Mirror then
+            --  git's mirror remote block, in git's key order.
+            declare
+               Entries : Version.Config.Config_Entry_Vectors.Vector;
+               procedure Add (K, V : String) is
+               begin
+                  Entries.Append
+                    (Version.Config.Config_Entry'
+                       (Section => To_Unbounded_String (Section),
+                        Key     => To_Unbounded_String (K),
+                        Value   => To_Unbounded_String (V)));
+               end Add;
+            begin
+               Add ("url", Norm);
+               Add ("tagOpt", "--no-tags");
+               Add ("fetch", "+refs/*:refs/*");
+               Add ("mirror", "true");
+               Version.Config.Replace_Section (Repo, Section, Entries);
+            end;
+         else
+            Version.Remotes.Add_Remote (Name => "origin", Url => Norm);
+         end if;
+
+         Version.Fetch.Fetch ("origin");
+
+         if Default'Length > 0 then
+            Write_HEAD (Repo, Default);
+         end if;
+
+         begin
+            Version.Packed_Refs.Pack_Refs
+              (Repo, Include_All => True, Prune_Loose => True);
+         exception
+            when others =>
+               null;
+         end;
+      end Populate;
+   begin
+      if Source'Length = 0 or else Target'Length = 0 then
+         raise Ada.IO_Exceptions.Data_Error
+           with "clone source and target must not be empty";
+      end if;
+      if Ada.Directories.Exists (Version.Files.To_Native_Path (Target)) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "clone target already exists: " & Target;
+      end if;
+
+      Version.Init.Init_Bare (Target, Object_Format);
+      begin
+         Version.Files.With_Directory (Path => Target, Action => Populate'Access);
+      exception
+         when others =>
+            begin
+               Version.Files.Delete_Directory_Tree_If_Exists (Target);
+            exception
+               when others =>
+                  null;
+            end;
+            raise;
+      end;
+   end Clone_Bare;
+
 end Version.Clone;
