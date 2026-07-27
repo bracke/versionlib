@@ -11,35 +11,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out versionlib
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: versionlib
       - name: Check out httpclient sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
       - name: Check out project_tools sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
       - name: Check out zlib sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
       - name: Check out cryptolib sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
       - name: Check out regexp sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
       - name: Check out i18n sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
       - name: Check out sshlib sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
       - name: Check out hostkit sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
       - name: Set up Alire
-        uses: alire-project/setup-alire@v5
+        uses: alire-project/setup-alire@v6
         with:
           toolchain: gnat_native=15.2.1 gprbuild
       - name: Install OpenSSL headers
@@ -59,35 +59,35 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out versionlib
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: versionlib
       - name: Check out httpclient sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
       - name: Check out project_tools sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
       - name: Check out zlib sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
       - name: Check out cryptolib sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
       - name: Check out regexp sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
       - name: Check out i18n sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
       - name: Check out sshlib sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
       - name: Check out hostkit sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
       - name: Set up Alire
-        uses: alire-project/setup-alire@v5
+        uses: alire-project/setup-alire@v6
         with:
           toolchain: gnat_native=15.2.1 gprbuild
       - name: Build library
