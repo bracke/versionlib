@@ -657,6 +657,7 @@ package body Version.Subtree is
       Onto    : String := "";
       Rejoin  : Boolean := False;
       Ignore_Joins : Boolean := False;
+      Annotate : String := "";
       Updated : out Boolean)
       return Version.Objects.Hex_Object_Id
    is
@@ -893,7 +894,10 @@ package body Version.Subtree is
             return Hex
               (Version.Write.Write_Commit_Raw
                  (Repo, Id (Tree), Ids,
-                  To_String (Author), To_String (Committer), Chomp (Text)));
+                  To_String (Author), To_String (Committer),
+                  --  `--annotate` prepends its text to each new commit's
+                  --  message (git subtree's --annotate).
+                  Annotate & Chomp (Text)));
          end;
       end Copy_Or_Skip;
 

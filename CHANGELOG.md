@@ -1,3 +1,4 @@
+- Git parity: `Version.Subtree.Split` takes an `Annotate` string that is prepended to each synthesised split commit's message (git subtree's `--annotate`).
 - Git parity: `Version.Worktrees.Add`/`Add_Detached` take a `No_Checkout` flag (git's `worktree add --no-checkout`), skipping the working-tree checkout while still writing the administrative entry.
 - Git parity: `Version.Status.Porcelain_V2_Status_Text`/`Print_Porcelain_V2_Status` render `git status --porcelain=v2` — `1`/`2`/`?`/`!` records carrying the XY code, submodule field, HEAD/index/worktree modes and HEAD/index ids (rename HEAD columns come from the original path).
 - Git parity: `status` no longer reports an unpopulated submodule (a gitlink whose working directory still exists, e.g. after `deinit`) as a deleted worktree entry; like git, a gitlink shows "D" only once its directory is gone entirely.

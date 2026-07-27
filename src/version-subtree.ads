@@ -58,6 +58,7 @@ package Version.Subtree is
       Onto    : String := "";
       Rejoin  : Boolean := False;
       Ignore_Joins : Boolean := False;
+      Annotate : String := "";
       Updated : out Boolean)
       return Version.Objects.Hex_Object_Id;
 
