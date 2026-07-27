@@ -11,8 +11,6 @@ package body Version.Init is
    LF : constant Character := Character'Val (10);
    HT : constant Character := Character'Val (9);
 
-   Default_Branch : constant String := "main";
-
    procedure Ensure_Directory
      (Path : String)
    is
@@ -56,25 +54,57 @@ package body Version.Init is
    --  HEAD content for a new repository: reftable keeps a `.invalid` stub on
    --  disk (the real HEAD symref lives in the table), files points at the
    --  default branch directly.
-   function Head_Content (Ref_Storage : Ref_Storage_Kind) return String is
+   function Head_Content
+     (Ref_Storage : Ref_Storage_Kind; Branch : String) return String is
      (if Ref_Storage = Reftable
       then "ref: refs/heads/.invalid" & LF
-      else "ref: refs/heads/" & Default_Branch & LF);
+      else "ref: refs/heads/" & Branch & LF);
 
    procedure Setup_Reftable
      (Git_Dir       : String;
-      Object_Format : Version.Hash.Hash_Algorithm) is
+      Object_Format : Version.Hash.Hash_Algorithm;
+      Branch        : String) is
    begin
       Version.Reftable.Writer.Initialize_Stack
         (Common_Git_Dir => Git_Dir,
-         Default_Branch  => Default_Branch,
+         Default_Branch  => Branch,
          Raw_Length      => Version.Hash.Raw_Length (Object_Format));
    end Setup_Reftable;
 
+   --  git seeds a fresh repository with a description placeholder and an
+   --  info/exclude template; create them (but never clobber existing ones).
+   procedure Write_Description_And_Info (Git_Dir : String) is
+   begin
+      Ensure_Directory (Version.Files.Join (Git_Dir, "info"));
+      if not Version.Files.Is_Ordinary_File
+               (Version.Files.Join (Git_Dir, "description"))
+      then
+         Version.Files.Write_Binary_File_Atomic
+           (Path    => Version.Files.Join (Git_Dir, "description"),
+            Content =>
+              "Unnamed repository; edit this file 'description' to name the "
+              & "repository." & LF);
+      end if;
+      if not Version.Files.Is_Ordinary_File
+               (Version.Files.Join (Git_Dir, "info/exclude"))
+      then
+         Version.Files.Write_Binary_File_Atomic
+           (Path    => Version.Files.Join (Git_Dir, "info/exclude"),
+            Content =>
+              "# git ls-files --others --exclude-from=.git/info/exclude" & LF
+              & "# Lines that start with '#' are comments." & LF
+              & "# For a project mostly in C, the following would be a good "
+              & "set of" & LF
+              & "# exclude patterns (uncomment them if you want to use them):"
+              & LF & "# *.[oa]" & LF & "# *~" & LF);
+      end if;
+   end Write_Description_And_Info;
+
    procedure Init
-     (Path          : String := ".";
-      Object_Format : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
-      Ref_Storage   : Ref_Storage_Kind := Files)
+     (Path           : String := ".";
+      Object_Format  : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
+      Ref_Storage    : Ref_Storage_Kind := Files;
+      Initial_Branch : String := "main")
    is
       Git_Dir : constant String :=
         Version.Files.Join (Path, ".git");
@@ -97,13 +127,14 @@ package body Version.Init is
       Ensure_Directory (Version.Files.Join (Git_Dir, "refs/heads"));
       Ensure_Directory (Version.Files.Join (Git_Dir, "refs/tags"));
       Ensure_Directory (Version.Files.Join (Git_Dir, "hooks"));
+      Write_Description_And_Info (Git_Dir);
 
       if not Version.Files.Is_Ordinary_File
                (Version.Files.Join (Git_Dir, "HEAD"))
       then
          Version.Files.Write_Binary_File_Atomic
            (Path    => Version.Files.Join (Git_Dir, "HEAD"),
-            Content => Head_Content (Ref_Storage));
+            Content => Head_Content (Ref_Storage, Initial_Branch));
       end if;
 
       if not Version.Files.Is_Ordinary_File
@@ -116,14 +147,15 @@ package body Version.Init is
       end if;
 
       if Ref_Storage = Reftable and then not Existed then
-         Setup_Reftable (Git_Dir, Object_Format);
+         Setup_Reftable (Git_Dir, Object_Format, Initial_Branch);
       end if;
    end Init;
 
    procedure Init_Bare
-     (Path          : String := ".";
-      Object_Format : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
-      Ref_Storage   : Ref_Storage_Kind := Files)
+     (Path           : String := ".";
+      Object_Format  : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
+      Ref_Storage    : Ref_Storage_Kind := Files;
+      Initial_Branch : String := "main")
    is
       --  git's bare `init` is idempotent too: it reinitialises rather than
       --  failing, and preserves an existing HEAD/config.
@@ -142,13 +174,14 @@ package body Version.Init is
       Ensure_Directory (Version.Files.Join (Path, "refs/heads"));
       Ensure_Directory (Version.Files.Join (Path, "refs/tags"));
       Ensure_Directory (Version.Files.Join (Path, "hooks"));
+      Write_Description_And_Info (Path);
 
       if not Version.Files.Is_Ordinary_File
                (Version.Files.Join (Path, "HEAD"))
       then
          Version.Files.Write_Binary_File_Atomic
            (Path    => Version.Files.Join (Path, "HEAD"),
-            Content => Head_Content (Ref_Storage));
+            Content => Head_Content (Ref_Storage, Initial_Branch));
       end if;
 
       if not Version.Files.Is_Ordinary_File
@@ -160,7 +193,7 @@ package body Version.Init is
       end if;
 
       if Ref_Storage = Reftable and then not Existed then
-         Setup_Reftable (Path, Object_Format);
+         Setup_Reftable (Path, Object_Format, Initial_Branch);
       end if;
    end Init_Bare;
 
