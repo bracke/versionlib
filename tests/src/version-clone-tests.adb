@@ -11,6 +11,7 @@ with Version.Test_Support;
 with Version.Branch;
 with Version.Fetch;
 with Version.Objects;
+with Version.Refs;
 with Version.Files;
 with Version.Write;
 with Version.Init;
@@ -688,13 +689,15 @@ package body Version.Clone.Tests is
          Target => Target);
 
       declare
-         Commit : constant String :=
-           Version.Test_Support.Read_Text_File
-             (Version.Test_Support.Join (Target, ".git/refs/heads/main"));
-
          Target_Repo : constant Version.Repository.Repository_Handle :=
            Version.Repository.Open_Git_Dir
              (Version.Test_Support.Join (Target, ".git"));
+
+         --  git packs the branch on clone, so resolve the ref rather than
+         --  reading a loose file.
+         Commit : constant String :=
+           Version.Objects.To_String
+             (Version.Refs.Resolve_Ref (Target_Repo, "refs/heads/main"));
 
          Head_Log : constant String :=
            Version.Test_Support.Read_Text_File
@@ -996,12 +999,11 @@ package body Version.Clone.Tests is
         (not Version.Files.Is_Ordinary_File
                (Version.Test_Support.Join (Clone_Path, "a.txt")),
          "dangling-HEAD clone must not materialize a worktree");
-      --  The remote branches are still fetched...
-      Assert
-        (Version.Files.Is_Ordinary_File
-           (Version.Test_Support.Join
-              (Clone_Path, ".git/refs/remotes/origin/main")),
-         "dangling-HEAD clone still fetches remote branches");
+      --  The remote branches are still fetched (git packs them on clone, so
+      --  the ref resolves rather than existing as a loose file).
+      Version.Git_Fixtures.Run
+        (Clone_Path,
+         "git rev-parse --verify refs/remotes/origin/main");
       --  ...but no origin/HEAD is written (its target does not exist).
       Assert
         (not Version.Files.Is_Ordinary_File

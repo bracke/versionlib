@@ -12,6 +12,7 @@ with Ada.Text_IO;
 with Version.Config;
 with Version.Files;
 with Version.Init;
+with Version.Packed_Refs;
 with Version.Objects;
 with Version.Refs;
 with Version.Remotes;
@@ -262,7 +263,8 @@ package body Version.Clone is
    end Remote_Default_Branch;
 
    procedure Checkout_Fetched_Branch
-     (Repo : Version.Repository.Repository_Handle; Branch : String)
+     (Repo : Version.Repository.Repository_Handle; Branch : String;
+      No_Checkout : Boolean := False)
    is
       Ref_Path : constant String :=
         Remote_Tracking_Ref_Path
@@ -310,8 +312,12 @@ package body Version.Clone is
             null;
       end;
 
-      Version.Restore.Restore_Working_Tree (Repo);
-      Write_Index_For_Head (Repo);
+      --  --no-checkout registers the branch and HEAD but leaves the working
+      --  tree (and index) empty.
+      if not No_Checkout then
+         Version.Restore.Restore_Working_Tree (Repo);
+         Write_Index_For_Head (Repo);
+      end if;
    end Checkout_Fetched_Branch;
 
    --  git parity for a dangling remote HEAD: the remote's HEAD names a branch
@@ -494,7 +500,9 @@ package body Version.Clone is
 
    procedure Clone_Internal
      (Source : String; Target : String; Has_Depth : Boolean; Depth : Positive;
-      Filter : String := "")
+      Filter : String := "";
+      Want_Branch : String := "";
+      No_Checkout : Boolean := False)
    is
       Fetch_Source : Unbounded_String;
       Stored_Source : Unbounded_String;
@@ -552,17 +560,22 @@ package body Version.Clone is
             Repo : constant Version.Repository.Repository_Handle :=
               Version.Repository.Open;
 
+            --  -b <branch> checks out that branch instead of the remote's
+            --  default HEAD.
             Default_Branch : constant String :=
-              (case Version.Transport.Detect_Transport (Remote_Source) is
-                 when Version.Transport.Local_Transport       =>
-                   Remote_Default_Branch (Source_Git_Dir_For (Remote_Source)),
-                 when Version.Transport.Http_Transport        =>
-                   Http_Default_Branch (Remote_Source),
-                 when Version.Transport.Ssh_Transport         =>
-                   Ssh_Default_Branch (Remote_Source),
-                 when Version.Transport.Unsupported_Transport =>
-                   raise Ada.IO_Exceptions.Data_Error
-                     with "unsupported clone source URL");
+              (if Want_Branch'Length > 0 then Want_Branch
+               else
+                 (case Version.Transport.Detect_Transport (Remote_Source) is
+                    when Version.Transport.Local_Transport       =>
+                      Remote_Default_Branch
+                        (Source_Git_Dir_For (Remote_Source)),
+                    when Version.Transport.Http_Transport        =>
+                      Http_Default_Branch (Remote_Source),
+                    when Version.Transport.Ssh_Transport         =>
+                      Ssh_Default_Branch (Remote_Source),
+                    when Version.Transport.Unsupported_Transport =>
+                      raise Ada.IO_Exceptions.Data_Error
+                        with "unsupported clone source URL"));
 
             Main_Ref : constant String :=
               Remote_Tracking_Ref_Path
@@ -580,23 +593,36 @@ package body Version.Clone is
                         Branch => Default_Branch))
                then
                   Checkout_Fetched_Branch
-                    (Repo => Repo, Branch => Default_Branch);
+                    (Repo => Repo, Branch => Default_Branch,
+                     No_Checkout => No_Checkout);
                else
                   Set_Unborn_Default_Branch
                     (Repo => Repo, Branch => Default_Branch);
                end if;
 
             elsif Version.Files.Is_Ordinary_File (Main_Ref) then
-               Checkout_Fetched_Branch (Repo => Repo, Branch => "main");
+               Checkout_Fetched_Branch
+                 (Repo => Repo, Branch => "main", No_Checkout => No_Checkout);
 
             elsif Version.Files.Is_Ordinary_File (Master_Ref) then
-               Checkout_Fetched_Branch (Repo => Repo, Branch => "master");
+               Checkout_Fetched_Branch
+                 (Repo => Repo, Branch => "master", No_Checkout => No_Checkout);
 
             else
                raise Ada.IO_Exceptions.Data_Error
                  with
                    "remote has no default branch, origin/main, or origin/master";
             end if;
+
+            --  git clone packs the fetched refs (`pack-refs --all`), so only
+            --  the loose HEAD symrefs are left under refs/.
+            begin
+               Version.Packed_Refs.Pack_Refs
+                 (Repo, Include_All => True, Prune_Loose => True);
+            exception
+               when others =>
+                  null;
+            end;
          end;
       end Populate_Target;
    begin
@@ -696,6 +722,15 @@ package body Version.Clone is
    procedure Clone (Source : String; Target : String) is
    begin
       Clone_Internal (Source, Target, False, 1);
+   end Clone;
+
+   procedure Clone
+     (Source : String; Target : String;
+      Branch : String; No_Checkout : Boolean) is
+   begin
+      Clone_Internal
+        (Source, Target, False, 1,
+         Want_Branch => Branch, No_Checkout => No_Checkout);
    end Clone;
 
    procedure Clone (Source : String; Target : String; Depth : Positive) is

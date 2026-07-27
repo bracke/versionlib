@@ -411,8 +411,12 @@ package body Version.Packed_Refs is
       Name : constant String := To_String (Ref.Name);
       Path : constant String := Join (Version.Repository.Common_Git_Dir (Repo), Name);
    begin
+      --  A packed ref's loose copy is redundant and git removes it. Symbolic
+      --  refs (refs/remotes/*/HEAD) are never packed, so they never reach here
+      --  and stay loose, which is what git leaves behind.
       if (Starts_With (Name, "refs/heads/")
-          or else Starts_With (Name, "refs/tags/"))
+          or else Starts_With (Name, "refs/tags/")
+          or else Starts_With (Name, "refs/remotes/"))
         and then Version.Files.Is_Ordinary_File (Path)
       then
          Version.Files.Delete_File_If_Exists (Path);

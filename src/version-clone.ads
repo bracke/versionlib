@@ -4,6 +4,15 @@ package Version.Clone is
      (Source : String;
       Target : String);
 
+   --  git's `-b <branch>` checks out that branch (setting HEAD to it) instead
+   --  of the remote's default; `--no-checkout` registers HEAD and the refs but
+   --  leaves the working tree and index empty.
+   procedure Clone
+     (Source : String;
+      Target : String;
+      Branch : String;
+      No_Checkout : Boolean);
+
    procedure Clone
      (Source : String;
       Target : String;
