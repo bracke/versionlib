@@ -644,7 +644,22 @@ package body Version.Status is
                begin
                   if not Path_Position_Maps.Has_Element (Pos) then
                      if Version.Sparse.Included (Repo, Path) then
-                        Add_Change (Result.Changes, Path, Deleted_File);
+                        --  An unpopulated submodule (a gitlink whose working
+                        --  directory still exists, e.g. after `deinit`) is not
+                        --  a worktree deletion: git reports "D" for a gitlink
+                        --  only once its directory is gone entirely.
+                        if To_String (Index_Entries.Element (I).Mode)
+                             = "160000"
+                          and then Ada.Directories.Exists
+                                     (Version.Files.To_Native_Path
+                                        (Version.Files.Join
+                                           (Version.Repository.Root_Path (Repo),
+                                            Path)))
+                        then
+                           null;
+                        else
+                           Add_Change (Result.Changes, Path, Deleted_File);
+                        end if;
                      end if;
                   elsif Working_Files.Element (Path_Position_Maps.Element (Pos))
                           .Id
