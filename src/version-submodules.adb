@@ -15,6 +15,7 @@ with Version.Fetch;
 with Version.Files;
 with Version.Filesystem_Guard; use Version.Filesystem_Guard;
 with Version.Gitmodules;
+with Version.History;
 
 with Version.Branch;
 with Version.Packed_Refs;
@@ -1525,6 +1526,78 @@ package body Version.Submodules is
       end;
    end Status_Line_Git;
 
+   -----------
+   -- Summary --
+   -----------
+
+   procedure Summary (Repo : Version.Repository.Repository_Handle) is
+      Items : constant Submodule_Status_Vectors.Vector := Statuses (Repo);
+
+      function Short (H : String) return String is
+        (if H'Length >= 7 then H (H'First .. H'First + 6) else H);
+   begin
+      for It of Items loop
+         declare
+            Path : constant String := To_String (It.Path);
+            --  git summarizes from the recorded gitlink commit to the
+            --  submodule's checked-out HEAD.
+            Src  : constant String := To_String (It.Expected);
+            Dst  : constant String := To_String (It.Actual);
+         begin
+            if Dst'Length > 0 and then Src /= Dst
+              and then Version.Objects.Is_Valid_Hex_Object_Id (Src)
+              and then Version.Objects.Is_Valid_Hex_Object_Id (Dst)
+              and then Resolved_Submodule_Git_Dir (Repo, Path)'Length > 0
+            then
+               declare
+                  Sub : constant Version.Repository.Repository_Handle :=
+                    Version.Repository.Open_Git_Dir
+                      (Resolved_Submodule_Git_Dir (Repo, Path));
+                  Src_Id : constant Version.Objects.Hex_Object_Id :=
+                    Version.Objects.To_Object_Id (Src);
+                  Dst_Id : constant Version.Objects.Hex_Object_Id :=
+                    Version.Objects.To_Object_Id (Dst);
+                  Opts : constant Version.History.Rev_List_Options :=
+                    (First_Parent => True, others => <>);
+                  Removed : constant Version.History.Commit_Id_Vectors.Vector :=
+                    Version.History.Rev_List
+                      (Sub, [Src_Id], [Dst_Id], Opts);
+                  Added   : constant Version.History.Commit_Id_Vectors.Vector :=
+                    Version.History.Rev_List
+                      (Sub, [Dst_Id], [Src_Id], Opts);
+                  Count : constant Natural :=
+                    Natural (Removed.Length) + Natural (Added.Length);
+
+                  function Subject
+                    (Id : Version.Objects.Hex_Object_Id) return String
+                  is
+                    (Version.Objects.Commit_Message_First_Line
+                       (Version.Objects.Read_Object (Sub, Id)));
+               begin
+                  Ada.Text_IO.Put_Line
+                    ("* " & Path & " " & Short (Src) & "..." & Short (Dst)
+                     & " ("
+                     & Ada.Strings.Fixed.Trim
+                         (Natural'Image (Count), Ada.Strings.Left)
+                     & "):");
+                  for C of Removed loop
+                     Ada.Text_IO.Put_Line ("  < " & Subject (C));
+                  end loop;
+                  for C of Added loop
+                     Ada.Text_IO.Put_Line ("  > " & Subject (C));
+                  end loop;
+                  Ada.Text_IO.New_Line;
+               end;
+            end if;
+         end;
+      end loop;
+   end Summary;
+
+   procedure Summary is
+   begin
+      Summary (Version.Repository.Open);
+   end Summary;
+
    procedure Status is
       Repo  : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -1581,7 +1654,8 @@ package body Version.Submodules is
    procedure Foreach
      (Repo      : Version.Repository.Repository_Handle;
       Command   : String;
-      Recursive : Boolean := False)
+      Recursive : Boolean := False;
+      Quiet     : Boolean := False)
    is
       Items    : constant Version.Gitmodules.Submodule_Config_Vectors.Vector :=
         Sorted_Submodules (Repo);
@@ -1604,7 +1678,12 @@ package body Version.Submodules is
                   Sha  : constant String :=
                     To_String (Gitlink_Commit (Repo, Path));
                begin
-                  Ada.Text_IO.Put_Line ("Entering '" & Path & "'");
+                  --  git announces each submodule on stdout unless -q; flush
+                  --  so it precedes the spawned command's own output.
+                  if not Quiet then
+                     Ada.Text_IO.Put_Line ("Entering '" & Path & "'");
+                     Ada.Text_IO.Flush;
+                  end if;
 
                   Ada.Environment_Variables.Set ("name", Name);
                   Ada.Environment_Variables.Set ("sm_path", Path);
@@ -1639,7 +1718,7 @@ package body Version.Submodules is
                         begin
                            Foreach
                              (Version.Repository.Open, Command,
-                              Recursive => True);
+                              Recursive => True, Quiet => Quiet);
                         end Recurse;
                      begin
                         Version.Files.With_Directory (Work, Recurse'Access);
@@ -1651,9 +1730,12 @@ package body Version.Submodules is
       end loop;
    end Foreach;
 
-   procedure Foreach (Command : String; Recursive : Boolean := False) is
+   procedure Foreach
+     (Command   : String;
+      Recursive : Boolean := False;
+      Quiet     : Boolean := False) is
    begin
-      Foreach (Version.Repository.Open, Command, Recursive);
+      Foreach (Version.Repository.Open, Command, Recursive, Quiet);
    end Foreach;
 
    --  Resolve a .gitmodules URL for storing in config: relative URLs are

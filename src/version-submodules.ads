@@ -76,18 +76,28 @@ package Version.Submodules is
 
    procedure Status;
 
+   --  git's `submodule summary`: for each submodule whose checked-out HEAD
+   --  differs from the recorded gitlink, print a "* <path> <a>...<b> (<n>):"
+   --  header followed by the differing commits' subjects ("< " removed by the
+   --  move, "> " added), and a trailing blank line.
+   procedure Summary;
+
+   procedure Summary (Repo : Version.Repository.Repository_Handle);
+
    --  Run a shell command in each populated (active) submodule working tree,
    --  matching `git submodule foreach`. Prints "Entering '<path>'" and exposes
    --  $name, $sm_path, $displaypath, $sha1 and $toplevel to the command; stops
    --  (raises) if a command exits non-zero.
    procedure Foreach
      (Command   : String;
-      Recursive : Boolean := False);
+      Recursive : Boolean := False;
+      Quiet     : Boolean := False);
 
    procedure Foreach
      (Repo      : Version.Repository.Repository_Handle;
       Command   : String;
-      Recursive : Boolean := False);
+      Recursive : Boolean := False;
+      Quiet     : Boolean := False);
 
    --  Copy each submodule's `.gitmodules` URL into the superproject's
    --  .git/config (submodule.<name>.url) and the submodule's own
