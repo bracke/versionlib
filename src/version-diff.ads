@@ -147,12 +147,15 @@ package Version.Diff is
    --  recursing into subtrees. When Has_Base is False the base is the empty
    --  tree (every path is an addition), for `diff-tree --root`.
    function Raw_Diff_Trees
-     (Repo      : Version.Repository.Repository_Handle;
-      Base      : Version.Objects.Hex_Object_Id;
-      Has_Base  : Boolean;
-      Target    : Version.Objects.Hex_Object_Id;
-      Recursive : Boolean := True)
+     (Repo       : Version.Repository.Repository_Handle;
+      Base       : Version.Objects.Hex_Object_Id;
+      Has_Base   : Boolean;
+      Target     : Version.Objects.Hex_Object_Id;
+      Recursive  : Boolean := True;
+      Show_Trees : Boolean := False)
       return String;
+   --  Show_Trees (git's `-t`) also emits a line for each changed subdirectory
+   --  (a `040000` entry whose tree object differs), in path order.
 
    --  git's `--dirstat`: the share of the change that each directory holds,
    --  printed as "  NN.N% <dir>/" for directories at or above Permille (git's

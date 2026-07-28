@@ -2551,11 +2551,12 @@ package body Version.Diff is
    end Diff_Root_Commit;
 
    function Raw_Diff_Trees
-     (Repo      : Version.Repository.Repository_Handle;
-      Base      : Version.Objects.Hex_Object_Id;
-      Has_Base  : Boolean;
-      Target    : Version.Objects.Hex_Object_Id;
-      Recursive : Boolean := True)
+     (Repo       : Version.Repository.Repository_Handle;
+      Base       : Version.Objects.Hex_Object_Id;
+      Has_Base   : Boolean;
+      Target     : Version.Objects.Hex_Object_Id;
+      Recursive  : Boolean := True;
+      Show_Trees : Boolean := False)
       return String
    is
       type Blob_Info is record
@@ -2565,6 +2566,34 @@ package body Version.Diff is
 
       package Entry_Maps is new Ada.Containers.Indefinite_Ordered_Maps
         (Key_Type => String, Element_Type => Blob_Info);
+
+      --  git's `-t` also reports changed subdirectories: recursively add each
+      --  tree entry (mode 040000) so the compare loop below emits it.
+      procedure Add_Dirs
+        (Tid    : Version.Objects.Hex_Object_Id;
+         Prefix : String;
+         Into   : in out Entry_Maps.Map)
+      is
+         Entries : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+           Version.Objects.Tree_Entries (Repo, Tid);
+      begin
+         for E of Entries loop
+            if E.Kind = Version.Objects.Tree_Directory then
+               declare
+                  Path : constant String :=
+                    (if Prefix = "" then To_String (E.Path)
+                     else Prefix & "/" & To_String (E.Path));
+               begin
+                  Into.Include
+                    (Path,
+                     (Mode => E.Mode,
+                      Sha  => To_Unbounded_String
+                                (Version.Objects.To_String (E.Id))));
+                  Add_Dirs (E.Id, Path, Into);
+               end;
+            end if;
+         end loop;
+      end Add_Dirs;
 
       Target_Hex : constant String := Version.Objects.To_String (Target);
       Zeros      : constant String (1 .. Target_Hex'Length) := [others => '0'];
@@ -2592,6 +2621,9 @@ package body Version.Diff is
                        (Version.Objects.To_String (E.Id))));
             end loop;
          end;
+         if Show_Trees then
+            Add_Dirs (Tid, "", M);
+         end if;
          return M;
       end Load;
 
