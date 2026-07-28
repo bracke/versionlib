@@ -414,6 +414,39 @@ package body Version.Merge_State is
          Conflicts     => Conflicts);
    end Read_State;
 
+   function Git_Pick_In_Progress
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+   begin
+      return Ada.Directories.Exists
+               (Git_State_Path (Repo, "CHERRY_PICK_HEAD"))
+        or else Ada.Directories.Exists (Git_State_Path (Repo, "REVERT_HEAD"));
+   end Git_Pick_In_Progress;
+
+   function Git_Pick_Is_Revert
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+   begin
+      return Ada.Directories.Exists (Git_State_Path (Repo, "REVERT_HEAD"));
+   end Git_Pick_Is_Revert;
+
+   function Git_Pick_Head
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Hex_Object_Id
+   is
+      Name : constant String :=
+        (if Git_Pick_Is_Revert (Repo) then "REVERT_HEAD" else "CHERRY_PICK_HEAD");
+      Raw  : constant String :=
+        Version.Files.Read_Binary_File (Git_State_Path (Repo, Name));
+      Last : Natural := Raw'Last;
+   begin
+      while Last >= Raw'First
+        and then (Raw (Last) = Character'Val (10)
+                  or else Raw (Last) = Character'Val (13))
+      loop
+         Last := Last - 1;
+      end loop;
+      return Version.Objects.To_Object_Id (Raw (Raw'First .. Last));
+   end Git_Pick_Head;
+
    procedure Clear_State (Repo : Version.Repository.Repository_Handle) is
       Path : constant String := Merge_State_Path (Repo);
    begin

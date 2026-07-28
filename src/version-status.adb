@@ -2064,6 +2064,14 @@ package body Version.Status is
           (Version.Files.Join
              (Version.Repository.Git_Dir (Repo), "MERGE_HEAD"));
 
+      --  A conflicted cherry-pick or revert left by real git (its
+      --  CHERRY_PICK_HEAD / REVERT_HEAD marker). git narrates it in its own
+      --  block and, like a merge, drops the unmerged "unstage" hint.
+      Picking   : constant Boolean :=
+        Version.Merge_State.Git_Pick_In_Progress (Repo);
+      Reverting : constant Boolean :=
+        Picking and then Version.Merge_State.Git_Pick_Is_Revert (Repo);
+
       --  git's own bookkeeping: `committable` suppresses the closing summary,
       --  `workdir_dirty` selects which summary is printed.
       Committable   : constant Boolean := not Result.Staged.Is_Empty;
@@ -2127,6 +2135,35 @@ package body Version.Status is
          end if;
 
          Ada.Text_IO.New_Line;
+      elsif Picking then
+         declare
+            Head_Hex : constant String :=
+              Version.Objects.To_String
+                (Version.Merge_State.Git_Pick_Head (Repo));
+            Short    : constant String :=
+              Head_Hex (Head_Hex'First .. Head_Hex'First + 6);
+            Verb     : constant String :=
+              (if Reverting then "revert" else "cherry-pick");
+            Ing      : constant String :=
+              (if Reverting then "reverting" else "cherry-picking");
+         begin
+            Ada.Text_IO.Put_Line
+              ("You are currently " & Ing & " commit " & Short & ".");
+            if Result.Conflicted.Is_Empty then
+               Ada.Text_IO.Put_Line
+                 ("  (all conflicts fixed: run ""git " & Verb
+                  & " --continue"")");
+            else
+               Ada.Text_IO.Put_Line
+                 ("  (fix conflicts and run ""git " & Verb & " --continue"")");
+            end if;
+            Ada.Text_IO.Put_Line
+              ("  (use ""git " & Verb & " --skip"" to skip this patch)");
+            Ada.Text_IO.Put_Line
+              ("  (use ""git " & Verb & " --abort"" to cancel the "
+               & Verb & " operation)");
+            Ada.Text_IO.New_Line;
+         end;
       end if;
 
       if not Result.Staged.Is_Empty then
@@ -2149,7 +2186,7 @@ package body Version.Status is
          --  Mid-merge there is nothing to unstage back to, so git offers only
          --  the resolution hint; unmerged entries from anything else (a
          --  rebase, a cherry-pick) can be unstaged and git says so.
-         if not Merging then
+         if not Merging and then not Picking then
             Ada.Text_IO.Put_Line
               ("  (use ""git restore --staged <file>..."" to unstage)");
          end if;

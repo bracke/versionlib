@@ -65,4 +65,20 @@ package Version.Merge_State is
      (Repo : Version.Repository.Repository_Handle)
       return Boolean;
 
+   --  git's own conflicted-cherry-pick / conflicted-revert markers, left by a
+   --  real git that this tool did not drive (a single pick uses these plain
+   --  files, no `sequencer/` directory). CHERRY_PICK_HEAD / REVERT_HEAD name
+   --  the commit being applied.
+   function Git_Pick_In_Progress
+     (Repo : Version.Repository.Repository_Handle)
+      return Boolean;
+
+   function Git_Pick_Is_Revert
+     (Repo : Version.Repository.Repository_Handle)
+      return Boolean;
+
+   function Git_Pick_Head
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Hex_Object_Id;
+
 end Version.Merge_State;
