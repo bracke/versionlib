@@ -734,6 +734,50 @@ package body Version.Restore is
         (Repo => Repo, Commit_Id => Version.Objects.To_Object_Id (Commit_Id));
    end Restore_Working_Tree;
 
+   procedure Restore_Working_Tree_For_Tree
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id)
+   is
+      Objects        : Version.Object_Cache.Object_Cache;
+      Trees          : Version.Tree_Cache.Tree_Cache;
+      Tree_Items     : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+        Version.Tree_Cache.Flatten_Tree
+          (Repo => Repo, Cache => Trees, Tree_Id => Tree_Id);
+      Tree_Positions : constant Path_Position_Maps.Map :=
+        Tree_Path_Map (Tree_Items);
+      Existing_Index : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+   begin
+      --  Delete the working copy of any tracked path the tree no longer holds.
+      for Item of Existing_Index loop
+         declare
+            Relative_Path : constant String :=
+              Version.Path_Safety.Normalize_Relative_Path
+                (To_String (Item.Path));
+         begin
+            if (not Tree_Positions.Contains (Relative_Path))
+              or else (not Version.Sparse.Included (Repo, Relative_Path))
+            then
+               Delete_Working_Path_If_Present (Repo, Relative_Path);
+            end if;
+         end;
+      end loop;
+
+      --  Write every blob the tree holds.
+      for Item of Tree_Items loop
+         declare
+            Relative_Path : constant String :=
+              Version.Path_Safety.Normalize_Relative_Path
+                (To_String (Item.Path));
+         begin
+            if Version.Sparse.Included (Repo, Relative_Path) then
+               Write_Tree_Item_To_Working_Tree
+                 (Repo, Objects, Item, Relative_Path);
+            end if;
+         end;
+      end loop;
+   end Restore_Working_Tree_For_Tree;
+
    procedure Write_Index_For_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;

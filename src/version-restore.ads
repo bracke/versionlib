@@ -10,6 +10,15 @@ package Version.Restore is
    procedure Restore_Working_Tree
      (Repo : Version.Repository.Repository_Handle);
 
+   procedure Restore_Working_Tree_For_Tree
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id);
+   --  Update the working tree to match Tree_Id directly (git's `read-tree -u`
+   --  target): write every blob the tree holds and delete the working copy of
+   --  any path the current index tracks that the tree no longer contains.
+   --  Call it before rewriting the index so the outgoing index still names the
+   --  paths to remove.
+
    procedure Preflight_Working_Tree_For_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id);
