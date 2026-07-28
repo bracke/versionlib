@@ -19,6 +19,7 @@ package Version.Diff is
       Numstat        : Boolean := False;
       Shortstat      : Boolean := False;
       Raw            : Boolean := False;
+      Abbrev         : Natural := 7;
       Compact_Summary : Boolean := False;
       Stat_Width      : Natural := 0;
       Diff_Filter     : Ada.Strings.Unbounded.Unbounded_String :=

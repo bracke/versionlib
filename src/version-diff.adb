@@ -1669,6 +1669,7 @@ package body Version.Diff is
       Numstat     : Boolean := False;
       Shortstat   : Boolean := False;
       Raw         : Boolean := False;
+      Abbrev      : Natural := 7;
       Compact     : Boolean := False;
       Stat_Width  : Natural := 0;
       Diff_Filter : String := "";
@@ -1694,12 +1695,13 @@ package body Version.Diff is
       --  an absent side is all zeros, and a rename names both paths.
       function Pad6 (M : String) return String is
         ((1 .. Integer'Max (0, 6 - M'Length) => '0') & M);
+      Ab_Len : constant Positive := Positive'Max (Abbrev, 1);
       function Ab7 (Present : Boolean;
                     Id : Version.Objects.Hex_Object_Id) return String is
-        (if not Present then "0000000"
+        (if not Present then [1 .. Ab_Len => '0']
          else Version.Objects.To_String (Id)
                 (Version.Objects.To_String (Id)'First ..
-                 Version.Objects.To_String (Id)'First + 6));
+                 Version.Objects.To_String (Id)'First + Ab_Len - 1));
       --  git's `--diff-filter`: an uppercase letter includes that status, a
       --  lowercase one excludes it. With only excludes, everything else
       --  passes; with any include, only the listed statuses do.
@@ -2060,7 +2062,7 @@ package body Version.Diff is
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
-                 Raw            => Options.Raw,
+                 Raw            => Options.Raw, Abbrev => Options.Abbrev,
                  Compact        => Options.Compact_Summary,
                  Stat_Width     => Options.Stat_Width,
                  Diff_Filter => To_String (Options.Diff_Filter),
@@ -2111,7 +2113,7 @@ package body Version.Diff is
                  Summary     => Options.Summary,
                  Name_Only   => Options.Name_Only,
                  Name_Status => Options.Name_Status,
-                 Raw            => Options.Raw,
+                 Raw            => Options.Raw, Abbrev => Options.Abbrev,
                  Compact        => Options.Compact_Summary,
                  Stat_Width     => Options.Stat_Width,
                  Diff_Filter => To_String (Options.Diff_Filter),
@@ -2153,7 +2155,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
-              Raw            => Options.Raw,
+              Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
               Diff_Filter => To_String (Options.Diff_Filter),
@@ -2200,7 +2202,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
-              Raw            => Options.Raw,
+              Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
               Diff_Filter => To_String (Options.Diff_Filter),
@@ -2259,7 +2261,7 @@ package body Version.Diff is
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
-           Raw            => Options.Raw,
+           Raw            => Options.Raw, Abbrev => Options.Abbrev,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
            Diff_Filter => To_String (Options.Diff_Filter),
@@ -2295,7 +2297,7 @@ package body Version.Diff is
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Name_Only   => Options.Name_Only,
            Name_Status => Options.Name_Status,
-           Raw            => Options.Raw,
+           Raw            => Options.Raw, Abbrev => Options.Abbrev,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
            Diff_Filter => To_String (Options.Diff_Filter),
@@ -2334,7 +2336,7 @@ package body Version.Diff is
            Stat => Options.Stat, Summary => Options.Summary,
            Name_Only => Options.Name_Only,
            Name_Status => Options.Name_Status,
-           Raw            => Options.Raw,
+           Raw            => Options.Raw, Abbrev => Options.Abbrev,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
            Diff_Filter => To_String (Options.Diff_Filter),
@@ -2382,7 +2384,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
-              Raw            => Options.Raw,
+              Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
               Diff_Filter => To_String (Options.Diff_Filter),
@@ -2440,7 +2442,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
-              Raw            => Options.Raw,
+              Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
               Diff_Filter => To_String (Options.Diff_Filter),
@@ -2483,7 +2485,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
-              Raw            => Options.Raw,
+              Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
               Diff_Filter => To_String (Options.Diff_Filter),
@@ -2533,7 +2535,7 @@ package body Version.Diff is
               Stat => Options.Stat, Summary => Options.Summary,
               Name_Only => Options.Name_Only,
               Name_Status => Options.Name_Status,
-              Raw            => Options.Raw,
+              Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
               Diff_Filter => To_String (Options.Diff_Filter),
