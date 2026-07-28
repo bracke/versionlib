@@ -38,29 +38,45 @@ jobs:
       - name: Check out hostkit sibling
         uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
-      - name: Compute an OS-stable CLDR cache key
+      - name: Compute an OS-stable i18n upstream cache key
         id: cldr_key
         if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
         shell: bash
         run: |
           set -euo pipefail
-          # hashFiles() diverges across runners (git checks the manifest out CRLF
-          # on Windows, LF elsewhere), so normalize line endings before hashing to
-          # get one byte-identical key on every OS -- a single shared cross-OS cache.
-          h=$(tr -d '\r' < "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" | git hash-object --stdin)
-          echo "key=cldr-json-$h" >> "$GITHUB_OUTPUT"
-      - name: Cache the i18n CLDR upstream tree (CI-only; avoids the flaky 82 MB download)
-        # The transitive i18n build regenerates its data, downloading the 82 MB
-        # cldr-json release from the GitHub CDN. That fetch reaches the Windows
-        # runner only intermittently, while the posix job gets it reliably. The
-        # OS-stable key above plus enableCrossOsArchive (cldr-json is portable
-        # JSON) let the posix job seed one shared entry the windows job restores,
-        # taking Windows out of the download path. Inlined because versionlib
-        # checks out siblings by hand, not via project_tools' checkout-ada-siblings.
+          # i18n's regen fetches three flaky sources -- cldr-json (GitHub), tzdb
+          # (IANA) and the Unicode UCD/UCA/collation/transforms -- each of which
+          # reaches the Windows runner only intermittently. The next step caches
+          # all of them. Versions are pinned in the tracked cldr manifest plus
+          # hardcoded constants in the three downloader sources, so hash all four:
+          # any version/logic change busts the cache. Strip CR so the key is
+          # identical on every OS (git checks these out CRLF on Windows, LF else).
+          h=$(cat \
+                "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" \
+                "$GITHUB_WORKSPACE/i18n/cldr/src/download_cldr_upstream.adb" \
+                "$GITHUB_WORKSPACE/i18n/cldr/src/download_tzdb.adb" \
+                "$GITHUB_WORKSPACE/i18n/cldr/src/fetch_ucd.adb" \
+              | tr -d '\r' | git hash-object --stdin)
+          echo "key=i18n-upstream-$h" >> "$GITHUB_OUTPUT"
+      - name: Cache the i18n upstream download trees (CI-only; avoids flaky 82 MB+ downloads)
+        # Only the raw download trees are cached (not the generated export), so the
+        # regen re-runs with current i18n code; each downloader skips when its dir
+        # is present. The reliable posix job seeds one shared cross-OS entry the
+        # windows job restores, taking Windows out of the download path. Inlined
+        # because versionlib checks out siblings by hand, not via project_tools'
+        # checkout-ada-siblings action.
         if: steps.cldr_key.outputs.key != ''
         uses: actions/cache@v4
         with:
-          path: i18n/cldr/upstream/cldr-json
+          path: |
+            i18n/cldr/upstream/cldr-json
+            i18n/cldr/upstream/tzdb
+            i18n/cldr/upstream/ucd
+            i18n/cldr/upstream/ucd16
+            i18n/cldr/upstream/uca
+            i18n/cldr/upstream/collation
+            i18n/cldr/upstream/transforms
+            i18n/cldr/upstream/transforms_test
           key: ${{ steps.cldr_key.outputs.key }}
           enableCrossOsArchive: true
       - name: Set up Alire
@@ -111,29 +127,45 @@ jobs:
       - name: Check out hostkit sibling
         uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
-      - name: Compute an OS-stable CLDR cache key
+      - name: Compute an OS-stable i18n upstream cache key
         id: cldr_key
         if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
         shell: bash
         run: |
           set -euo pipefail
-          # hashFiles() diverges across runners (git checks the manifest out CRLF
-          # on Windows, LF elsewhere), so normalize line endings before hashing to
-          # get one byte-identical key on every OS -- a single shared cross-OS cache.
-          h=$(tr -d '\r' < "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" | git hash-object --stdin)
-          echo "key=cldr-json-$h" >> "$GITHUB_OUTPUT"
-      - name: Cache the i18n CLDR upstream tree (CI-only; avoids the flaky 82 MB download)
-        # The transitive i18n build regenerates its data, downloading the 82 MB
-        # cldr-json release from the GitHub CDN. That fetch reaches the Windows
-        # runner only intermittently, while the posix job gets it reliably. The
-        # OS-stable key above plus enableCrossOsArchive (cldr-json is portable
-        # JSON) let the posix job seed one shared entry the windows job restores,
-        # taking Windows out of the download path. Inlined because versionlib
-        # checks out siblings by hand, not via project_tools' checkout-ada-siblings.
+          # i18n's regen fetches three flaky sources -- cldr-json (GitHub), tzdb
+          # (IANA) and the Unicode UCD/UCA/collation/transforms -- each of which
+          # reaches the Windows runner only intermittently. The next step caches
+          # all of them. Versions are pinned in the tracked cldr manifest plus
+          # hardcoded constants in the three downloader sources, so hash all four:
+          # any version/logic change busts the cache. Strip CR so the key is
+          # identical on every OS (git checks these out CRLF on Windows, LF else).
+          h=$(cat \
+                "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" \
+                "$GITHUB_WORKSPACE/i18n/cldr/src/download_cldr_upstream.adb" \
+                "$GITHUB_WORKSPACE/i18n/cldr/src/download_tzdb.adb" \
+                "$GITHUB_WORKSPACE/i18n/cldr/src/fetch_ucd.adb" \
+              | tr -d '\r' | git hash-object --stdin)
+          echo "key=i18n-upstream-$h" >> "$GITHUB_OUTPUT"
+      - name: Cache the i18n upstream download trees (CI-only; avoids flaky 82 MB+ downloads)
+        # Only the raw download trees are cached (not the generated export), so the
+        # regen re-runs with current i18n code; each downloader skips when its dir
+        # is present. The reliable posix job seeds one shared cross-OS entry the
+        # windows job restores, taking Windows out of the download path. Inlined
+        # because versionlib checks out siblings by hand, not via project_tools'
+        # checkout-ada-siblings action.
         if: steps.cldr_key.outputs.key != ''
         uses: actions/cache@v4
         with:
-          path: i18n/cldr/upstream/cldr-json
+          path: |
+            i18n/cldr/upstream/cldr-json
+            i18n/cldr/upstream/tzdb
+            i18n/cldr/upstream/ucd
+            i18n/cldr/upstream/ucd16
+            i18n/cldr/upstream/uca
+            i18n/cldr/upstream/collation
+            i18n/cldr/upstream/transforms
+            i18n/cldr/upstream/transforms_test
           key: ${{ steps.cldr_key.outputs.key }}
           enableCrossOsArchive: true
       - name: Set up Alire
