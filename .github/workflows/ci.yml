@@ -38,19 +38,30 @@ jobs:
       - name: Check out hostkit sibling
         uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
+      - name: Compute an OS-stable CLDR cache key
+        id: cldr_key
+        if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # hashFiles() diverges across runners (git checks the manifest out CRLF
+          # on Windows, LF elsewhere), so normalize line endings before hashing to
+          # get one byte-identical key on every OS -- a single shared cross-OS cache.
+          h=$(tr -d '\r' < "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" | git hash-object --stdin)
+          echo "key=cldr-json-$h" >> "$GITHUB_OUTPUT"
       - name: Cache the i18n CLDR upstream tree (CI-only; avoids the flaky 82 MB download)
         # The transitive i18n build regenerates its data, downloading the 82 MB
-        # cldr-json release from the GitHub CDN. That fetch reaches Windows runners
-        # only intermittently, while ubuntu gets it reliably. An OS-independent
-        # cross-OS cache (cldr-json is portable JSON) lets the posix job seed a
-        # tree the windows job restores, taking Windows out of the download path.
-        # This repo checks out siblings by hand rather than via project_tools'
-        # checkout-ada-siblings action, so the cache step is inlined here.
-        if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
+        # cldr-json release from the GitHub CDN. That fetch reaches the Windows
+        # runner only intermittently, while the posix job gets it reliably. The
+        # OS-stable key above plus enableCrossOsArchive (cldr-json is portable
+        # JSON) let the posix job seed one shared entry the windows job restores,
+        # taking Windows out of the download path. Inlined because versionlib
+        # checks out siblings by hand, not via project_tools' checkout-ada-siblings.
+        if: steps.cldr_key.outputs.key != ''
         uses: actions/cache@v4
         with:
           path: i18n/cldr/upstream/cldr-json
-          key: cldr-json-${{ hashFiles('i18n/cldr/upstream/source_manifest.txt') }}
+          key: ${{ steps.cldr_key.outputs.key }}
           enableCrossOsArchive: true
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
@@ -100,19 +111,30 @@ jobs:
       - name: Check out hostkit sibling
         uses: actions/checkout@v7
         with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
+      - name: Compute an OS-stable CLDR cache key
+        id: cldr_key
+        if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # hashFiles() diverges across runners (git checks the manifest out CRLF
+          # on Windows, LF elsewhere), so normalize line endings before hashing to
+          # get one byte-identical key on every OS -- a single shared cross-OS cache.
+          h=$(tr -d '\r' < "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" | git hash-object --stdin)
+          echo "key=cldr-json-$h" >> "$GITHUB_OUTPUT"
       - name: Cache the i18n CLDR upstream tree (CI-only; avoids the flaky 82 MB download)
         # The transitive i18n build regenerates its data, downloading the 82 MB
-        # cldr-json release from the GitHub CDN. That fetch reaches Windows runners
-        # only intermittently, while ubuntu gets it reliably. An OS-independent
-        # cross-OS cache (cldr-json is portable JSON) lets the posix job seed a
-        # tree the windows job restores, taking Windows out of the download path.
-        # This repo checks out siblings by hand rather than via project_tools'
-        # checkout-ada-siblings action, so the cache step is inlined here.
-        if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
+        # cldr-json release from the GitHub CDN. That fetch reaches the Windows
+        # runner only intermittently, while the posix job gets it reliably. The
+        # OS-stable key above plus enableCrossOsArchive (cldr-json is portable
+        # JSON) let the posix job seed one shared entry the windows job restores,
+        # taking Windows out of the download path. Inlined because versionlib
+        # checks out siblings by hand, not via project_tools' checkout-ada-siblings.
+        if: steps.cldr_key.outputs.key != ''
         uses: actions/cache@v4
         with:
           path: i18n/cldr/upstream/cldr-json
-          key: cldr-json-${{ hashFiles('i18n/cldr/upstream/source_manifest.txt') }}
+          key: ${{ steps.cldr_key.outputs.key }}
           enableCrossOsArchive: true
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
