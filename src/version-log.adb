@@ -395,10 +395,11 @@ package body Version.Log is
    end Append_Indented_Message;
 
    function Format_Commit_Oneline_With_Cache
-     (Repo         : Version.Repository.Repository_Handle;
-      Cache        : in out Version.Object_Cache.Object_Cache;
-      Commit_Id    : Version.Objects.Hex_Object_Id;
-      With_Parents : Boolean := False) return String
+     (Repo          : Version.Repository.Repository_Handle;
+      Cache         : in out Version.Object_Cache.Object_Cache;
+      Commit_Id     : Version.Objects.Hex_Object_Id;
+      With_Parents  : Boolean := False;
+      Children_Text : String := "") return String
    is
       Obj : constant Version.Objects.Git_Object :=
         Version.Object_Cache.Read_Object
@@ -434,6 +435,7 @@ package body Version.Log is
         Full (Full'First .. Full'First + Abbrev - 1)
         & " "
         & (if With_Parents then Parents_Text else "")
+        & Children_Text
         & Version.Objects.Commit_Message_First_Line (Obj);
    end Format_Commit_Oneline_With_Cache;
 
@@ -891,16 +893,55 @@ package body Version.Log is
    end Log_From_Commit;
 
    function Log_Oneline_List_Text
-     (Repo         : Version.Repository.Repository_Handle;
-      Commits      : Version.History.Commit_Id_Vectors.Vector;
-      With_Parents : Boolean := False;
-      Decorate     : Decorate_Mode := No_Decorate) return String
+     (Repo          : Version.Repository.Repository_Handle;
+      Commits       : Version.History.Commit_Id_Vectors.Vector;
+      With_Parents  : Boolean := False;
+      With_Children : Boolean := False;
+      Decorate      : Decorate_Mode := No_Decorate) return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       Decor   : constant Decor_Maps.Map :=
         (if Decorate = No_Decorate then Decor_Maps.Empty_Map
          else Build_Decorations (Repo, Decorate));
+
+      --  git's `--children`: the shown commits that list each commit as a
+      --  parent. git records a child by prepending it as the (newest-first)
+      --  walk reaches it, so iterating Commits in display order and prepending
+      --  reproduces its per-commit order.
+      Kids : Decor_Maps.Map;
+
+      procedure Build_Children_Map is
+         In_Set : Id_Sets.Set;
+      begin
+         for C of Commits loop
+            In_Set.Include (Version.Objects.To_String (C));
+         end loop;
+         for C of Commits loop
+            declare
+               Obj : constant Version.Objects.Git_Object :=
+                 Version.Object_Cache.Read_Object (Repo, Objects, C);
+               C_Hex : constant String := Version.Objects.To_String (C);
+               Ab    : constant Natural :=
+                 Version.Revisions.Unique_Abbrev_Length (Repo, C, 7);
+               Child : constant String := C_Hex (C_Hex'First .. C_Hex'First + Ab - 1);
+            begin
+               for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+                  declare
+                     P_Hex : constant String := Version.Objects.To_String (P);
+                  begin
+                     if In_Set.Contains (P_Hex) then
+                        Kids.Include
+                          (P_Hex,
+                           Child & " "
+                           & (if Kids.Contains (P_Hex) then Kids.Element (P_Hex)
+                              else ""));
+                     end if;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end Build_Children_Map;
 
       --  git puts the "(refs)" between the id (and parents) and the subject;
       --  splice it in after the first space that ends the id/parents run.
@@ -924,14 +965,25 @@ package body Version.Log is
          end;
       end With_Decoration;
    begin
+      if With_Children then
+         Build_Children_Map;
+      end if;
+
       for Current_Id of Commits loop
-         Append_Line
-           (Result,
-            With_Decoration
-              (Format_Commit_Oneline_With_Cache
-                 (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
-                  With_Parents => With_Parents),
-               Version.Objects.To_String (Current_Id)));
+         declare
+            Hex : constant String := Version.Objects.To_String (Current_Id);
+         begin
+            Append_Line
+              (Result,
+               With_Decoration
+                 (Format_Commit_Oneline_With_Cache
+                    (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
+                     With_Parents  => With_Parents,
+                     Children_Text =>
+                       (if With_Children and then Kids.Contains (Hex)
+                        then Kids.Element (Hex) else "")),
+                  Hex));
+         end;
       end loop;
 
       return To_String (Result);
