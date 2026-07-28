@@ -15,6 +15,7 @@ with Version.Diff;
 with Version.Verify;
 with Version.Refs;
 with Version.Ref_Format;
+with Version.Notes;
 with Ada.Containers.Indefinite_Hashed_Maps;
 
 package body Version.Log is
@@ -504,6 +505,28 @@ package body Version.Log is
          "Date:   " & Format_Git_Date (Author_Date (Content), Date_Mode));
       Append_Line (Result, "");
       Append_Indented_Message (Result, Message);
+
+      --  git shows the commit's note (from the default notes ref) after the
+      --  message in its medium/full log and in `show`, blank-separated and
+      --  indented like the message. Only the full-message format carries it.
+      if Full_Message then
+         declare
+            Note : constant String :=
+              Version.Notes.Show (Repo, Commit_Id);
+            Last : Natural := Note'Last;
+         begin
+            while Last >= Note'First
+              and then Note (Last) = Character'Val (10)
+            loop
+               Last := Last - 1;
+            end loop;
+            if Last >= Note'First then
+               Append_Line (Result, "");
+               Append_Line (Result, "Notes:");
+               Append_Indented_Message (Result, Note (Note'First .. Last));
+            end if;
+         end;
+      end if;
 
       return To_String (Result);
    end Format_Commit_With_Cache;

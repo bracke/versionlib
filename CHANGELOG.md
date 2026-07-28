@@ -1,3 +1,4 @@
+- Git parity: `Version.Log.Format_Commit` appends a commit's note (from the default notes ref) after the message in the full-message format, so `log` and `show` display notes as git does by default.
 - Git parity: `Version.Diff.Raw_Diff_Trees` takes `Show_Trees` (git's `-t`) that also emits a line for each changed subdirectory (a `040000` entry whose tree object differs).
 - Git parity: `Version.Diff.Diff_Options` gains an `Abbrev` length that sets how many hex digits the `--raw` object ids carry (default 7).
 - Git parity: `Version.Ref_Cache.Read_Loose_Ref` follows a loose symbolic ref (e.g. `refs/remotes/*/HEAD`) to the commit its target resolves to, so `rev-parse`/resolution of a remote symref no longer fails with "invalid ref object id".
