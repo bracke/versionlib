@@ -25,6 +25,12 @@ package body Version.Show_Branch is
       Hash            => Ada.Strings.Hash,
       Equivalent_Keys => "=");
 
+   package Deg_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type        => String,
+      Element_Type    => Natural,
+      Hash            => Ada.Strings.Hash,
+      Equivalent_Keys => "=");
+
    function Img (V : Natural) return String is
       S : constant String := Natural'Image (V);
    begin
@@ -48,8 +54,8 @@ package body Version.Show_Branch is
    is (Version.Objects.Commit_Message_First_Line
          (Version.Objects.Read_Object (Repo, Id)));
 
-   --  Committer timestamp (seconds); 0 if unparsable.  Used only to order the
-   --  commit matrix newest-first, matching git's date-priority walk.
+   --  Committer timestamp (seconds); 0 if unparsable. Used only to order the
+   --  initial tips of the topological walk newest-first, as git does.
    function Commit_Time
      (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
       return Long_Long_Integer
@@ -195,34 +201,118 @@ package body Version.Show_Branch is
             end loop;
          end;
 
-         --  Order newest-committer-date first (insertion sort; sets are small).
+         --  Order the matrix as git does: it sorts the collected commits in
+         --  topological order (children before parents) with a LIFO stack
+         --  seeded from the tips in argument order -- git's
+         --  sort_in_topological_order in REV_SORT_IN_GRAPH_ORDER, whose
+         --  prio_queue has no comparator and so behaves as a stack. A plain
+         --  newest-date sort disagrees whenever one branch's tip is older than
+         --  a commit reachable only from another branch.
          declare
-            I : Natural := Set.First_Index;
+            Indeg   : Deg_Maps.Map;
+            Stack   : CIV.Vector;
+            Ordered : CIV.Vector;
          begin
-            while I <= Set.Last_Index loop
-               declare
-                  J   : Natural := I;
-                  Max : Natural := I;
-               begin
-                  while J <= Set.Last_Index loop
-                     if Commit_Time (Repo, Set (J))
-                        > Commit_Time (Repo, Set (Max))
-                     then
-                        Max := J;
-                     end if;
-                     J := J + 1;
-                  end loop;
-                  if Max /= I then
-                     declare
-                        Tmp : constant Hex_Object_Id := Set (I);
-                     begin
-                        Set.Replace_Element (I, Set (Max));
-                        Set.Replace_Element (Max, Tmp);
-                     end;
-                  end if;
-               end;
-               I := I + 1;
+            for C of Set loop
+               Indeg.Include (To_String (C), 0);
             end loop;
+            --  Indegree = number of children within the set.
+            for C of Set loop
+               for P of Version.History.Parent_Commits (Repo, C) loop
+                  declare
+                     PH : constant String := To_String (P);
+                  begin
+                     if Indeg.Contains (PH) then
+                        Indeg.Replace (PH, Indeg (PH) + 1);
+                     end if;
+                  end;
+               end loop;
+            end loop;
+            --  Seed the stack with the childless tips. The tip processed
+            --  first (top of the stack, appended last) is the newest by
+            --  committer date, and on a date tie the latest argument -- git
+            --  starts its topological walk from a date-priority queue whose
+            --  ties break toward the later-listed branch (visible when every
+            --  commit shares one date).
+            declare
+               Ready : array (1 .. N) of Natural := [others => 0];
+               Count : Natural := 0;
+            begin
+               for J in 1 .. N loop
+                  declare
+                     TH  : constant String := To_String (Tips (J));
+                     Dup : Boolean := False;
+                  begin
+                     if Indeg.Contains (TH) and then Indeg (TH) = 0 then
+                        for K in 1 .. Count loop
+                           if To_String (Tips (Ready (K))) = TH then
+                              Dup := True;
+                           end if;
+                        end loop;
+                        if not Dup then
+                           Count := Count + 1;
+                           Ready (Count) := J;
+                        end if;
+                     end if;
+                  end;
+               end loop;
+               --  Selection sort so position 1 (pushed first, bottom) is the
+               --  oldest / later-argument tip and the last position (top) is
+               --  the newest / earliest-argument one.
+               for A in 1 .. Count loop
+                  declare
+                     Sel : Natural := A;
+                  begin
+                     for B in A + 1 .. Count loop
+                        declare
+                           TB : constant Long_Long_Integer :=
+                             Commit_Time (Repo, Tips (Ready (B)));
+                           TS : constant Long_Long_Integer :=
+                             Commit_Time (Repo, Tips (Ready (Sel)));
+                        begin
+                           if TB < TS
+                             or else (TB = TS
+                                      and then Ready (B) < Ready (Sel))
+                           then
+                              Sel := B;
+                           end if;
+                        end;
+                     end loop;
+                     if Sel /= A then
+                        declare
+                           Tmp : constant Natural := Ready (A);
+                        begin
+                           Ready (A) := Ready (Sel);
+                           Ready (Sel) := Tmp;
+                        end;
+                     end if;
+                  end;
+               end loop;
+               for A in 1 .. Count loop
+                  Stack.Append (Tips (Ready (A)));
+               end loop;
+            end;
+            while not Stack.Is_Empty loop
+               declare
+                  C : constant Hex_Object_Id := Stack.Last_Element;
+               begin
+                  Stack.Delete_Last;
+                  Ordered.Append (C);
+                  for P of Version.History.Parent_Commits (Repo, C) loop
+                     declare
+                        PH : constant String := To_String (P);
+                     begin
+                        if Indeg.Contains (PH) then
+                           Indeg.Replace (PH, Indeg (PH) - 1);
+                           if Indeg (PH) = 0 then
+                              Stack.Append (P);
+                           end if;
+                        end if;
+                     end;
+                  end loop;
+               end;
+            end loop;
+            Set := Ordered;
          end;
 
          --  Seed names at the tips, then propagate first-parent names in

@@ -3,9 +3,11 @@ with Ada.Directories;
 with AUnit.Assertions;
 with AUnit.Test_Cases;
 
+with Version.Files;
 with Version.Git_Fixtures;
 with Version.Init;
 with Version.Repository;
+with Version.Test_Support;
 
 package body Version.Show_Branch.Tests is
 
@@ -13,6 +15,12 @@ package body Version.Show_Branch.Tests is
    use AUnit.Test_Cases.Registration;
 
    LF : constant Character := ASCII.LF;
+
+   --  Raw bytes -- git's output keeps its trailing newline, which Format also
+   --  emits, so the text reader's newline trimming must not intervene.
+   function File_Text (Root, Name : String) return String is
+     (Version.Files.Read_Binary_File
+        (Version.Test_Support.Join (Root, Name)));
 
    --  main and feature diverge two commits above a shared base; git names the
    --  merge base off the newest tip (feature) regardless of argument order.
@@ -35,32 +43,32 @@ package body Version.Show_Branch.Tests is
          & "git commit -q -m ""$1""; t=$((t+60)); }; "
          & "cm base1; cm base2; git checkout -q -b feature; cm feat3; "
          & "cm feat4; git checkout -q main; cm main3; cm main4");
+
+      --  Capture real git's output on this very fixture as the oracle -- the
+      --  matrix order and the merge-base naming both depend on whether the
+      --  commits share a committer date, so a hand-copied string would only
+      --  match git by luck.
+      Version.Git_Fixtures.Run
+        (Root, "git show-branch main feature > sb.txt");
+      Version.Git_Fixtures.Run
+        (Root, "git show-branch --list main feature > sblist.txt");
       declare
          Repo : constant Version.Repository.Repository_Handle :=
            Version.Repository.Open;
          Branches : Version.Show_Branch.Name_Vectors.Vector;
-         --  main is the newest tip here, so it names the shared base (main~2).
-         Expected : constant String :=
-           "* [main] main4" & LF
-           & " ! [feature] feat4" & LF
-           & "--" & LF
-           & "*  [main] main4" & LF
-           & "*  [main^] main3" & LF
-           & " + [feature] feat4" & LF
-           & " + [feature^] feat3" & LF
-           & "*+ [main~2] base2" & LF;
       begin
          Branches.Append ("main");
          Branches.Append ("feature");
          Assert
-           (Version.Show_Branch.Format (Repo, Branches) = Expected,
+           (Version.Show_Branch.Format (Repo, Branches)
+            = File_Text (Root, "sb.txt"),
             "show-branch matrix must match git" & LF & "got:" & LF
-            & Version.Show_Branch.Format (Repo, Branches));
+            & Version.Show_Branch.Format (Repo, Branches)
+            & "want:" & LF & File_Text (Root, "sb.txt"));
 
-         --  --list is the head list with the current branch starred.
          Assert
            (Version.Show_Branch.Format (Repo, Branches, List_Only => True)
-            = "* [main] main4" & LF & "  [feature] feat4" & LF,
+            = File_Text (Root, "sblist.txt"),
             "show-branch --list must match git");
       end;
       Ada.Directories.Set_Directory (Old_Dir);

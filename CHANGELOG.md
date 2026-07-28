@@ -1,3 +1,4 @@
+- Git parity: `Version.Show_Branch.Format` orders its commit matrix topologically (children before parents) with a LIFO stack seeded from the tips newest-committer-date first — git's `sort_in_topological_order` in graph order — instead of a plain date sort, so the merge base is named off the newest tip (`main~2`) as git does; ties break toward the later-listed branch.
 - Git parity: `Version.Restore.Restore_Working_Tree_For_Tree` updates the working tree to an arbitrary tree (git's `read-tree -u` target) — writing the tree's blobs and deleting the working copy of any tracked path the tree drops.
 - Git parity: `Version.Log.Format_Commit` appends a commit's note (from the default notes ref) after the message in the full-message format, so `log` and `show` display notes as git does by default.
 - Git parity: `Version.Diff.Raw_Diff_Trees` takes `Show_Trees` (git's `-t`) that also emits a line for each changed subdirectory (a `040000` entry whose tree object differs).
