@@ -897,6 +897,7 @@ package body Version.Log is
       Commits       : Version.History.Commit_Id_Vectors.Vector;
       With_Parents  : Boolean := False;
       With_Children : Boolean := False;
+      With_Boundary : Boolean := False;
       Decorate      : Decorate_Mode := No_Decorate) return String
    is
       Result  : Unbounded_String;
@@ -943,6 +944,72 @@ package body Version.Log is
          end loop;
       end Build_Children_Map;
 
+      procedure Append_Boundary is
+         In_Set   : Id_Sets.Set;
+         Seen     : Id_Sets.Set;
+         Boundary : Version.History.Commit_Id_Vectors.Vector;
+      begin
+         for C of Commits loop
+            In_Set.Include (Version.Objects.To_String (C));
+         end loop;
+         --  Excluded parents of the shown commits are the boundary.
+         for C of Commits loop
+            declare
+               Obj : constant Version.Objects.Git_Object :=
+                 Version.Object_Cache.Read_Object (Repo, Objects, C);
+            begin
+               for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+                  declare
+                     P_Hex : constant String := Version.Objects.To_String (P);
+                  begin
+                     if not In_Set.Contains (P_Hex)
+                       and then not Seen.Contains (P_Hex)
+                     then
+                        Seen.Include (P_Hex);
+                        Boundary.Append (P);
+                     end if;
+                  end;
+               end loop;
+            end;
+         end loop;
+         --  git emits them in its priority-queue order: newest date first.
+         declare
+            function Date_Of (Id : Version.Objects.Hex_Object_Id)
+              return Long_Long_Integer
+            is (Commit_Date_Value
+                  (Version.Objects.Content
+                     (Version.Object_Cache.Read_Object (Repo, Objects, Id))));
+         begin
+            for A in Boundary.First_Index .. Boundary.Last_Index loop
+               declare
+                  Max : Natural := A;
+               begin
+                  for B in A + 1 .. Boundary.Last_Index loop
+                     if Date_Of (Boundary (B)) > Date_Of (Boundary (Max)) then
+                        Max := B;
+                     end if;
+                  end loop;
+                  if Max /= A then
+                     declare
+                        Tmp : constant Version.Objects.Hex_Object_Id :=
+                          Boundary (A);
+                     begin
+                        Boundary.Replace_Element (A, Boundary (Max));
+                        Boundary.Replace_Element (Max, Tmp);
+                     end;
+                  end if;
+               end;
+            end loop;
+         end;
+         for B of Boundary loop
+            Append_Line
+              (Result,
+               "- "
+               & Format_Commit_Oneline_With_Cache
+                   (Repo => Repo, Cache => Objects, Commit_Id => B));
+         end loop;
+      end Append_Boundary;
+
       --  git puts the "(refs)" between the id (and parents) and the subject;
       --  splice it in after the first space that ends the id/parents run.
       function With_Decoration (Line, Hex : String) return String is
@@ -985,6 +1052,10 @@ package body Version.Log is
                   Hex));
          end;
       end loop;
+
+      if With_Boundary then
+         Append_Boundary;
+      end if;
 
       return To_String (Result);
    end Log_Oneline_List_Text;

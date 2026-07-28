@@ -36,7 +36,11 @@ package Version.Log is
       Commits       : Version.History.Commit_Id_Vectors.Vector;
       With_Parents  : Boolean := False;
       With_Children : Boolean := False;
+      With_Boundary : Boolean := False;
       Decorate      : Decorate_Mode := No_Decorate) return String;
+   --  With_Boundary adds git's `--boundary`: after the shown commits, the
+   --  excluded commits that are a parent of a shown one (the traversal's
+   --  uninteresting frontier of a range), each prefixed "- ", newest first.
    --  With_Parents adds git's `--parents`: the abbreviated parent ids after
    --  each commit id. With_Children adds git's `--children`: the abbreviated
    --  ids of the shown commits that name this one as a parent, in git's order
