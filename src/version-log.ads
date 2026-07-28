@@ -23,7 +23,11 @@ package Version.Log is
       Raw            : Boolean := False;
       Context        : Natural := 3;
       Oneline        : Boolean := False;
+      First_Parent   : Boolean := False;
       Date_Mode      : String := "") return String;
+   --  First_Parent (git's `--first-parent`) makes a merge commit's diff run
+   --  against its first parent, so its --stat/--name-only/-p is shown rather
+   --  than suppressed the way a merge otherwise is.
    --  Date_Mode is `--date=<mode>` for the "Date:" header (iso/short/raw/...).
    --  Oneline replaces each commit's header with git's oneline form and runs
    --  the file changes straight after it (no separating blank), as

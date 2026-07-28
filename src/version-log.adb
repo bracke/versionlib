@@ -769,6 +769,7 @@ package body Version.Log is
       Raw            : Boolean := False;
       Context        : Natural := 3;
       Oneline        : Boolean := False;
+      First_Parent   : Boolean := False;
       Date_Mode      : String := "") return String
    is
       Result  : Unbounded_String;
@@ -804,13 +805,15 @@ package body Version.Log is
             end if;
             if (Stat or else Patch or else Name_Only or else Name_Status
                 or else Numstat or else Shortstat or else Raw)
-              and then Natural (Version.Objects.Commit_Parent_Ids (Obj).Length)
-                       < 2
+              and then
+                (Natural (Version.Objects.Commit_Parent_Ids (Obj).Length) < 2
+                 or else First_Parent)
             then
                --  git's --stat/-p: a blank line, then the diffstat or the
                --  patch against the first parent (or the empty tree for a
                --  root commit). Merge commits (two or more parents) produce
-               --  no diff by default -- git needs -m/-c/--cc for that.
+               --  no diff by default -- git needs -m/-c/--cc, or --first-parent
+               --  to diff the merge against its first parent.
                declare
                   Parent : constant String :=
                     Version.Objects.Commit_Parent_Id (Obj);
