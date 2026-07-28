@@ -23,8 +23,14 @@ package Version.Format_Patch is
       Emit_Signature : Boolean := True;
       Signature    : String := "2.54.0";
       Context      : Natural := 3;
-      Show_Summary : Boolean := True)
+      Show_Summary : Boolean := True;
+      Message_Id   : String := "";
+      In_Reply_To  : String := "")
       return String;
+   --  Message_Id (git's --thread) is this patch's id without the angle
+   --  brackets, emitted as "Message-ID: <...>" right after the "From <sha>"
+   --  line; In_Reply_To, when set, adds "In-Reply-To:" and "References:"
+   --  headers naming the id this patch threads under.
    --  The mbox text for one commit: a "From <sha> Mon Sep 17 ..." line, From:/
    --  Date: (RFC2822, author date) / Subject: "[<prefix> [vN] n/m]" headers,
    --  the commit body, then the unified diff against the first parent and a

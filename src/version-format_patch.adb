@@ -125,7 +125,9 @@ package body Version.Format_Patch is
       Emit_Signature : Boolean := True;
       Signature    : String := "2.54.0";
       Context      : Natural := 3;
-      Show_Summary : Boolean := True)
+      Show_Summary : Boolean := True;
+      Message_Id   : String := "";
+      In_Reply_To  : String := "")
       return String
    is
       Obj     : constant Version.Objects.Git_Object :=
@@ -249,6 +251,13 @@ package body Version.Format_Patch is
                Append (Result,
                  "From " & To_String (Commit_Id)
                  & " Mon Sep 17 00:00:00 2001" & LF);
+               if Message_Id /= "" then
+                  Append (Result, "Message-ID: <" & Message_Id & ">" & LF);
+               end if;
+               if In_Reply_To /= "" then
+                  Append (Result, "In-Reply-To: <" & In_Reply_To & ">" & LF);
+                  Append (Result, "References: <" & In_Reply_To & ">" & LF);
+               end if;
                Append (Result, "From: " & Name_Email & LF);
                Append (Result, "Date: " & To_String (RFC_Date) & LF);
                Append (Result, "Subject: " & Tag & " " & Subject & LF);
