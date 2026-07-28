@@ -18,8 +18,11 @@ package Version.Show is
       Format       : String := "";
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
-      First_Parent : Boolean := False)
+      First_Parent : Boolean := False;
+      Combined_M   : Boolean := False)
       return String;
+   --  Combined_M is git's -m: a merge is shown once per parent, each header
+   --  carrying "(from <parent>)" and followed by the diff against that parent.
    --  Date_Mode is git's --date=<mode> for the plain %ad/%cd date atoms.
    --  Format_Oneline marks a `--pretty=oneline` format so the header runs
    --  straight into the diff (no separating blank line), as git does.
@@ -37,7 +40,8 @@ package Version.Show is
       Format       : String := "";
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
-      First_Parent : Boolean := False)
+      First_Parent : Boolean := False;
+      Combined_M   : Boolean := False)
       return String;
    --  `git show <object>` for any object type: a commit via Show_Commit, an
    --  annotated tag as its "tag/Tagger/Date" header and message followed by the

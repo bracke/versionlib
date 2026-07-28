@@ -31,7 +31,8 @@ package body Version.Show is
       Format       : String := "";
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
-      First_Parent : Boolean := False)
+      First_Parent : Boolean := False;
+      Combined_M   : Boolean := False)
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -41,6 +42,81 @@ package body Version.Show is
    begin
       if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
          raise Ada.IO_Exceptions.Data_Error with "object is not a commit: " & To_String (Commit_Id);
+      end if;
+
+      --  git's -m shows a merge once per parent: each header carries
+      --  "(from <parent>)" and is followed by the diff against that parent.
+      if Combined_M
+        and then Natural (Version.Objects.Commit_Parent_Ids (Obj).Length) > 1
+      then
+         declare
+            Parents  : constant Version.Objects.Object_Id_Vectors.Vector :=
+              Version.Objects.Commit_Parent_Ids (Obj);
+            Full     : constant String := To_String (Commit_Id);
+            C_Ab     : constant Natural :=
+              Version.Revisions.Unique_Abbrev_Length (Repo, Commit_Id, 7);
+            Subject  : constant String :=
+              Version.Objects.Commit_Message_First_Line (Obj);
+            Out_Text : Unbounded_String;
+            First    : Boolean := True;
+         begin
+            for P of Parents loop
+               declare
+                  P_Hex : constant String := Version.Objects.To_String (P);
+                  P_Ab  : constant Natural :=
+                    Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
+                  --  Oneline abbreviates the parent id; the medium header
+                  --  spells it in full, as git does.
+                  From  : constant String :=
+                    (if Oneline
+                     then "(from "
+                          & P_Hex (P_Hex'First .. P_Hex'First + P_Ab - 1) & ")"
+                     else "(from " & P_Hex & ")");
+               begin
+                  --  git blank-separates the per-parent medium blocks; the
+                  --  oneline ones run straight on.
+                  if not First and then not Oneline then
+                     Append (Out_Text, "" & LF);
+                  end if;
+                  First := False;
+                  if Oneline then
+                     Append
+                       (Out_Text,
+                        Full (Full'First .. Full'First + C_Ab - 1) & " "
+                        & From & " " & Subject & LF);
+                  else
+                     --  Splice "(from P)" onto the commit line of the medium
+                     --  header, then a blank line before the diff.
+                     declare
+                        Hdr : constant String :=
+                          Version.Log.Format_Commit
+                            (Repo, Commit_Id, Full_Message => True);
+                        NL  : constant Natural :=
+                          Ada.Strings.Fixed.Index (Hdr, "" & LF);
+                     begin
+                        if NL = 0 then
+                           Append (Out_Text, Hdr & " " & From & LF);
+                        else
+                           Append
+                             (Out_Text,
+                              Hdr (Hdr'First .. NL - 1) & " " & From
+                              & Hdr (NL .. Hdr'Last) & LF);
+                        end if;
+                     end;
+                  end if;
+                  if not No_Patch then
+                     Append
+                       (Out_Text,
+                        Version.Diff.Diff_Commits
+                          (Repo    => Repo,
+                           Old_Id  => Version.Objects.To_Object_Id (P_Hex),
+                           New_Id  => Commit_Id,
+                           Options => Options));
+                  end if;
+               end;
+            end loop;
+            return To_String (Out_Text);
+         end;
       end if;
 
       if Oneline then
@@ -114,7 +190,8 @@ package body Version.Show is
       Format       : String := "";
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
-      First_Parent : Boolean := False)
+      First_Parent : Boolean := False;
+      Combined_M   : Boolean := False)
       return String
    is
       Raw : constant Version.Objects.Hex_Object_Id :=
@@ -154,7 +231,7 @@ package body Version.Show is
          when Version.Objects.Commit_Object =>
             return Show_Commit
               (Repo, Raw, Options, No_Patch, Oneline, Format, Format_Oneline,
-               Date_Mode, First_Parent);
+               Date_Mode, First_Parent, Combined_M);
 
          when Version.Objects.Tag_Object =>
             declare
