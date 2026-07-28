@@ -14,30 +14,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: versionlib
-      - name: Check out httpclient sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
-      - name: Check out project_tools sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
-      - name: Check out zlib sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
-      - name: Check out cryptolib sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
-      - name: Check out regexp sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
-      - name: Check out i18n sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
-      - name: Check out sshlib sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
-      - name: Check out hostkit sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+        with:
+          root: versionlib
       - name: Set up Alire
         uses: alire-project/setup-alire@v5
         with:
@@ -62,30 +42,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: versionlib
-      - name: Check out httpclient sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
-      - name: Check out project_tools sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
-      - name: Check out zlib sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
-      - name: Check out cryptolib sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
-      - name: Check out regexp sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
-      - name: Check out i18n sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
-      - name: Check out sshlib sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
-      - name: Check out hostkit sibling
-        uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+        with:
+          root: versionlib
       - name: Set up Alire
         uses: alire-project/setup-alire@v5
         with:
