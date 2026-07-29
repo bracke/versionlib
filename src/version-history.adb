@@ -558,6 +558,10 @@ package body Version.History is
                   Append (Text, E.Path);
                   Append (Text, Character'Val (0));
                   Append (Text, Version.Objects.To_String (E.Id));
+                  Append (Text, Character'Val (0));
+                  --  A mode-only change (same blob, +x) is a change git shows,
+                  --  so the entry's mode is part of its signature too.
+                  Append (Text, E.Mode);
                   Append (Text, Character'Val (10));
                end if;
             end loop;

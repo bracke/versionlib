@@ -17,6 +17,7 @@ with Version.Refs;
 with Version.Ref_Format;
 with Version.Notes;
 with Version.Log_Graph;
+with Version.Pathspec;
 with Ada.Containers.Indefinite_Hashed_Maps;
 
 package body Version.Log is
@@ -913,8 +914,60 @@ package body Version.Log is
       First_Parent   : Boolean := False;
       Kind           : Pretty_Kind := Pretty_Medium;
       Show_Notes     : Boolean := True;
+      Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector;
       Date_Mode      : String := "") return String
    is
+      --  Keep only the raw diff-tree records whose path matches the limits.
+      function Filter_Raw (Raw : String) return String is
+         Result : Unbounded_String;
+         Pos    : Natural := Raw'First;
+      begin
+         if Paths.Is_Empty then
+            return Raw;
+         end if;
+         while Pos <= Raw'Last loop
+            declare
+               Stop : Natural := Pos;
+               Tab  : Natural := 0;
+               Keep : Boolean := False;
+            begin
+               while Stop <= Raw'Last
+                 and then Raw (Stop) /= Character'Val (10)
+               loop
+                  if Raw (Stop) = Character'Val (9) and then Tab = 0 then
+                     Tab := Stop;
+                  end if;
+                  Stop := Stop + 1;
+               end loop;
+               --  Everything after the first TAB is one (or, for a rename, two)
+               --  tab-separated path fields; keep the record if any matches.
+               if Tab > 0 then
+                  declare
+                     Field_Start : Natural := Tab + 1;
+                  begin
+                     for I in Tab + 1 .. Stop loop
+                        if I = Stop or else Raw (I) = Character'Val (9) then
+                           if Version.Pathspec.Matches_Any
+                                (Paths, Raw (Field_Start .. I - 1))
+                           then
+                              Keep := True;
+                           end if;
+                           Field_Start := I + 1;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+               if Keep then
+                  Append (Result, Raw (Pos .. Stop - 1));
+                  Append (Result, Character'Val (10));
+               end if;
+               Pos := Stop + 1;
+            end;
+         end loop;
+         return To_String (Result);
+      end Filter_Raw;
+
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       First   : Boolean := True;
@@ -987,14 +1040,23 @@ package body Version.Log is
                   is (Version.Objects.Commit_Tree_Id
                         (Version.Objects.Read_Object (Repo, C)));
 
+                  --  Use the pathspec overload only when a limit is present;
+                  --  the plain overload is the exact unlimited rendering.
                   function Diff_Of (Opts : Version.Diff.Diff_Options)
                      return String
-                  is (if Parent'Length > 0
+                  is (if Paths.Is_Empty then
+                        (if Parent'Length > 0
+                         then Version.Diff.Diff_Commits
+                                (Repo, Version.Objects.To_Object_Id (Parent),
+                                 Current_Id, Opts)
+                         else Version.Diff.Diff_Root_Commit
+                                (Repo, Current_Id, Opts))
+                      elsif Parent'Length > 0
                       then Version.Diff.Diff_Commits
                              (Repo, Version.Objects.To_Object_Id (Parent),
-                              Current_Id, Opts)
+                              Current_Id, Paths, Opts)
                       else Version.Diff.Diff_Root_Commit
-                             (Repo, Current_Id, Opts));
+                             (Repo, Current_Id, Paths, Opts));
                begin
                   --  The full header ends with the message, so a separator
                   --  precedes the file changes; the oneline header runs
@@ -1015,16 +1077,17 @@ package body Version.Log is
                         --  shows them in full.
                         Append
                           (Result,
-                           Abbreviate_Raw_Ids
-                             ((if Parent'Length > 0
-                               then Version.Diff.Raw_Diff_Trees
-                                 (Repo,
-                                  Tree_Of
-                                    (Version.Objects.To_Object_Id (Parent)),
-                                  True, Tree_Of (Current_Id), True)
-                               else Version.Diff.Raw_Diff_Trees
-                                 (Repo, Tree_Of (Current_Id), False,
-                                  Tree_Of (Current_Id), True))));
+                           Filter_Raw
+                             (Abbreviate_Raw_Ids
+                               ((if Parent'Length > 0
+                                 then Version.Diff.Raw_Diff_Trees
+                                   (Repo,
+                                    Tree_Of
+                                      (Version.Objects.To_Object_Id (Parent)),
+                                    True, Tree_Of (Current_Id), True)
+                                 else Version.Diff.Raw_Diff_Trees
+                                   (Repo, Tree_Of (Current_Id), False,
+                                    Tree_Of (Current_Id), True)))));
                      else
                         Append (Result, Diff_Of (Summary_Opts));
                      end if;
@@ -1385,6 +1448,8 @@ package body Version.Log is
       First_Parent   : Boolean := False;
       Kind           : Pretty_Kind := Pretty_Medium;
       Show_Notes     : Boolean := True;
+      Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector;
       Date_Mode      : String := "") return String
    is
       Objects : Version.Object_Cache.Object_Cache;
@@ -1435,6 +1500,7 @@ package body Version.Log is
                   First_Parent   => First_Parent,
                   Kind           => Kind,
                   Show_Notes     => Show_Notes,
+                  Paths          => Paths,
                   Date_Mode      => Date_Mode));
 
             Version.Log_Graph.Update (G, C, Parents);
