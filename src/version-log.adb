@@ -685,7 +685,10 @@ package body Version.Log is
    function Format_Commit
      (Repo         : Version.Repository.Repository_Handle;
       Commit_Id    : Version.Objects.Hex_Object_Id;
-      Full_Message : Boolean := False) return String
+      Full_Message : Boolean := False;
+      Kind         : Pretty_Kind := Pretty_Medium;
+      Show_Notes   : Boolean := True;
+      Date_Mode    : String := "") return String
    is
       Cache : Version.Object_Cache.Object_Cache;
    begin
@@ -694,7 +697,10 @@ package body Version.Log is
           (Repo         => Repo,
            Cache        => Cache,
            Commit_Id    => Commit_Id,
-           Full_Message => Full_Message);
+           Full_Message => Full_Message,
+           Kind         => Kind,
+           Show_Notes   => Show_Notes,
+           Date_Mode    => Date_Mode);
    end Format_Commit;
 
    --  git's default `log` is a full reachability walk over ALL parents in

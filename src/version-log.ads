@@ -16,7 +16,10 @@ package Version.Log is
    function Format_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
-      Full_Message : Boolean := False)
+      Full_Message : Boolean := False;
+      Kind         : Pretty_Kind := Pretty_Medium;
+      Show_Notes   : Boolean := True;
+      Date_Mode    : String := "")
       return String;
 
    function Log_List_Text

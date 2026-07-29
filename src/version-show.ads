@@ -1,4 +1,5 @@
 with Version.Diff;
+with Version.Log;
 with Version.Objects;
 with Version.Repository;
 
@@ -19,7 +20,9 @@ package Version.Show is
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
       First_Parent : Boolean := False;
-      Combined_M   : Boolean := False)
+      Combined_M   : Boolean := False;
+      Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
+      Show_Notes   : Boolean := True)
       return String;
    --  Combined_M is git's -m: a merge is shown once per parent, each header
    --  carrying "(from <parent>)" and followed by the diff against that parent.
@@ -41,7 +44,9 @@ package Version.Show is
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
       First_Parent : Boolean := False;
-      Combined_M   : Boolean := False)
+      Combined_M   : Boolean := False;
+      Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
+      Show_Notes   : Boolean := True)
       return String;
    --  `git show <object>` for any object type: a commit via Show_Commit, an
    --  annotated tag as its "tag/Tagger/Date" header and message followed by the

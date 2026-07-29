@@ -10,6 +10,7 @@ with Version.Ref_Format;
 package body Version.Show is
 
    use Ada.Strings.Unbounded;
+   use type Version.Log.Pretty_Kind;
 
    LF : constant Character := Character'Val (10);
 
@@ -32,7 +33,9 @@ package body Version.Show is
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
       First_Parent : Boolean := False;
-      Combined_M   : Boolean := False)
+      Combined_M   : Boolean := False;
+      Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
+      Show_Notes   : Boolean := True)
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -90,7 +93,9 @@ package body Version.Show is
                      declare
                         Hdr : constant String :=
                           Version.Log.Format_Commit
-                            (Repo, Commit_Id, Full_Message => True);
+                            (Repo, Commit_Id, Full_Message => True,
+                             Kind => Kind, Show_Notes => Show_Notes,
+                             Date_Mode => Date_Mode);
                         NL  : constant Natural :=
                           Ada.Strings.Fixed.Index (Hdr, "" & LF);
                      begin
@@ -140,7 +145,10 @@ package body Version.Show is
       else
          Append
            (Result,
-            Version.Log.Format_Commit (Repo, Commit_Id, Full_Message => True));
+            Version.Log.Format_Commit
+              (Repo, Commit_Id, Full_Message => True,
+               Kind => Kind, Show_Notes => Show_Notes,
+               Date_Mode => Date_Mode));
          --  The blank line here separates the header from the diff that
          --  follows. With -s there is no diff, so git ends at the message.
          if not No_Patch then
@@ -191,7 +199,9 @@ package body Version.Show is
       Format_Oneline : Boolean := False;
       Date_Mode    : String := "";
       First_Parent : Boolean := False;
-      Combined_M   : Boolean := False)
+      Combined_M   : Boolean := False;
+      Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
+      Show_Notes   : Boolean := True)
       return String
    is
       Raw : constant Version.Objects.Hex_Object_Id :=
@@ -231,7 +241,7 @@ package body Version.Show is
          when Version.Objects.Commit_Object =>
             return Show_Commit
               (Repo, Raw, Options, No_Patch, Oneline, Format, Format_Oneline,
-               Date_Mode, First_Parent, Combined_M);
+               Date_Mode, First_Parent, Combined_M, Kind, Show_Notes);
 
          when Version.Objects.Tag_Object =>
             declare
@@ -252,10 +262,23 @@ package body Version.Show is
                Result  : Unbounded_String;
             begin
                Append (Result, "tag " & Name & LF);
-               Append (Result, "Tagger: " & Ident & LF);
-               Append
-                 (Result,
-                  "Date:   " & Version.Ref_Format.Git_Date (Ts) & LF & LF);
+               --  The tagger line mirrors the commit header per format: medium
+               --  shows "Tagger:" then a "Date:" line, fuller aligns to 12 and
+               --  labels the date "TaggerDate:", and short/full/raw show the
+               --  tagger alone.
+               if Kind = Version.Log.Pretty_Fuller then
+                  Append (Result, "Tagger:     " & Ident & LF);
+                  Append
+                    (Result,
+                     "TaggerDate: " & Version.Ref_Format.Git_Date (Ts) & LF);
+               elsif Kind = Version.Log.Pretty_Medium then
+                  Append (Result, "Tagger: " & Ident & LF);
+                  Append
+                    (Result, "Date:   " & Version.Ref_Format.Git_Date (Ts) & LF);
+               else
+                  Append (Result, "Tagger: " & Ident & LF);
+               end if;
+               Append (Result, LF);
                Append (Result, Message);
                if Message'Length = 0
                  or else Message (Message'Last) /= LF
@@ -271,7 +294,7 @@ package body Version.Show is
                      Version.Objects.To_String
                        (Version.Objects.Tag_Target_Id (Obj)),
                      Options, No_Patch, Oneline, Format, Format_Oneline,
-                     Date_Mode));
+                     Date_Mode, First_Parent, Combined_M, Kind, Show_Notes));
                return To_String (Result);
             end;
 
