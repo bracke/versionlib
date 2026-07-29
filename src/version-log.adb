@@ -180,6 +180,41 @@ package body Version.Log is
       return "";
    end Message_Body;
 
+   --  The message's first paragraph, verbatim (kept multi-line, NOT folded the
+   --  way the oneline subject is): git's short/medium/... show the title with
+   --  its own line breaks, ending at the first blank line.
+   function Message_Title (Text : String) return String is
+      Body_Text  : constant String := Message_Body (Text);
+      Line_Start : Natural := Body_Text'First;
+      Last_Kept  : Integer := Body_Text'First - 1;
+   begin
+      while Line_Start <= Body_Text'Last loop
+         declare
+            Line_End : Natural := Line_Start;
+            Blank    : Boolean := True;
+         begin
+            while Line_End <= Body_Text'Last
+              and then Body_Text (Line_End) /= Character'Val (10)
+            loop
+               if Body_Text (Line_End) /= ' '
+                 and then Body_Text (Line_End) /= Character'Val (9)
+               then
+                  Blank := False;
+               end if;
+               Line_End := Line_End + 1;
+            end loop;
+            exit when Blank;
+            Last_Kept := Line_End - 1;
+            Line_Start := Line_End + 1;
+         end;
+      end loop;
+
+      if Last_Kept < Body_Text'First then
+         return "";
+      end if;
+      return Body_Text (Body_Text'First .. Last_Kept);
+   end Message_Title;
+
    function Author_Name_Date (Commit_Text : String) return String is
       Author  : constant String := Line_Value (Commit_Text, "author ");
       Last_GT : Natural := 0;
@@ -223,6 +258,46 @@ package body Version.Log is
 
       return Author (Last_GT + 2 .. Author'Last);
    end Author_Date;
+
+   --  The committer counterparts of the two above, used by the full/fuller
+   --  formats, which show the committer identity (and, for fuller, date).
+   function Committer_Name_Date (Commit_Text : String) return String is
+      Committer : constant String := Line_Value (Commit_Text, "committer ");
+      Last_GT   : Natural := 0;
+   begin
+      if Committer'Length = 0 then
+         return "";
+      end if;
+      for I in reverse Committer'Range loop
+         if Committer (I) = '>' then
+            Last_GT := I;
+            exit;
+         end if;
+      end loop;
+      if Last_GT = 0 or else Last_GT = Committer'Last then
+         return Committer;
+      end if;
+      return Committer (Committer'First .. Last_GT);
+   end Committer_Name_Date;
+
+   function Committer_Date (Commit_Text : String) return String is
+      Committer : constant String := Line_Value (Commit_Text, "committer ");
+      Last_GT   : Natural := 0;
+   begin
+      if Committer'Length = 0 then
+         return "";
+      end if;
+      for I in reverse Committer'Range loop
+         if Committer (I) = '>' then
+            Last_GT := I;
+            exit;
+         end if;
+      end loop;
+      if Last_GT = 0 or else Last_GT + 2 > Committer'Last then
+         return "";
+      end if;
+      return Committer (Last_GT + 2 .. Committer'Last);
+   end Committer_Date;
 
    function Format_Git_Date (Raw : String; Mode : String := "") return String is
       --  Raw is "<epoch-seconds> <±HHMM>" from a commit author line. The
@@ -448,6 +523,8 @@ package body Version.Log is
       Commit_Id      : Version.Objects.Hex_Object_Id;
       Full_Message   : Boolean := False;
       Show_Signature : Boolean := False;
+      Kind           : Pretty_Kind := Pretty_Medium;
+      Show_Notes     : Boolean := True;
       Date_Mode      : String := "") return String
    is
       use type Version.Verify.Verify_Result;
@@ -456,8 +533,14 @@ package body Version.Log is
           (Repo => Repo, Cache => Cache, Id => Commit_Id);
       Content : constant String := Version.Objects.Content (Obj);
       Result  : Unbounded_String;
+      --  Short shows only the folded subject; every other format shows the
+      --  whole message when Full_Message asks for it.
+      Show_Body : constant Boolean :=
+        Full_Message and then Kind /= Pretty_Short;
       Message : constant String :=
-        (if Full_Message
+        (if Kind = Pretty_Short
+         then Message_Title (Content)
+         elsif Show_Body
          then Message_Body (Content)
          else Version.Objects.Commit_Message_First_Line (Obj));
    begin
@@ -467,54 +550,109 @@ package body Version.Log is
       end if;
 
       Append_Line (Result, "commit " & To_String (Commit_Id));
-      --  git prints "Merge: <p1> <p2> ..." (abbreviated parent ids) right
-      --  after the commit line for any commit with two or more parents.
-      declare
-         Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
-           Version.Objects.Commit_Parent_Ids (Obj);
-      begin
-         if Natural (Parents.Length) >= 2 then
-            declare
-               Line : Unbounded_String := To_Unbounded_String ("Merge:");
-            begin
-               for P of Parents loop
-                  declare
-                     Full_P : constant String := Version.Objects.To_String (P);
-                     Abbrev : constant Natural :=
-                       Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
-                  begin
-                     Append
-                       (Line,
-                        " " & Full_P (Full_P'First .. Full_P'First + Abbrev - 1));
-                  end;
-               end loop;
-               Append_Line (Result, To_String (Line));
-            end;
-         end if;
-      end;
-      if Show_Signature then
+
+      if Kind = Pretty_Raw then
+         --  Raw prints the commit object's own headers verbatim (tree, parent
+         --  lines, author/committer with the epoch timestamp), so find the
+         --  blank line that ends the header and copy everything before it.
          declare
-            VR       : Version.Verify.Verify_Result;
-            Out_Text : Unbounded_String;
+            Sep : Natural := 0;
          begin
-            Version.Verify.Verify_Object_Reporting
-              (Repo, Commit_Id, VR, Out_Text);
-            if VR /= Version.Verify.No_Signature then
-               Append (Result, To_String (Out_Text));
+            for I in Content'First .. Content'Last - 1 loop
+               if Content (I) = Character'Val (10)
+                 and then Content (I + 1) = Character'Val (10)
+               then
+                  Sep := I;
+                  exit;
+               end if;
+            end loop;
+            if Sep >= Content'First then
+               Append_Line (Result, Content (Content'First .. Sep - 1));
             end if;
          end;
+      else
+         --  git prints "Merge: <p1> <p2> ..." (abbreviated parent ids) right
+         --  after the commit line for any commit with two or more parents.
+         declare
+            Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+              Version.Objects.Commit_Parent_Ids (Obj);
+         begin
+            if Natural (Parents.Length) >= 2 then
+               declare
+                  Line : Unbounded_String := To_Unbounded_String ("Merge:");
+               begin
+                  for P of Parents loop
+                     declare
+                        Full_P : constant String :=
+                          Version.Objects.To_String (P);
+                        Abbrev : constant Natural :=
+                          Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
+                     begin
+                        Append
+                          (Line,
+                           " "
+                           & Full_P (Full_P'First .. Full_P'First + Abbrev - 1));
+                     end;
+                  end loop;
+                  Append_Line (Result, To_String (Line));
+               end;
+            end if;
+         end;
+         if Show_Signature then
+            declare
+               VR       : Version.Verify.Verify_Result;
+               Out_Text : Unbounded_String;
+            begin
+               Version.Verify.Verify_Object_Reporting
+                 (Repo, Commit_Id, VR, Out_Text);
+               if VR /= Version.Verify.No_Signature then
+                  Append (Result, To_String (Out_Text));
+               end if;
+            end;
+         end if;
+
+         --  The identity/date lines differ per format: short has the author
+         --  only, medium adds the author date, full adds the committer, and
+         --  fuller shows both identities with both dates (colon-aligned to 12).
+         case Kind is
+            when Pretty_Short =>
+               Append_Line (Result, "Author: " & Author_Name_Date (Content));
+            when Pretty_Medium =>
+               Append_Line (Result, "Author: " & Author_Name_Date (Content));
+               Append_Line
+                 (Result,
+                  "Date:   "
+                  & Format_Git_Date (Author_Date (Content), Date_Mode));
+            when Pretty_Full =>
+               Append_Line (Result, "Author: " & Author_Name_Date (Content));
+               Append_Line
+                 (Result, "Commit: " & Committer_Name_Date (Content));
+            when Pretty_Fuller =>
+               Append_Line
+                 (Result, "Author:     " & Author_Name_Date (Content));
+               Append_Line
+                 (Result,
+                  "AuthorDate: "
+                  & Format_Git_Date (Author_Date (Content), Date_Mode));
+               Append_Line
+                 (Result, "Commit:     " & Committer_Name_Date (Content));
+               Append_Line
+                 (Result,
+                  "CommitDate: "
+                  & Format_Git_Date (Committer_Date (Content), Date_Mode));
+            when Pretty_Raw =>
+               null;
+         end case;
       end if;
-      Append_Line (Result, "Author: " & Author_Name_Date (Content));
-      Append_Line
-        (Result,
-         "Date:   " & Format_Git_Date (Author_Date (Content), Date_Mode));
+
       Append_Line (Result, "");
       Append_Indented_Message (Result, Message);
 
       --  git shows the commit's note (from the default notes ref) after the
-      --  message in its medium/full log and in `show`, blank-separated and
-      --  indented like the message. Only the full-message format carries it.
-      if Full_Message then
+      --  message, blank-separated and indented like the message -- but the
+      --  automatic display is suppressed once an explicit --pretty/--format is
+      --  given (Show_Notes carries that), and the raw format never carries it.
+      if Full_Message and then Kind /= Pretty_Raw and then Show_Notes then
          declare
             Note : constant String :=
               Version.Notes.Show (Repo, Commit_Id);
@@ -773,6 +911,8 @@ package body Version.Log is
       Context        : Natural := 3;
       Oneline        : Boolean := False;
       First_Parent   : Boolean := False;
+      Kind           : Pretty_Kind := Pretty_Medium;
+      Show_Notes     : Boolean := True;
       Date_Mode      : String := "") return String
    is
       Result  : Unbounded_String;
@@ -805,6 +945,8 @@ package body Version.Log is
                      Commit_Id      => Current_Id,
                      Full_Message   => True,
                      Show_Signature => Show_Signature,
+                     Kind           => Kind,
+                     Show_Notes     => Show_Notes,
                      Date_Mode      => Date_Mode));
             end if;
             if (Stat or else Patch or else Name_Only or else Name_Status
@@ -1217,6 +1359,8 @@ package body Version.Log is
       Raw            : Boolean := False;
       Context        : Natural := 3;
       First_Parent   : Boolean := False;
+      Kind           : Pretty_Kind := Pretty_Medium;
+      Show_Notes     : Boolean := True;
       Date_Mode      : String := "") return String
    is
       Objects : Version.Object_Cache.Object_Cache;
@@ -1265,6 +1409,8 @@ package body Version.Log is
                   Raw            => Raw,
                   Context        => Context,
                   First_Parent   => First_Parent,
+                  Kind           => Kind,
+                  Show_Notes     => Show_Notes,
                   Date_Mode      => Date_Mode));
 
             Version.Log_Graph.Update (G, C, Parents);

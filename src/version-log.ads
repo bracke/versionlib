@@ -4,6 +4,14 @@ with Version.Repository;
 
 package Version.Log is
 
+   --  git's named `--pretty=`/`--format=` header layouts. Pretty_Oneline is
+   --  rendered by the dedicated oneline path; the others share Log_List_Text.
+   --  Short shows only the subject; Full/Fuller add the committer identity
+   --  (and, for Fuller, both dates); Raw prints the commit object's own
+   --  headers verbatim.
+   type Pretty_Kind is
+     (Pretty_Short, Pretty_Medium, Pretty_Full, Pretty_Fuller, Pretty_Raw);
+
    function Format_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
@@ -24,6 +32,8 @@ package Version.Log is
       Context        : Natural := 3;
       Oneline        : Boolean := False;
       First_Parent   : Boolean := False;
+      Kind           : Pretty_Kind := Pretty_Medium;
+      Show_Notes     : Boolean := True;
       Date_Mode      : String := "") return String;
    --  First_Parent (git's `--first-parent`) makes a merge commit's diff run
    --  against its first parent, so its --stat/--name-only/-p is shown rather
@@ -77,6 +87,8 @@ package Version.Log is
       Raw            : Boolean := False;
       Context        : Natural := 3;
       First_Parent   : Boolean := False;
+      Kind           : Pretty_Kind := Pretty_Medium;
+      Show_Notes     : Boolean := True;
       Date_Mode      : String := "") return String;
    --  git's `log --graph` in the default (multi-line) format: each commit's
    --  full Log_List_Text block with the ASCII commit graph drawn down its left
