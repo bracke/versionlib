@@ -540,25 +540,43 @@ package body Version.Objects is
          if Text (Pos) = Character'Val (10) then
             if Pos < Text'Last and then Text (Pos + 1) = Character'Val (10)
             then
+               --  git's subject is the whole first paragraph, not just the
+               --  first line: successive non-blank lines are folded together
+               --  with a single space until a blank line ends the paragraph
+               --  (git's format_subject / pp_title_line). A line counts as
+               --  blank when it is empty or only whitespace.
                declare
-                  Msg_Start : constant Natural := Pos + 2;
-                  Msg_End   : Natural := Msg_Start;
+                  Subject    : Unbounded_String;
+                  Line_Start : Natural := Pos + 2;
                begin
-                  if Msg_Start > Text'Last then
-                     return "";
-                  end if;
+                  while Line_Start <= Text'Last loop
+                     declare
+                        Line_End : Natural := Line_Start;
+                        Blank    : Boolean := True;
+                     begin
+                        while Line_End <= Text'Last
+                          and then Text (Line_End) /= Character'Val (10)
+                        loop
+                           if Text (Line_End) /= ' '
+                             and then Text (Line_End) /= Character'Val (9)
+                           then
+                              Blank := False;
+                           end if;
+                           Line_End := Line_End + 1;
+                        end loop;
 
-                  while Msg_End <= Text'Last
-                    and then Text (Msg_End) /= Character'Val (10)
-                  loop
-                     Msg_End := Msg_End + 1;
+                        exit when Blank;
+
+                        if Length (Subject) > 0 then
+                           Append (Subject, " ");
+                        end if;
+                        Append (Subject, Text (Line_Start .. Line_End - 1));
+
+                        Line_Start := Line_End + 1;
+                     end;
                   end loop;
 
-                  if Msg_End > Text'Last then
-                     return Text (Msg_Start .. Text'Last);
-                  else
-                     return Text (Msg_Start .. Msg_End - 1);
-                  end if;
+                  return To_String (Subject);
                end;
             end if;
          end if;

@@ -385,7 +385,9 @@ package body Version.Log is
             end loop;
 
             if Stop = Start then
-               Append_Line (Result, "");
+               --  git indents every message line, so a blank line in the body
+               --  becomes the 4-space prefix alone, not an empty line.
+               Append_Line (Result, "    ");
             else
                Append_Line (Result, "    " & Message (Start .. Stop - 1));
             end if;
@@ -801,6 +803,7 @@ package body Version.Log is
                     (Repo           => Repo,
                      Cache          => Objects,
                      Commit_Id      => Current_Id,
+                     Full_Message   => True,
                      Show_Signature => Show_Signature,
                      Date_Mode      => Date_Mode));
             end if;
