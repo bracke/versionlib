@@ -899,11 +899,16 @@ package body Version.Apply is
                           (Entries, To_String (R.Old_Path));
                      end if;
                      declare
+                        --  For a rename the working-tree pass has already moved
+                        --  the source to Rel, so read the content there (unless
+                        --  --cached left the working tree untouched, where the
+                        --  source path still holds it).
                         Content : constant String :=
                           (if R.Has_Body then To_String (R.Content)
-                           elsif R.Is_Rename then
+                           elsif R.Is_Rename and then Options.Cached then
                              Version.Files.Read_Binary_File
-                               (Version.Files.Join (Root, To_String (R.Old_Path)))
+                               (Version.Files.Join
+                                  (Root, To_String (R.Old_Path)))
                            else
                              Version.Files.Read_Binary_File
                                (Version.Files.Join (Root, Rel)));
