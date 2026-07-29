@@ -78,8 +78,14 @@ package body Version.Revisions is
 
       use type Ada.Directories.File_Kind;
    begin
+      Version.Pack_Index_Cache.Load (Repo => Repo, Item => Packs);
+
       --  Collect loose object ids sharing the two-char fanout directory; only
-      --  those can collide with Full on a prefix of length >= 2.
+      --  those can collide with Full on a prefix of length >= 2. Skip a loose
+      --  object that is also packed: Match_Prefix counts it on the pack side,
+      --  so counting it here too would double-count one object (e.g. after
+      --  `git repack` without `-d` leaves the loose copies) and make every
+      --  prefix read as ambiguous -- git dedups such candidates by object id.
       if Ada.Directories.Exists (Sub)
         and then Ada.Directories.Kind (Sub) = Ada.Directories.Directory
       then
@@ -97,6 +103,10 @@ package body Version.Revisions is
                begin
                   if Name'Length = Full'Length - 2
                     and then Is_Hex_Text (Name)
+                    and then not Version.Pack_Index_Cache.Contains
+                                   (Packs,
+                                    Version.Objects.To_Object_Id
+                                      (Fanout & Name))
                   then
                      Loose.Include (Lower (Fanout & Name));
                   end if;
@@ -105,8 +115,6 @@ package body Version.Revisions is
             Ada.Directories.End_Search (S);
          end;
       end if;
-
-      Version.Pack_Index_Cache.Load (Repo => Repo, Item => Packs);
 
       for L in Min .. Full'Length loop
          declare
