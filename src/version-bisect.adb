@@ -511,6 +511,11 @@ package body Version.Bisect is
             Best_Weight : Natural := 0;
             Best_Dist   : Integer := -1;
             Have_Best   : Boolean := False;
+            --  The ideal midpoint ignoring skips: git reports "revisions left"
+            --  from this commit's reach even when a skip forces it to hand out
+            --  a neighbour, so the count reflects the split, not the detour.
+            Ideal_Weight : Natural := 0;
+            Ideal_Dist   : Integer := -1;
          begin
             for C of S loop
                Weight.Insert (To_String (C), Reach (C));
@@ -529,6 +534,18 @@ package body Version.Bisect is
                   Dist : constant Integer :=
                     Integer'Min (W, Result.All_N - W);
                begin
+                  --  The best commit regardless of skips fixes the reported
+                  --  count (same commit, hence same value, when nothing is
+                  --  skipped).
+                  if Dist > Ideal_Dist
+                    or else (Result.All_N = 3
+                             and then Dist = Ideal_Dist
+                             and then W > Ideal_Weight)
+                  then
+                     Ideal_Dist   := Dist;
+                     Ideal_Weight := W;
+                  end if;
+
                   if not Is_Skipped (Hex)
                     and then
                       (Dist > Best_Dist
@@ -551,7 +568,7 @@ package body Version.Bisect is
 
             Result.Kind  := Continue;
             Result.Rev   := Best;
-            Result.Left  := Result.All_N - Best_Weight - 1;
+            Result.Left  := Result.All_N - Ideal_Weight - 1;
             Result.Steps := Estimate_Steps (Result.All_N);
             return Result;
          end;
