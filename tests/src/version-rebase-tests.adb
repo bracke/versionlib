@@ -706,7 +706,9 @@ package body Version.Rebase.Tests is
    begin
       Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
       Ada.Directories.Set_Directory (Root);
-      Write_File (Root, "dirty.txt", "dirty" & Character'Val (10));
+      --  A modified tracked file makes the working tree unclean; git's rebase
+      --  rejects that (an untracked file, by contrast, is tolerated).
+      Write_File (Root, "a.txt", "modified" & Character'Val (10));
 
       begin
          Version.Rebase.Start ("HEAD");

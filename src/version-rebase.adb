@@ -89,9 +89,11 @@ package body Version.Rebase is
    procedure Require_Clean_Working_Tree is
       Result : constant Version.Status.Status_Result := Version.Status.Current_Status;
    begin
+      --  git's rebase requires the index and tracked working tree to match
+      --  HEAD, but tolerates untracked files (they only fail a replay if a
+      --  commit would actually overwrite one).
       if not Result.Changes.Is_Empty
         or else not Result.Staged.Is_Empty
-        or else not Result.Untracked.Is_Empty
         or else not Result.Conflicted.Is_Empty
       then
          raise Ada.IO_Exceptions.Data_Error with
