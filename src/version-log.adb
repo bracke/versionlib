@@ -840,77 +840,6 @@ package body Version.Log is
       return Result;
    end To_Commit_List;
 
-   --  Shorten the two 40-hex ids of each diff-tree raw line (":<m> <m> <id>
-   --  <id> <status>\t<path>") to 7 chars, which is what git log --raw shows.
-   function Abbreviate_Raw_Ids (Raw : String) return String is
-      Result : Unbounded_String;
-      First  : Natural := Raw'First;
-      LF     : constant Character := Character'Val (10);
-   begin
-      while First <= Raw'Last loop
-         declare
-            Last : Natural := First;
-         begin
-            while Last <= Raw'Last and then Raw (Last) /= LF loop
-               Last := Last + 1;
-            end loop;
-
-            declare
-               Line : constant String := Raw (First .. Last - 1);
-            begin
-               if Line'Length > 0 and then Line (Line'First) = ':' then
-                  --  Fields are space-separated up to the tab; abbreviate the
-                  --  3rd and 4th (the ids).
-                  declare
-                     Out_Line : Unbounded_String;
-                     P : Natural := Line'First;
-                     Field : Natural := 0;
-                  begin
-                     while P <= Line'Last loop
-                        declare
-                           E : Natural := P;
-                        begin
-                           while E <= Line'Last
-                             and then Line (E) /= ' '
-                             and then Line (E) /= Character'Val (9)
-                           loop
-                              E := E + 1;
-                           end loop;
-
-                           declare
-                              Tok : constant String := Line (P .. E - 1);
-                           begin
-                              Field := Field + 1;
-                              if (Field = 3 or else Field = 4)
-                                and then Tok'Length >= 7
-                              then
-                                 Append
-                                   (Out_Line,
-                                    Tok (Tok'First .. Tok'First + 6));
-                              else
-                                 Append (Out_Line, Tok);
-                              end if;
-                              if E <= Line'Last then
-                                 Append (Out_Line, Line (E));
-                              end if;
-                           end;
-
-                           P := E + 1;
-                        end;
-                     end loop;
-                     Append (Result, To_String (Out_Line) & LF);
-                  end;
-               elsif Line'Length > 0 then
-                  Append (Result, Line & LF);
-               end if;
-            end;
-
-            First := Last + 1;
-         end;
-      end loop;
-      return To_String (Result);
-   end Abbreviate_Raw_Ids;
-
    function Log_List_Text
      (Repo           : Version.Repository.Repository_Handle;
       Commits        : Version.History.Commit_Id_Vectors.Vector;
@@ -931,56 +860,6 @@ package body Version.Log is
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
       Date_Mode      : String := "") return String
    is
-      --  Keep only the raw diff-tree records whose path matches the limits.
-      function Filter_Raw (Raw : String) return String is
-         Result : Unbounded_String;
-         Pos    : Natural := Raw'First;
-      begin
-         if Paths.Is_Empty then
-            return Raw;
-         end if;
-         while Pos <= Raw'Last loop
-            declare
-               Stop : Natural := Pos;
-               Tab  : Natural := 0;
-               Keep : Boolean := False;
-            begin
-               while Stop <= Raw'Last
-                 and then Raw (Stop) /= Character'Val (10)
-               loop
-                  if Raw (Stop) = Character'Val (9) and then Tab = 0 then
-                     Tab := Stop;
-                  end if;
-                  Stop := Stop + 1;
-               end loop;
-               --  Everything after the first TAB is one (or, for a rename, two)
-               --  tab-separated path fields; keep the record if any matches.
-               if Tab > 0 then
-                  declare
-                     Field_Start : Natural := Tab + 1;
-                  begin
-                     for I in Tab + 1 .. Stop loop
-                        if I = Stop or else Raw (I) = Character'Val (9) then
-                           if Version.Pathspec.Matches_Any
-                                (Paths, Raw (Field_Start .. I - 1))
-                           then
-                              Keep := True;
-                           end if;
-                           Field_Start := I + 1;
-                        end if;
-                     end loop;
-                  end;
-               end if;
-               if Keep then
-                  Append (Result, Raw (Pos .. Stop - 1));
-                  Append (Result, Character'Val (10));
-               end if;
-               Pos := Stop + 1;
-            end;
-         end loop;
-         return To_String (Result);
-      end Filter_Raw;
-
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       First   : Boolean := True;
@@ -1035,23 +914,20 @@ package body Version.Log is
                   --  A summary format (--stat/--name-only/...) and a patch (-p)
                   --  need separate diff passes: Diff_Options suppresses the
                   --  patch body whenever a summary field is set.
+                  --  --raw goes through the porcelain engine (Diff_Options.Raw)
+                  --  so it detects renames by default (git's diff.renames), as
+                  --  `log --raw` does -- the diff-tree plumbing raw does not.
                   Summary_Opts : constant Version.Diff.Diff_Options :=
                     (Stat          => Stat,
                      Name_Only     => Name_Only,
                      Name_Status   => Name_Status,
                      Numstat       => Numstat,
                      Shortstat     => Shortstat,
+                     Raw           => Raw,
                      Context_Lines => Context,
                      others        => <>);
                   Patch_Opts : constant Version.Diff.Diff_Options :=
                     (Context_Lines => Context, others => <>);
-                  --  --raw prints diff-tree's record format, which the
-                  --  unified-diff path does not produce; take it from the
-                  --  tree diff directly.
-                  function Tree_Of (C : Version.Objects.Hex_Object_Id)
-                     return Version.Objects.Hex_Object_Id
-                  is (Version.Objects.Commit_Tree_Id
-                        (Version.Objects.Read_Object (Repo, C)));
 
                   --  Use the pathspec overload only when a limit is present;
                   --  the plain overload is the exact unlimited rendering.
@@ -1084,26 +960,7 @@ package body Version.Log is
                   end if;
 
                   if Has_Summary then
-                     if Raw then
-                        --  git log --raw abbreviates the two object ids to
-                        --  7 hex (its --abbrev default) where diff-tree --raw
-                        --  shows them in full.
-                        Append
-                          (Result,
-                           Filter_Raw
-                             (Abbreviate_Raw_Ids
-                               ((if Parent'Length > 0
-                                 then Version.Diff.Raw_Diff_Trees
-                                   (Repo,
-                                    Tree_Of
-                                      (Version.Objects.To_Object_Id (Parent)),
-                                    True, Tree_Of (Current_Id), True)
-                                 else Version.Diff.Raw_Diff_Trees
-                                   (Repo, Tree_Of (Current_Id), False,
-                                    Tree_Of (Current_Id), True)))));
-                     else
-                        Append (Result, Diff_Of (Summary_Opts));
-                     end if;
+                     Append (Result, Diff_Of (Summary_Opts));
                   end if;
 
                   --  git shows the patch after the summary, blank-separated --
