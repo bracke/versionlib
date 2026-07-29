@@ -24,6 +24,7 @@ with Version.Restore;
 with Version.Revisions;
 with Version.Staging;
 with Version.Status;
+with Version.Trailers;
 with Version.Tree_Cache;
 with Version.Working_Tree;
 with Version.Write;
@@ -89,13 +90,114 @@ package body Version.Cherry_Pick is
       end if;
    end Require_Current_Head;
 
-   procedure Require_Clean_Working_Tree is
-      Result : constant Version.Status.Status_Result := Version.Status.Current_Status;
+   function Parent_For_Cherry_Pick
+     (Repo      : Version.Repository.Repository_Handle;
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Mainline  : Natural)
+      return Version.Objects.Hex_Object_Id;
+   --  Forward declaration: the clean-tree check below needs each commit's
+   --  cherry-pick parent to know which paths the pick would touch.
+
+   --  An auto-committing cherry-pick (git's default) needs a wholly clean tree
+   --  so the pick can commit; with --no-commit git is lenient and only refuses
+   --  when a path the pick would change is also modified in the index or
+   --  working tree (or is untracked and would be overwritten). A dirty file
+   --  the pick leaves alone is then fine.
+   procedure Require_Clean_Working_Tree
+     (Repo      : Version.Repository.Repository_Handle;
+      Revisions : Version.Cherry_Pick_State.Commit_Vectors.Vector;
+      Mainline  : Natural;
+      No_Commit : Boolean)
+   is
+      Result : constant Version.Status.Status_Result :=
+        Version.Status.Current_Status;
+      Affected : Version.Trailers.String_Vectors.Vector;
+
+      function Id_Of
+        (Items : Version.Objects.Tree_Entry_Vectors.Vector; Path : String)
+         return String is
+      begin
+         for E of Items loop
+            if To_String (E.Path) = Path then
+               return Version.Objects.To_String (E.Id);
+            end if;
+         end loop;
+         return "";
+      end Id_Of;
+
+      procedure Note (Path : String) is
+      begin
+         for P of Affected loop
+            if P = Path then
+               return;
+            end if;
+         end loop;
+         Affected.Append (Path);
+      end Note;
+
+      function Touches (Changes : Version.Status.File_Change_Vectors.Vector)
+        return Boolean is
+      begin
+         for FC of Changes loop
+            for P of Affected loop
+               if To_String (FC.Path) = P then
+                  return True;
+               end if;
+            end loop;
+         end loop;
+         return False;
+      end Touches;
    begin
-      if not Result.Changes.Is_Empty
-        or else not Result.Staged.Is_Empty
-        or else not Result.Untracked.Is_Empty
-        or else not Result.Conflicted.Is_Empty
+      if not No_Commit then
+         --  Auto-commit: the whole index and working tree must be clean.
+         if not Result.Changes.Is_Empty
+           or else not Result.Staged.Is_Empty
+           or else not Result.Untracked.Is_Empty
+           or else not Result.Conflicted.Is_Empty
+         then
+            raise Ada.IO_Exceptions.Data_Error with
+              "cherry-pick requires clean working tree";
+         end if;
+         return;
+      end if;
+
+      for I in Revisions.First_Index .. Revisions.Last_Index loop
+         declare
+            Commit : constant Version.Objects.Hex_Object_Id :=
+              Revisions.Element (I);
+            Parent : constant Version.Objects.Hex_Object_Id :=
+              Parent_For_Cherry_Pick (Repo, Commit, Mainline);
+            New_Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+              Version.Objects.Flatten_Tree
+                (Repo,
+                 Version.Objects.Commit_Tree_Id
+                   (Version.Objects.Read_Object (Repo, Commit)));
+            Old_Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+              (if Parent = Zero_Id
+               then Version.Objects.Tree_Entry_Vectors.Empty_Vector
+               else Version.Objects.Flatten_Tree
+                      (Repo,
+                       Version.Objects.Commit_Tree_Id
+                         (Version.Objects.Read_Object (Repo, Parent))));
+         begin
+            for E of New_Items loop
+               if Id_Of (Old_Items, To_String (E.Path))
+                  /= Version.Objects.To_String (E.Id)
+               then
+                  Note (To_String (E.Path));
+               end if;
+            end loop;
+            for E of Old_Items loop
+               if Id_Of (New_Items, To_String (E.Path)) = "" then
+                  Note (To_String (E.Path));
+               end if;
+            end loop;
+         end;
+      end loop;
+
+      if Touches (Result.Changes) or else Touches (Result.Staged)
+        or else Touches (Result.Conflicted)
+        or else Touches (Result.Untracked)
       then
          raise Ada.IO_Exceptions.Data_Error with
            "cherry-pick requires clean working tree";
@@ -763,7 +865,7 @@ package body Version.Cherry_Pick is
       if Version.Merge_State.State_Exists (Repo) then
          raise Ada.IO_Exceptions.Data_Error with "cannot cherry-pick: merge state already exists";
       end if;
-      Require_Clean_Working_Tree;
+      Require_Clean_Working_Tree (Repo, Revisions, Mainline, No_Commit);
 
       if Version.Refs.Is_Detached (Repo) then
          Kind := Version.Cherry_Pick_State.Detached_Head;
