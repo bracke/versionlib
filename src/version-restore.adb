@@ -828,10 +828,16 @@ package body Version.Restore is
    end Write_Index_For_Commit;
 
    procedure Require_Sparse_Materialization_Allowed
-     (Repo : Version.Repository.Repository_Handle; Path : String) is
+     (Repo         : Version.Repository.Repository_Handle;
+      Path         : String;
+      Is_Directory : Boolean := False) is
    begin
+      --  Is_Directory matters under non-cone (gitignore) patterns: a
+      --  directory-only pattern like `deps/` matches the directory "deps" but
+      --  not a file of the same name, so restoring the "deps" tree prefix must
+      --  ask about a directory.
       if Version.Sparse.Enabled (Repo)
-        and then not Version.Sparse.Included (Repo, Path)
+        and then not Version.Sparse.Included (Repo, Path, Is_Directory)
       then
          raise Ada.IO_Exceptions.Data_Error
            with "cannot restore sparse-excluded path: " & Path;
@@ -1011,7 +1017,11 @@ package body Version.Restore is
           (Repo => Repo, Cache => Trees, Tree_Id => Tree_Id);
       Pos        : constant Natural := Find_Tree_Item (Tree_Items, Normalized);
    begin
-      Require_Sparse_Materialization_Allowed (Repo, Normalized);
+      Require_Sparse_Materialization_Allowed
+        (Repo, Normalized,
+         Is_Directory =>
+           Pos = Natural'Last
+           and then Has_Tree_Prefix (Tree_Items, Normalized));
 
       if Pos = Natural'Last then
          if Has_Tree_Prefix (Tree_Items, Normalized) then
@@ -1045,7 +1055,11 @@ package body Version.Restore is
         Version.Path_Safety.Normalize_Relative_Path (Path);
       Pos        : constant Natural := Find_Tree_Item (Tree_Items, Normalized);
    begin
-      Require_Sparse_Materialization_Allowed (Repo, Normalized);
+      Require_Sparse_Materialization_Allowed
+        (Repo, Normalized,
+         Is_Directory =>
+           Pos = Natural'Last
+           and then Has_Tree_Prefix (Tree_Items, Normalized));
 
       if Pos = Natural'Last then
          if Has_Tree_Prefix (Tree_Items, Normalized) then
@@ -1090,7 +1104,11 @@ package body Version.Restore is
       Pos        : constant Natural :=
         Version.Staging.Find_Entry (Entries, Normalized);
    begin
-      Require_Sparse_Materialization_Allowed (Repo, Normalized);
+      Require_Sparse_Materialization_Allowed
+        (Repo, Normalized,
+         Is_Directory =>
+           Pos = Natural'Last
+           and then Has_Index_Prefix (Entries, Normalized));
 
       if Pos = Natural'Last then
          if Has_Index_Prefix (Entries, Normalized) then

@@ -2306,6 +2306,47 @@ package body Version.Ignore is
          end if;
    end Scan_Directory;
 
+   function Rules_From_Text
+     (Root             : String;
+      Text             : String;
+      Case_Insensitive : Boolean := False)
+      return Ignore_Rules
+   is
+      Result  : Ignore_Rules;
+      Start   : Positive := Text'First;
+      Line_No : Natural := 0;
+
+      procedure Emit (Line : String) is
+      begin
+         Line_No := Line_No + 1;
+         Add_Rule
+           (Rules       => Result,
+            Base_Dir    => "",
+            Line        => Line,
+            Source_Path => "",
+            Source_Line => Line_No);
+      end Emit;
+   begin
+      Result.Root_Path := To_Unbounded_String (Root);
+      Result.Case_Insensitive := Case_Insensitive;
+
+      if Text'Length = 0 then
+         return Result;
+      end if;
+
+      for I in Text'Range loop
+         if Text (I) = Character'Val (10) then
+            Emit (Text (Start .. I - 1));
+            Start := I + 1;
+         end if;
+      end loop;
+      if Start <= Text'Last then
+         Emit (Text (Start .. Text'Last));
+      end if;
+
+      return Result;
+   end Rules_From_Text;
+
    function Load (Root : String) return Ignore_Rules is
       Result : Ignore_Rules;
       Git    : constant String := Version.Repository.Resolve_Git_Dir (Root);

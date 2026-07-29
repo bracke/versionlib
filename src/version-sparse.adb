@@ -5,6 +5,7 @@ with Ada.Text_IO;
 
 with Version.Config;
 with Version.Files;
+with Version.Ignore;
 with Version.Path_Safety;
 
 package body Version.Sparse is
@@ -246,13 +247,14 @@ package body Version.Sparse is
          return False;
       end if;
 
+      --  Non-cone patterns are gitignore-anchored, not pathspecs, so an
+      --  include pattern is simply one that is not a `!` negation. (Comments
+      --  and blank lines are already stripped by Pattern_Texts.)
       for I in Items.First_Index .. Items.Last_Index loop
          declare
-            Text   : constant String := Items.Element (I);
-            Parsed : constant Version.Pathspec.Pathspec_Item :=
-              Version.Pathspec.Parse (Text);
+            Text : constant String := Items.Element (I);
          begin
-            if not Version.Pathspec.Is_Excluded (Parsed) then
+            if Text'Length > 0 and then Text (Text'First) /= '!' then
                return True;
             end if;
          end;
@@ -645,11 +647,23 @@ package body Version.Sparse is
            Cone_Included_By_Texts (Pattern_Texts (Repo), Path, Is_Directory);
       end if;
 
-      return
-        Version.Pathspec.Matches_Any
-          (Items        => Patterns (Repo),
-           Path         => Path,
-           Is_Directory => Is_Directory);
+      --  Non-cone patterns are gitignore-anchored (`/*`, `!/docs/`, ...), not
+      --  pathspecs, so match them with the ignore engine: a path is included
+      --  exactly when those patterns "match" it (positive last match, with the
+      --  usual parent-directory cascade and negation rules).
+      declare
+         Texts  : constant String_Vectors.Vector := Pattern_Texts (Repo);
+         Joined : Unbounded_String;
+      begin
+         for I in Texts.First_Index .. Texts.Last_Index loop
+            Append (Joined, Texts.Element (I));
+            Append (Joined, Character'Val (10));
+         end loop;
+         return Version.Ignore.Is_Ignored
+           (Version.Ignore.Rules_From_Text
+              (Version.Repository.Root_Path (Repo), To_String (Joined)),
+            Path, Is_Directory);
+      end;
    end Included;
 
 end Version.Sparse;

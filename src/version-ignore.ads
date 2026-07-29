@@ -23,6 +23,16 @@ package Version.Ignore is
       Is_Directory  : Boolean)
       return Boolean;
 
+   function Rules_From_Text
+     (Root             : String;
+      Text             : String;
+      Case_Insensitive : Boolean := False)
+      return Ignore_Rules;
+   --  Build a rule set from gitignore-style pattern lines (as sparse-checkout's
+   --  non-cone patterns are: `/*`, `!/docs/`, ...) anchored at Root, reading no
+   --  file. `Is_Ignored` against the result answers "does this path match the
+   --  pattern set" -- which for sparse-checkout means "is it included".
+
    type Match_Result is record
       Has_Match   : Boolean := False;
       Is_Ignored  : Boolean := False;

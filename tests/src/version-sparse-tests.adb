@@ -553,7 +553,9 @@ package body Version.Sparse.Tests is
          Repo : constant Version.Repository.Repository_Handle :=
            Prepare_Repo (T);
       begin
-         Items.Append (":(exclude)docs/");
+         --  Non-cone sparse patterns are gitignore-style, so a negation is
+         --  `!docs/`; a set with only negations has no positive include.
+         Items.Append ("!docs/");
 
          begin
             Version.Sparse.Set_From_Strings (Repo, Items);
@@ -586,8 +588,10 @@ package body Version.Sparse.Tests is
          Repo : constant Version.Repository.Repository_Handle :=
            Prepare_Repo (T);
       begin
-         Items.Append ("*.md");
-         Items.Append (":(exclude)docs/");
+         --  gitignore semantics: `/*` includes every top-level entry (and its
+         --  contents), `!/docs/` re-excludes the docs directory.
+         Items.Append ("/*");
+         Items.Append ("!/docs/");
          Version.Sparse.Set_From_Strings (Repo, Items);
          Version.Restore.Restore_Working_Tree (Repo);
 
@@ -927,9 +931,9 @@ package body Version.Sparse.Tests is
          Version.Files.Create_Parent_Directories (Path);
          Version.Test_Support.Write_Text_File
            (Path,
-            ":!docs/"
+            "!docs/"
             & Character'Val (10)
-            & ":(exclude)tests/"
+            & "!tests/"
             & Character'Val (10));
 
          Assert
