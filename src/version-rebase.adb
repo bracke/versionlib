@@ -1275,7 +1275,9 @@ package body Version.Rebase is
          null;
    end Write_Resume_For;
 
-   procedure Start_Interactive (Upstream : String) is
+   procedure Start_Interactive
+     (Upstream : String; Autosquash : Boolean := False)
+   is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
 
@@ -1357,15 +1359,85 @@ package body Version.Rebase is
          --  Write the todo.
          declare
             Todo : Unbounded_String;
-         begin
-            for C of All_Commits loop
+
+            function Subject_Of (C : Version.Objects.Hex_Object_Id)
+              return String
+            is (Version.Objects.Commit_Message_First_Line
+                  (Version.Objects.Read_Object (Repo, C)));
+
+            procedure Emit (Action : String; C : Version.Objects.Hex_Object_Id)
+            is
+               Hex : constant String := To_String (C);
+            begin
                Append
                  (Todo,
-                  "pick " & To_String (C) (To_String (C)'First .. To_String (C)'First + 6) & " "
-                  & Version.Objects.Commit_Message_First_Line
-                      (Version.Objects.Read_Object (Repo, C))
-                  & Character'Val (10));
-            end loop;
+                  Action & " " & Hex (Hex'First .. Hex'First + 6) & " "
+                  & Subject_Of (C) & Character'Val (10));
+            end Emit;
+
+            --  The commit a "fixup! <subj>"/"squash! <subj>" line folds into
+            --  (its named subject), or "" for an ordinary commit.
+            function Fold_Target (Subj : String) return String is
+            begin
+               if Subj'Length >= 7
+                 and then Subj (Subj'First .. Subj'First + 6) = "fixup! "
+               then
+                  return Subj (Subj'First + 7 .. Subj'Last);
+               elsif Subj'Length >= 8
+                 and then Subj (Subj'First .. Subj'First + 7) = "squash! "
+               then
+                  return Subj (Subj'First + 8 .. Subj'Last);
+               else
+                  return "";
+               end if;
+            end Fold_Target;
+
+            function Fold_Action (Subj : String) return String is
+              (if Subj'Length >= 7
+                 and then Subj (Subj'First .. Subj'First + 6) = "fixup! "
+               then "fixup" else "squash");
+         begin
+            if Autosquash and then not All_Commits.Is_Empty then
+               --  git's --autosquash moves each "fixup!/squash! <subj>" commit
+               --  to just after the commit it names and relabels it.
+               declare
+                  Used : array
+                    (All_Commits.First_Index .. All_Commits.Last_Index)
+                    of Boolean := (others => False);
+               begin
+                  for I in All_Commits.First_Index .. All_Commits.Last_Index loop
+                     if not Used (I)
+                       and then Fold_Target (Subject_Of (All_Commits (I))) = ""
+                     then
+                        Emit ("pick", All_Commits (I));
+                        for J in I + 1 .. All_Commits.Last_Index loop
+                           if not Used (J)
+                             and then Fold_Target (Subject_Of (All_Commits (J)))
+                                      = Subject_Of (All_Commits (I))
+                           then
+                              Emit
+                                (Fold_Action (Subject_Of (All_Commits (J))),
+                                 All_Commits (J));
+                              Used (J) := True;
+                           end if;
+                        end loop;
+                     end if;
+                  end loop;
+                  --  A fixup!/squash! whose target was not among the replayed
+                  --  commits keeps its place as an ordinary pick.
+                  for I in All_Commits.First_Index .. All_Commits.Last_Index loop
+                     if not Used (I)
+                       and then Fold_Target (Subject_Of (All_Commits (I))) /= ""
+                     then
+                        Emit ("pick", All_Commits (I));
+                     end if;
+                  end loop;
+               end;
+            else
+               for C of All_Commits loop
+                  Emit ("pick", C);
+               end loop;
+            end if;
             Append (Todo,
                "# pick = keep, drop = remove; reorder lines to reorder."
                & Character'Val (10));

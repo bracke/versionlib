@@ -1,3 +1,4 @@
+- Git parity: `rebase -i --autosquash` (`Version.Rebase.Start_Interactive`'s new `Autosquash` argument) moves each `fixup!`/`squash!` commit to just after the commit it names (by subject) and relabels it, so the existing squash/fixup replay folds them — producing git's tree byte-for-byte.
 - Git parity: `rebase` tolerates untracked files (its clean-working-tree check now looks only at the index and tracked working tree, matching git), so an untracked file present at the start no longer blocks a rebase.
 - Git parity: `rebase --root --onto` (`Version.Rebase.Start_Root`) drops a commit whose change is already on the new base (by patch-id), so replaying a branch whose root is shared with the base no longer conflicts on the already-applied commit.
 - Git parity: `Version.Rebase.Start_Onto (Onto, Upstream)` implements `rebase --onto` — replay `Upstream..HEAD` onto `Onto` rather than onto the upstream itself.

@@ -45,7 +45,8 @@ package Version.Rebase is
    --  branch's commits since Upstream, less any already upstream) onto Onto,
    --  rather than onto Upstream itself as plain Start does.
 
-   procedure Start_Interactive (Upstream : String);
+   procedure Start_Interactive
+     (Upstream : String; Autosquash : Boolean := False);
    --  Interactive rebase onto Upstream: write a "pick <sha> <subject>" todo,
    --  open it in the sequence editor (GIT_SEQUENCE_EDITOR / GIT_EDITOR /
    --  EDITOR), and replay the edited list. Supports pick, drop (removing a
