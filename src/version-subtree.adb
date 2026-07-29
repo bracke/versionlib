@@ -380,7 +380,7 @@ package body Version.Subtree is
                      Id    => E.Id,
                      Mode  => E.Mode,
                      Stage => 0,
-                     Skip_Worktree => False));
+                     Skip_Worktree => False, Assume_Valid => False));
             end loop;
 
             Parents.Append (Head_Id);

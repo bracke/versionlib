@@ -2711,7 +2711,7 @@ package body Version.Merge is
            (Path  => Item.Path,
             Id    => Item.Id,
             Mode  => Item.Mode,
-            Stage => 0, Skip_Worktree => False));
+            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
    end Add_Merged_Path;
 
    procedure Add_Staged_Conflict_Path
@@ -2734,7 +2734,7 @@ package body Version.Merge is
                     (Path  => Item.Path,
                      Id    => Item.Id,
                      Mode  => Item.Mode,
-                     Stage => Stage, Skip_Worktree => False));
+                     Stage => Stage, Skip_Worktree => False, Assume_Valid => False));
                return;
             end if;
          end loop;
@@ -2745,7 +2745,7 @@ package body Version.Merge is
            (Path  => Item.Path,
             Id    => Item.Id,
             Mode  => Item.Mode,
-            Stage => Stage, Skip_Worktree => False));
+            Stage => Stage, Skip_Worktree => False, Assume_Valid => False));
    end Add_Staged_Conflict_Path;
 
    function With_Trailing_Newline (Text : String) return String is

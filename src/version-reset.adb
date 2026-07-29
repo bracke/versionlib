@@ -193,7 +193,7 @@ package body Version.Reset is
                (Path  => E.Path,
                 Id    => E.Id,
                 Mode  => E.Mode,
-                Stage => 0, Skip_Worktree => False));
+                Stage => 0, Skip_Worktree => False, Assume_Valid => False));
          end if;
       end loop;
 

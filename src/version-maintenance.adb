@@ -487,6 +487,56 @@ package body Version.Maintenance is
       return Result;
    end Unreachable_Loose_Objects;
 
+   function Unreachable_Objects
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Object_Id_Vectors.Vector
+   is (Unreachable_Objects
+         (Repo, Version.Reachability.Repository_Roots (Repo)));
+
+   function Unreachable_Objects
+     (Repo  : Version.Repository.Repository_Handle;
+      Roots : Version.Objects.Object_Id_Vectors.Vector)
+      return Version.Objects.Object_Id_Vectors.Vector
+   is
+      Reachable : constant Version.Objects.Object_Id_Vectors.Vector :=
+        Version.Reachability.Reachable_From (Repo, Roots);
+      Loose     : constant Version.Objects.Object_Id_Vectors.Vector :=
+        Version.Reachability.All_Loose_Objects (Repo);
+      Packed    : constant Version.Objects.Object_Id_Vectors.Vector :=
+        Version.Pack.All_Pack_Objects (Repo);
+      Reachable_Set : constant Object_Id_Sets.Set := To_Set (Reachable);
+      Seen          : Object_Id_Sets.Set;
+      Result        : Version.Objects.Object_Id_Vectors.Vector;
+      Shallow       : Version.Shallow_Cache.Shallow_Cache;
+
+      procedure Consider
+        (Candidates : Version.Objects.Object_Id_Vectors.Vector) is
+      begin
+         if Candidates.Is_Empty then
+            return;
+         end if;
+         for I in Candidates.First_Index .. Candidates.Last_Index loop
+            declare
+               Id : constant Version.Objects.Object_Id_Storage :=
+                 Candidates.Element (I);
+            begin
+               if Seen.Contains (Id) then
+                  null;
+               elsif Version.Shallow_Cache.Is_Boundary (Repo, Shallow, Id) then
+                  null;
+               elsif not Reachable_Set.Contains (Id) then
+                  Seen.Insert (Id);
+                  Result.Append (Id);
+               end if;
+            end;
+         end loop;
+      end Consider;
+   begin
+      Consider (Loose);
+      Consider (Packed);
+      return Result;
+   end Unreachable_Objects;
+
    function Prune
      (Repo    : Version.Repository.Repository_Handle;
       Dry_Run : Boolean := True;

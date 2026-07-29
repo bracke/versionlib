@@ -235,7 +235,7 @@ package body Version.Staging is
                                       (Full_Path)),
                                  Id    => Tree_Item.Id,
                                  Mode  => Tree_Item.Mode,
-                                 Stage => 0, Skip_Worktree => False));
+                                 Stage => 0, Skip_Worktree => False, Assume_Valid => False));
                         end;
                      end loop;
                   end if;
@@ -338,6 +338,8 @@ package body Version.Staging is
                        Pos + 42 + RL + Extra_Flags_Length;
                      Name_End    : Stream_Element_Offset;
                      Skip_Worktree : Boolean := False;
+                     Assume_Valid  : constant Boolean :=
+                       (Flags / 16#8000#) mod 2 = 1;
                   begin
                      if Extended and then Pos + 43 + RL > Data'Last then
                         raise Ada.IO_Exceptions.Data_Error with
@@ -391,7 +393,8 @@ package body Version.Staging is
                                         Id    => Id,
                                         Mode  => To_Unbounded_String (Mode_Image (Mode)),
                                         Stage => Stage,
-                                        Skip_Worktree => Skip_Worktree));
+                                        Skip_Worktree => Skip_Worktree,
+                                        Assume_Valid  => Assume_Valid));
                      end;
 
                      Pos := E_Start + 42 + RL + Extra_Flags_Length
@@ -633,8 +636,12 @@ package body Version.Staging is
                     (if Index_Item.Stage > 3 then 3 else Index_Item.Stage);
                   Ext_Bit : constant Natural :=
                     (if Index_Item.Skip_Worktree then 16#4000# else 0);
+                  --  Bit 15 of the base flags word is "assume valid"; unlike
+                  --  skip-worktree it needs no extended-flags word.
+                  Assume_Bit : constant Natural :=
+                    (if Index_Item.Assume_Valid then 16#8000# else 0);
                   Flags : constant Natural :=
-                    Name_Len + Stage * 16#1000# + Ext_Bit;
+                    Name_Len + Stage * 16#1000# + Ext_Bit + Assume_Bit;
                begin
                   Append
                     (Buffer,
@@ -842,7 +849,7 @@ package body Version.Staging is
                        (Path  => Ada.Strings.Unbounded.To_Unbounded_String (Safe_Path),
                         Id    => Tree_Item.Id,
                         Mode  => Tree_Item.Mode,
-                        Stage => 0, Skip_Worktree => False));
+                        Stage => 0, Skip_Worktree => False, Assume_Valid => False));
                end;
             end;
          end loop;

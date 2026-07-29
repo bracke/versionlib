@@ -68,7 +68,7 @@ package body Version.Test_Support is
            (Path  => To_Unbounded_String (Path),
             Id    => Blob,
             Mode  => To_Unbounded_String ("100644"),
-            Stage => 0, Skip_Worktree => False));
+            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
       Version.Staging.Sort_By_Path (Kept);
       Version.Staging.Write (Repo => Repo, Entries => Kept);
    end Stage_Resolved_File;

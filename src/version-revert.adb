@@ -456,7 +456,7 @@ package body Version.Revert is
                     (Path => File_Item.Path,
                      Id   => Blob_Id,
                      Mode => To_Unbounded_String ("100644"),
-                     Stage => 0, Skip_Worktree => False));
+                     Stage => 0, Skip_Worktree => False, Assume_Valid => False));
             end;
          end loop;
       end if;

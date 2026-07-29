@@ -805,7 +805,7 @@ package body Version.Restore is
                     (Path => To_Unbounded_String (Safe_Path),
                      Id   => Tree_Item.Id,
                      Mode => Tree_Item.Mode,
-                     Stage => 0, Skip_Worktree => False));
+                     Stage => 0, Skip_Worktree => False, Assume_Valid => False));
             end;
          end loop;
       end if;
@@ -981,7 +981,7 @@ package body Version.Restore is
                        (Path => To_Unbounded_String (Item_Path),
                         Id   => Item.Id,
                         Mode => Item.Mode,
-                        Stage => 0, Skip_Worktree => False));
+                        Stage => 0, Skip_Worktree => False, Assume_Valid => False));
                   Matched := Matched + 1;
                end if;
             end;
@@ -1154,7 +1154,7 @@ package body Version.Restore is
                  (Path => To_Unbounded_String (Normalized),
                   Id   => Tree_Item.Id,
                   Mode => Tree_Item.Mode,
-                  Stage => 0, Skip_Worktree => False));
+                  Stage => 0, Skip_Worktree => False, Assume_Valid => False));
          end;
       end if;
 
@@ -1198,7 +1198,7 @@ package body Version.Restore is
                  (Path => To_Unbounded_String (Normalized),
                   Id   => Tree_Item.Id,
                   Mode => Tree_Item.Mode,
-                  Stage => 0, Skip_Worktree => False));
+                  Stage => 0, Skip_Worktree => False, Assume_Valid => False));
          end;
       end if;
 

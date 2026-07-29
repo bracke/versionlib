@@ -3944,7 +3944,7 @@ package body Version.Branch is
                      Id    => Blob_Id,
                      Mode  =>
                        Ada.Strings.Unbounded.To_Unbounded_String ("100644"),
-                     Stage => 0, Skip_Worktree => False));
+                     Stage => 0, Skip_Worktree => False, Assume_Valid => False));
             end;
          end loop;
       end if;

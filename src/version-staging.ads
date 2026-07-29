@@ -16,6 +16,10 @@ package Version.Staging is
       --  git's skip-worktree bit (extended flag 0x4000): the path is tracked
       --  but intentionally absent from the working tree (sparse checkout).
       Skip_Worktree : Boolean := False;
+      --  git's assume-valid bit (base flag 0x8000, "assume unchanged"): git
+      --  trusts the working file to match without stat'ing it. Preserved so a
+      --  rewrite for an unrelated reason does not clear a user's setting.
+      Assume_Valid  : Boolean := False;
    end record;
 
    package Index_Entry_Vectors is new Ada.Containers.Vectors

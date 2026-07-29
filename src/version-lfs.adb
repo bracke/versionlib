@@ -3890,7 +3890,7 @@ package body Version.LFS is
                                 (Path  => E.Path,
                                  Id    => New_Id,
                                  Mode  => E.Mode,
-                                 Stage => 0, Skip_Worktree => False));
+                                 Stage => 0, Skip_Worktree => False, Assume_Valid => False));
                         end;
                      end if;
                   end;
@@ -3909,7 +3909,7 @@ package body Version.LFS is
                        (Path  => To_Unbounded_String (".gitattributes"),
                         Id    => Version.Write.Write_Blob (Repo, New_Attr),
                         Mode  => Attr_Mode,
-                        Stage => 0, Skip_Worktree => False));
+                        Stage => 0, Skip_Worktree => False, Assume_Valid => False));
                end if;
             end;
 

@@ -548,7 +548,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("z.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '1']),
             Mode => To_Unbounded_String ("100644"),
-            Stage => 0, Skip_Worktree => False));
+            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
 
       Version.Staging.Replace_Entry
         (Entries,
@@ -556,7 +556,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("a.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '2']),
             Mode => To_Unbounded_String ("100644"),
-            Stage => 0, Skip_Worktree => False));
+            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
 
       Version.Staging.Replace_Entry
         (Entries,
@@ -564,7 +564,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("m.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '3']),
             Mode => To_Unbounded_String ("100644"),
-            Stage => 0, Skip_Worktree => False));
+            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
 
       Version.Staging.Replace_Entry
         (Entries,
@@ -572,7 +572,7 @@ package body Version.Status.Tests is
            (Path => To_Unbounded_String ("a.txt"),
             Id   => Version.Objects.To_Object_Id ([1 .. 40 => '4']),
             Mode => To_Unbounded_String ("100755"),
-            Stage => 0, Skip_Worktree => False));
+            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
 
       Assert (Natural (Entries.Length) = 3, "replace must not duplicate an existing path");
       Assert

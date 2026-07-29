@@ -2066,7 +2066,7 @@ package body Version.Submodules is
             (Path  => To_Unbounded_String (Safe_Path),
              Id    => Version.Objects.To_Object_Id (Head),
              Mode  => To_Unbounded_String ("160000"),
-             Stage => 0, Skip_Worktree => False));
+             Stage => 0, Skip_Worktree => False, Assume_Valid => False));
 
          Version.Staging.Replace_Entry
            (Entries,
@@ -2075,7 +2075,7 @@ package body Version.Submodules is
                Version.Write.Write_Blob
                  (Repo, Version.Files.Read_Binary_File (Modules)),
              Mode  => To_Unbounded_String ("100644"),
-             Stage => 0, Skip_Worktree => False));
+             Stage => 0, Skip_Worktree => False, Assume_Valid => False));
 
          Version.Staging.Sort_By_Path (Entries);
          Version.Staging.Write (Repo, Entries);
@@ -2122,7 +2122,7 @@ package body Version.Submodules is
            (Path => To_Unbounded_String (Safe_Path),
             Id   => Version.Objects.To_Object_Id (Head),
             Mode => To_Unbounded_String ("160000"),
-            Stage => 0, Skip_Worktree => False));
+            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
       Version.Staging.Sort_By_Path (Entries);
       Version.Staging.Write (Repo => Repo, Entries => Entries);
    end Stage_Submodule;
