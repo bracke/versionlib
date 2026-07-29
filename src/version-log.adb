@@ -963,7 +963,13 @@ package body Version.Log is
                declare
                   Parent : constant String :=
                     Version.Objects.Commit_Parent_Id (Obj);
-                  Opts : constant Version.Diff.Diff_Options :=
+                  Has_Summary : constant Boolean :=
+                    Stat or else Name_Only or else Name_Status
+                    or else Numstat or else Shortstat or else Raw;
+                  --  A summary format (--stat/--name-only/...) and a patch (-p)
+                  --  need separate diff passes: Diff_Options suppresses the
+                  --  patch body whenever a summary field is set.
+                  Summary_Opts : constant Version.Diff.Diff_Options :=
                     (Stat          => Stat,
                      Name_Only     => Name_Only,
                      Name_Status   => Name_Status,
@@ -971,6 +977,8 @@ package body Version.Log is
                      Shortstat     => Shortstat,
                      Context_Lines => Context,
                      others        => <>);
+                  Patch_Opts : constant Version.Diff.Diff_Options :=
+                    (Context_Lines => Context, others => <>);
                   --  --raw prints diff-tree's record format, which the
                   --  unified-diff path does not produce; take it from the
                   --  tree diff directly.
@@ -978,42 +986,58 @@ package body Version.Log is
                      return Version.Objects.Hex_Object_Id
                   is (Version.Objects.Commit_Tree_Id
                         (Version.Objects.Read_Object (Repo, C)));
+
+                  function Diff_Of (Opts : Version.Diff.Diff_Options)
+                     return String
+                  is (if Parent'Length > 0
+                      then Version.Diff.Diff_Commits
+                             (Repo, Version.Objects.To_Object_Id (Parent),
+                              Current_Id, Opts)
+                      else Version.Diff.Diff_Root_Commit
+                             (Repo, Current_Id, Opts));
                begin
-                  --  The full header ends with the message, so a blank line
-                  --  separates it from the file changes; the oneline header
-                  --  runs straight into them.
+                  --  The full header ends with the message, so a separator
+                  --  precedes the file changes; the oneline header runs
+                  --  straight into them. git leads a diffstat that is followed
+                  --  by a patch with "---" rather than a blank line.
                   if not Oneline then
-                     Append_Line (Result, "");
+                     if Stat and then Patch then
+                        Append_Line (Result, "---");
+                     else
+                        Append_Line (Result, "");
+                     end if;
                   end if;
-                  if Raw then
-                     declare
-                        Full : constant String :=
-                          (if Parent'Length > 0
-                           then Version.Diff.Raw_Diff_Trees
-                             (Repo,
-                              Tree_Of (Version.Objects.To_Object_Id (Parent)),
-                              True, Tree_Of (Current_Id), True)
-                           else Version.Diff.Raw_Diff_Trees
-                             (Repo, Tree_Of (Current_Id), False,
-                              Tree_Of (Current_Id), True));
-                     begin
+
+                  if Has_Summary then
+                     if Raw then
                         --  git log --raw abbreviates the two object ids to
                         --  7 hex (its --abbrev default) where diff-tree --raw
                         --  shows them in full.
-                        Append (Result, Abbreviate_Raw_Ids (Full));
-                     end;
-                  elsif Parent'Length > 0 then
-                     Append
-                       (Result,
-                        Version.Diff.Diff_Commits
-                          (Repo,
-                           Version.Objects.To_Object_Id (Parent),
-                           Current_Id, Opts));
-                  else
-                     Append
-                       (Result,
-                        Version.Diff.Diff_Root_Commit
-                          (Repo, Current_Id, Opts));
+                        Append
+                          (Result,
+                           Abbreviate_Raw_Ids
+                             ((if Parent'Length > 0
+                               then Version.Diff.Raw_Diff_Trees
+                                 (Repo,
+                                  Tree_Of
+                                    (Version.Objects.To_Object_Id (Parent)),
+                                  True, Tree_Of (Current_Id), True)
+                               else Version.Diff.Raw_Diff_Trees
+                                 (Repo, Tree_Of (Current_Id), False,
+                                  Tree_Of (Current_Id), True))));
+                     else
+                        Append (Result, Diff_Of (Summary_Opts));
+                     end if;
+                  end if;
+
+                  --  git shows the patch after the summary, blank-separated --
+                  --  but the name-only/name-status formats replace the patch
+                  --  entirely, so -p adds nothing there.
+                  if Patch and then not (Name_Only or else Name_Status) then
+                     if Has_Summary then
+                        Append_Line (Result, "");
+                     end if;
+                     Append (Result, Diff_Of (Patch_Opts));
                   end if;
                end;
             end if;
