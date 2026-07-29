@@ -10,8 +10,14 @@ package Version.Diff is
    --  default is on); the other two force the choice, as `-M`/`--no-renames`.
    type Rename_Detection is (Renames_Default, Renames_On, Renames_Off);
 
+   --  git's --word-diff: WD_Plain marks changed words inline ([-old-]{+new+}),
+   --  WD_Porcelain emits one line per word (space/-/+ prefixed) with `~` for a
+   --  newline.
+   type Word_Diff_Kind is (WD_None, WD_Plain, WD_Porcelain);
+
    type Diff_Options is record
       Context_Lines  : Natural := 3;
+      Word_Diff      : Word_Diff_Kind := WD_None;
       Stat           : Boolean := False;
       Summary        : Boolean := False;
       Name_Only      : Boolean := False;

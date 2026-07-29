@@ -263,6 +263,137 @@ package body Version.Diff is
       return Ops;
    end Diff_Ops;
 
+   --  git's --word-diff body for one hunk: diff the pre-image against the
+   --  post-image at word granularity and render the result. Old_Text/New_Text
+   --  are the hunk's context+deleted and context+inserted lines (each ending
+   --  in LF). A "word" is a maximal non-whitespace run; runs of whitespace and
+   --  each newline are their own tokens so they diff and render like git's.
+   function Word_Diff_Body
+     (Old_Text, New_Text : String; Mode : Word_Diff_Kind) return String
+   is
+      LF     : constant Character := Character'Val (10);
+      NL_Tok : constant String := Character'Val (1) & Character'Val (1);
+
+      function Is_Space (C : Character) return Boolean is
+        (C = ' ' or else C = Character'Val (9) or else C = Character'Val (13));
+
+      function Tokenize (Text : String) return Line_Vectors.Vector is
+         Result : Line_Vectors.Vector;
+         I      : Positive := Text'First;
+      begin
+         while I <= Text'Last loop
+            if Text (I) = LF then
+               Result.Append (To_Unbounded_String (NL_Tok));
+               I := I + 1;
+            elsif Is_Space (Text (I)) then
+               declare
+                  J : Positive := I;
+               begin
+                  while J <= Text'Last and then Text (J) /= LF
+                    and then Is_Space (Text (J))
+                  loop
+                     J := J + 1;
+                  end loop;
+                  Result.Append (To_Unbounded_String (Text (I .. J - 1)));
+                  I := J;
+               end;
+            else
+               declare
+                  J : Positive := I;
+               begin
+                  while J <= Text'Last and then Text (J) /= LF
+                    and then not Is_Space (Text (J))
+                  loop
+                     J := J + 1;
+                  end loop;
+                  Result.Append (To_Unbounded_String (Text (I .. J - 1)));
+                  I := J;
+               end;
+            end if;
+         end loop;
+         return Result;
+      end Tokenize;
+
+      Ops    : constant Op_Vectors.Vector :=
+        Diff_Ops (Tokenize (Old_Text), Tokenize (New_Text));
+      Result : Unbounded_String;
+   begin
+      if Mode = WD_Porcelain then
+         declare
+            Ctx : Unbounded_String;   --  pending context words/spaces
+            procedure Flush_Ctx is
+            begin
+               if Length (Ctx) > 0 then
+                  Append (Result, " " & To_String (Ctx) & LF);
+                  Ctx := Null_Unbounded_String;
+               end if;
+            end Flush_Ctx;
+         begin
+            for Op of Ops loop
+               declare
+                  T : constant String := To_String (Op.Text);
+               begin
+                  if T = NL_Tok then
+                     Flush_Ctx;
+                     Append (Result, "~" & LF);
+                  elsif Op.Kind = Op_Context then
+                     Append (Ctx, T);
+                  elsif Op.Kind = Op_Delete then
+                     Flush_Ctx;
+                     Append (Result, "-" & T & LF);
+                  else
+                     Flush_Ctx;
+                     Append (Result, "+" & T & LF);
+                  end if;
+               end;
+            end loop;
+            Flush_Ctx;
+         end;
+      else
+         --  Plain: reconstruct each line, marking [-deleted-]{+inserted+}.
+         declare
+            Line : Unbounded_String;
+            Pend_Del, Pend_Ins : Unbounded_String;
+            procedure Flush_Changes is
+            begin
+               if Length (Pend_Del) > 0 then
+                  Append (Line, "[-" & To_String (Pend_Del) & "-]");
+                  Pend_Del := Null_Unbounded_String;
+               end if;
+               if Length (Pend_Ins) > 0 then
+                  Append (Line, "{+" & To_String (Pend_Ins) & "+}");
+                  Pend_Ins := Null_Unbounded_String;
+               end if;
+            end Flush_Changes;
+         begin
+            for Op of Ops loop
+               declare
+                  T : constant String := To_String (Op.Text);
+               begin
+                  if T = NL_Tok then
+                     Flush_Changes;
+                     Append (Result, To_String (Line) & LF);
+                     Line := Null_Unbounded_String;
+                  elsif Op.Kind = Op_Context then
+                     Flush_Changes;
+                     Append (Line, T);
+                  elsif Op.Kind = Op_Delete then
+                     Append (Pend_Del, T);
+                  else
+                     Append (Pend_Ins, T);
+                  end if;
+               end;
+            end loop;
+            Flush_Changes;
+            if Length (Line) > 0 then
+               Append (Result, To_String (Line) & LF);
+            end if;
+         end;
+      end if;
+
+      return To_String (Result);
+   end Word_Diff_Body;
+
    --  git renders a submodule (gitlink) as the one-line text
    --  `Subproject commit <sha>` rather than reading an object -- the commit it
    --  names lives in the submodule, not in this repository.
@@ -302,7 +433,8 @@ package body Version.Diff is
       Old_Path     : String := "";
       Rename_Score : Natural := 0;
       Src_Prefix   : String := "a/";
-      Dst_Prefix   : String := "b/") return String
+      Dst_Prefix   : String := "b/";
+      Word_Diff    : Word_Diff_Kind := WD_None) return String
    is
       --  git names the a/ side after the path the content came from.
       Head_A : constant String :=
@@ -439,37 +571,66 @@ package body Version.Diff is
                         & (if Head'Length > 0 then " " & Head else ""));
                   end;
 
-                  for I in H_Start .. H_End loop
+                  if Word_Diff /= WD_None then
                      declare
-                        Op   : constant Diff_Op := Ops.Element (I);
-                        Lead : constant Character :=
-                          (case Op.Kind is
-                              when Op_Context => ' ',
-                              when Op_Delete  => '-',
-                              when Op_Insert  => '+');
+                        WLF     : constant Character := Character'Val (10);
+                        Old_Buf : Unbounded_String;
+                        New_Buf : Unbounded_String;
                      begin
-                        Append_Line (Result, Lead & To_String (Op.Text));
-                        if Op.Kind = Op_Delete
-                          and then not Old_NL
-                          and then Old_At (I + 1) = Old_Count
-                          and then Old_Count > 0
-                        then
-                           Append_Line (Result, No_NL);
-                        elsif Op.Kind = Op_Insert
-                          and then not New_NL
-                          and then New_At (I + 1) = New_Count
-                          and then New_Count > 0
-                        then
-                           Append_Line (Result, No_NL);
-                        elsif Op.Kind = Op_Context and then I = Num - 1 then
-                           if not New_NL and then New_Count > 0 then
-                              Append_Line (Result, No_NL);
-                           elsif not Old_NL and then Old_Count > 0 then
-                              Append_Line (Result, No_NL);
-                           end if;
-                        end if;
+                        for I in H_Start .. H_End loop
+                           declare
+                              Op : constant Diff_Op := Ops.Element (I);
+                              T  : constant String := To_String (Op.Text) & WLF;
+                           begin
+                              if Op.Kind = Op_Context then
+                                 Append (Old_Buf, T);
+                                 Append (New_Buf, T);
+                              elsif Op.Kind = Op_Delete then
+                                 Append (Old_Buf, T);
+                              else
+                                 Append (New_Buf, T);
+                              end if;
+                           end;
+                        end loop;
+                        Append
+                          (Result,
+                           Word_Diff_Body
+                             (To_String (Old_Buf), To_String (New_Buf),
+                              Word_Diff));
                      end;
-                  end loop;
+                  else
+                     for I in H_Start .. H_End loop
+                        declare
+                           Op   : constant Diff_Op := Ops.Element (I);
+                           Lead : constant Character :=
+                             (case Op.Kind is
+                                 when Op_Context => ' ',
+                                 when Op_Delete  => '-',
+                                 when Op_Insert  => '+');
+                        begin
+                           Append_Line (Result, Lead & To_String (Op.Text));
+                           if Op.Kind = Op_Delete
+                             and then not Old_NL
+                             and then Old_At (I + 1) = Old_Count
+                             and then Old_Count > 0
+                           then
+                              Append_Line (Result, No_NL);
+                           elsif Op.Kind = Op_Insert
+                             and then not New_NL
+                             and then New_At (I + 1) = New_Count
+                             and then New_Count > 0
+                           then
+                              Append_Line (Result, No_NL);
+                           elsif Op.Kind = Op_Context and then I = Num - 1 then
+                              if not New_NL and then New_Count > 0 then
+                                 Append_Line (Result, No_NL);
+                              elsif not Old_NL and then Old_Count > 0 then
+                                 Append_Line (Result, No_NL);
+                              end if;
+                           end if;
+                        end;
+                     end loop;
+                  end if;
 
                   K := H_End + 1;
                end;
@@ -574,7 +735,8 @@ package body Version.Diff is
       Binary_Patch : Boolean := False;
       As_Text      : Boolean := False;
       Src_Prefix   : String := "a/";
-      Dst_Prefix   : String := "b/") return String
+      Dst_Prefix   : String := "b/";
+      Word_Diff    : Word_Diff_Kind := WD_None) return String
    is
       Head_A : constant String :=
         (if Old_Path'Length > 0 then Old_Path else Path);
@@ -712,7 +874,8 @@ package body Version.Diff is
               Old_Path     => Old_Path,
               Rename_Score => Rename_Score,
               Src_Prefix   => Src_Prefix,
-              Dst_Prefix   => Dst_Prefix);
+              Dst_Prefix   => Dst_Prefix,
+              Word_Diff    => Word_Diff);
       end;
    end One_File_Diff;
 
@@ -1679,7 +1842,8 @@ package body Version.Diff is
       Binary_Patch   : Boolean := False;
       Text           : Boolean := False;
       Src_Prefix     : String := "a/";
-      Dst_Prefix     : String := "b/") return String
+      Dst_Prefix     : String := "b/";
+      Word_Diff      : Word_Diff_Kind := WD_None) return String
    is
       HT       : constant Character := Character'Val (9);
       NL       : constant Character := Character'Val (10);
@@ -2015,7 +2179,8 @@ package body Version.Diff is
                         Binary_Patch => Binary_Patch,
                         As_Text      => Text,
                         Src_Prefix   => Src_Prefix,
-                        Dst_Prefix   => Dst_Prefix));
+                        Dst_Prefix   => Dst_Prefix,
+                        Word_Diff    => Word_Diff));
                end if;
             end;
 
@@ -2072,7 +2237,8 @@ package body Version.Diff is
                  Binary_Patch   => Options.Binary_Patch,
                  Text            => Options.Diff_Text,
                  Src_Prefix      => To_String (Options.Src_Prefix),
-                 Dst_Prefix      => To_String (Options.Dst_Prefix));
+                 Dst_Prefix      => To_String (Options.Dst_Prefix),
+                 Word_Diff       => Options.Word_Diff);
          end;
       end;
    end Diff_Working_Tree;
@@ -2123,7 +2289,8 @@ package body Version.Diff is
                  Binary_Patch   => Options.Binary_Patch,
                  Text            => Options.Diff_Text,
                  Src_Prefix      => To_String (Options.Src_Prefix),
-                 Dst_Prefix      => To_String (Options.Dst_Prefix));
+                 Dst_Prefix      => To_String (Options.Dst_Prefix),
+                 Word_Diff       => Options.Word_Diff);
          end;
       end;
    end Diff_Working_Tree;
@@ -2166,7 +2333,8 @@ package body Version.Diff is
               Binary_Patch   => Options.Binary_Patch,
               Text            => Options.Diff_Text,
               Src_Prefix      => To_String (Options.Src_Prefix),
-              Dst_Prefix      => To_String (Options.Dst_Prefix));
+              Dst_Prefix      => To_String (Options.Dst_Prefix),
+              Word_Diff       => Options.Word_Diff);
       end;
    end Diff_Staged;
 
@@ -2213,7 +2381,8 @@ package body Version.Diff is
               Binary_Patch   => Options.Binary_Patch,
               Text            => Options.Diff_Text,
               Src_Prefix      => To_String (Options.Src_Prefix),
-              Dst_Prefix      => To_String (Options.Dst_Prefix));
+              Dst_Prefix      => To_String (Options.Dst_Prefix),
+              Word_Diff       => Options.Word_Diff);
       end;
    end Diff_Staged;
 
@@ -2271,7 +2440,8 @@ package body Version.Diff is
            Binary_Patch   => Options.Binary_Patch,
            Text            => Options.Diff_Text,
            Src_Prefix      => To_String (Options.Src_Prefix),
-           Dst_Prefix      => To_String (Options.Dst_Prefix));
+           Dst_Prefix      => To_String (Options.Dst_Prefix),
+           Word_Diff       => Options.Word_Diff);
    end Diff_Tree_Vs_Working;
 
    function Diff_Tree_Vs_Index
@@ -2307,7 +2477,8 @@ package body Version.Diff is
            Binary_Patch   => Options.Binary_Patch,
            Text            => Options.Diff_Text,
            Src_Prefix      => To_String (Options.Src_Prefix),
-           Dst_Prefix      => To_String (Options.Dst_Prefix));
+           Dst_Prefix      => To_String (Options.Dst_Prefix),
+           Word_Diff       => Options.Word_Diff);
    end Diff_Tree_Vs_Index;
 
    function Diff_Trees
@@ -2347,7 +2518,8 @@ package body Version.Diff is
            Binary_Patch   => Options.Binary_Patch,
            Text            => Options.Diff_Text,
            Src_Prefix      => To_String (Options.Src_Prefix),
-           Dst_Prefix      => To_String (Options.Dst_Prefix));
+           Dst_Prefix      => To_String (Options.Dst_Prefix),
+           Word_Diff       => Options.Word_Diff);
    end Diff_Trees;
 
    function Diff_Commits
@@ -2395,7 +2567,8 @@ package body Version.Diff is
               Binary_Patch   => Options.Binary_Patch,
               Text            => Options.Diff_Text,
               Src_Prefix      => To_String (Options.Src_Prefix),
-              Dst_Prefix      => To_String (Options.Dst_Prefix));
+              Dst_Prefix      => To_String (Options.Dst_Prefix),
+              Word_Diff       => Options.Word_Diff);
       end;
    end Diff_Commits;
 
@@ -2453,7 +2626,8 @@ package body Version.Diff is
               Binary_Patch   => Options.Binary_Patch,
               Text            => Options.Diff_Text,
               Src_Prefix      => To_String (Options.Src_Prefix),
-              Dst_Prefix      => To_String (Options.Dst_Prefix));
+              Dst_Prefix      => To_String (Options.Dst_Prefix),
+              Word_Diff       => Options.Word_Diff);
       end;
    end Diff_Commits;
 
@@ -2496,7 +2670,8 @@ package body Version.Diff is
               Binary_Patch   => Options.Binary_Patch,
               Text            => Options.Diff_Text,
               Src_Prefix      => To_String (Options.Src_Prefix),
-              Dst_Prefix      => To_String (Options.Dst_Prefix));
+              Dst_Prefix      => To_String (Options.Dst_Prefix),
+              Word_Diff       => Options.Word_Diff);
       end;
    end Diff_Root_Commit;
 
@@ -2546,7 +2721,8 @@ package body Version.Diff is
               Binary_Patch   => Options.Binary_Patch,
               Text            => Options.Diff_Text,
               Src_Prefix      => To_String (Options.Src_Prefix),
-              Dst_Prefix      => To_String (Options.Dst_Prefix));
+              Dst_Prefix      => To_String (Options.Dst_Prefix),
+              Word_Diff       => Options.Word_Diff);
       end;
    end Diff_Root_Commit;
 
