@@ -52,6 +52,18 @@ package Version.Log is
    --  (Short_Decorate: "main"/"tag: v2"; Full_Decorate: the full refnames),
    --  with the current branch shown as "HEAD -> <branch>".
 
+   function Log_Graph_Oneline_List_Text
+     (Repo          : Version.Repository.Repository_Handle;
+      Commits       : Version.History.Commit_Id_Vectors.Vector;
+      With_Parents  : Boolean := False;
+      With_Children : Boolean := False;
+      Decorate      : Decorate_Mode := No_Decorate) return String;
+   --  git's `log --graph --oneline`: the oneline listing of Commits with an
+   --  ASCII commit-graph drawn to its left (Version.Log_Graph). Each commit
+   --  keeps its Log_Oneline_List_Text content; the graph prefix and connector
+   --  lines (`|\`, `|/`) are interleaved around it. A parent counts as an edge
+   --  only when it is itself in Commits (git's "interesting parent").
+
    function Log_Formatted_List_Text
      (Repo    : Version.Repository.Repository_Handle;
       Commits : Version.History.Commit_Id_Vectors.Vector;

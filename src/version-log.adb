@@ -16,6 +16,7 @@ with Version.Verify;
 with Version.Refs;
 with Version.Ref_Format;
 with Version.Notes;
+with Version.Log_Graph;
 with Ada.Containers.Indefinite_Hashed_Maps;
 
 package body Version.Log is
@@ -1122,6 +1123,83 @@ package body Version.Log is
         Log_Oneline_From_Commit
           (Repo, Version.Objects.To_Object_Id (Current), Max_Count);
    end Log_Oneline_Head;
+
+   function Log_Graph_Oneline_List_Text
+     (Repo          : Version.Repository.Repository_Handle;
+      Commits       : Version.History.Commit_Id_Vectors.Vector;
+      With_Parents  : Boolean := False;
+      With_Children : Boolean := False;
+      Decorate      : Decorate_Mode := No_Decorate) return String
+   is
+      --  Render each commit's oneline content once through the shared path, so
+      --  ids/subjects/decorations match `--oneline` exactly, then draw the
+      --  graph around it. Boundary output is a distinct graph feature ('o'
+      --  nodes) and is not requested here.
+      Content : constant String :=
+        Log_Oneline_List_Text
+          (Repo, Commits,
+           With_Parents  => With_Parents,
+           With_Children => With_Children,
+           With_Boundary => False,
+           Decorate      => Decorate);
+
+      Objects : Version.Object_Cache.Object_Cache;
+      In_Set  : Id_Sets.Set;
+      G       : Version.Log_Graph.Graph;
+      Result  : Unbounded_String;
+
+      --  Cursor that hands back Content one newline-terminated line at a time,
+      --  in step with the walk (one line per commit).
+      Cursor  : Natural := Content'First;
+
+      function Next_Content_Line return String is
+         Start : constant Natural := Cursor;
+         Stop  : Natural := Cursor;
+      begin
+         while Stop <= Content'Last and then Content (Stop) /= ASCII.LF loop
+            Stop := Stop + 1;
+         end loop;
+         Cursor := Stop + 1;
+         return Content (Start .. Stop - 1);
+      end Next_Content_Line;
+   begin
+      for C of Commits loop
+         In_Set.Include (Version.Objects.To_String (C));
+      end loop;
+
+      Version.Log_Graph.Init (G);
+
+      for C of Commits loop
+         declare
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object (Repo, Objects, C);
+            Parents : Version.Objects.Object_Id_Vectors.Vector;
+            Step    : Version.Log_Graph.Step;
+         begin
+            for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+               if In_Set.Contains (Version.Objects.To_String (P)) then
+                  Parents.Append (P);
+               end if;
+            end loop;
+
+            Step := Version.Log_Graph.Advance (G, C, Parents);
+
+            for L of Step.Pre_Lines loop
+               Append (Result, L & ASCII.LF);
+            end loop;
+
+            Append
+              (Result,
+               To_String (Step.Commit_Prefix) & Next_Content_Line & ASCII.LF);
+
+            for L of Version.Log_Graph.Remainder (G) loop
+               Append (Result, L & ASCII.LF);
+            end loop;
+         end;
+      end loop;
+
+      return To_String (Result);
+   end Log_Graph_Oneline_List_Text;
 
    function Log_Formatted_List_Text
      (Repo    : Version.Repository.Repository_Handle;
