@@ -83,6 +83,31 @@ package Version.Log is
    --  lines (`|\`, `|/`) are interleaved around it. A parent counts as an edge
    --  only when it is itself in Commits (git's "interesting parent").
 
+   function Log_Follow_Text
+     (Repo           : Version.Repository.Repository_Handle;
+      Start          : Version.Objects.Hex_Object_Id;
+      Path           : String;
+      Show_Signature : Boolean := False;
+      Stat           : Boolean := False;
+      Patch          : Boolean := False;
+      Name_Only      : Boolean := False;
+      Name_Status    : Boolean := False;
+      Numstat        : Boolean := False;
+      Shortstat      : Boolean := False;
+      Raw            : Boolean := False;
+      Context        : Natural := 3;
+      Oneline        : Boolean := False;
+      Kind           : Pretty_Kind := Pretty_Medium;
+      Show_Notes     : Boolean := True;
+      Max_Count      : Natural := 0;
+      Date_Mode      : String := "") return String;
+   --  git's `log --follow <path>`: walk first-parent history from Start
+   --  showing the commits that changed the single file Path, following it back
+   --  across renames (rename-detected diff against each first parent; at a
+   --  rename the tracked name switches to the old name). Each shown commit's
+   --  --stat/-p/--raw is limited to the file at its name(s) then, so a rename
+   --  shows as an R record. Max_Count (git's -<n>) caps the commits shown.
+
    function Log_Graph_List_Text
      (Repo           : Version.Repository.Repository_Handle;
       Commits        : Version.History.Commit_Id_Vectors.Vector;

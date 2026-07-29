@@ -19,6 +19,7 @@ with Version.Notes;
 with Version.Log_Graph;
 with Version.Pathspec;
 with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Containers.Indefinite_Vectors;
 
 package body Version.Log is
 
@@ -1429,6 +1430,203 @@ package body Version.Log is
 
       return To_String (Result);
    end Log_Graph_List_Text;
+
+   function Log_Follow_Text
+     (Repo           : Version.Repository.Repository_Handle;
+      Start          : Version.Objects.Hex_Object_Id;
+      Path           : String;
+      Show_Signature : Boolean := False;
+      Stat           : Boolean := False;
+      Patch          : Boolean := False;
+      Name_Only      : Boolean := False;
+      Name_Status    : Boolean := False;
+      Numstat        : Boolean := False;
+      Shortstat      : Boolean := False;
+      Raw            : Boolean := False;
+      Context        : Natural := 3;
+      Oneline        : Boolean := False;
+      Kind           : Pretty_Kind := Pretty_Medium;
+      Show_Notes     : Boolean := True;
+      Max_Count      : Natural := 0;
+      Date_Mode      : String := "") return String
+   is
+      Objects  : Version.Object_Cache.Object_Cache;
+      Has_Diff : constant Boolean :=
+        Stat or else Patch or else Name_Only or else Name_Status
+        or else Numstat or else Shortstat or else Raw;
+
+      Shown : Version.History.Commit_Id_Vectors.Vector;
+      --  The file's name(s) to limit each shown commit's diff to: one name for
+      --  an edit/add, or the old and new names at a rename (so it shows as R).
+      package Name_Vectors is new Ada.Containers.Indefinite_Vectors
+        (Index_Type => Natural, Element_Type => String);
+      Old_Names : Name_Vectors.Vector;
+      New_Names : Name_Vectors.Vector;
+
+      --  Scan a rename-detected raw diff for the record whose child-side path
+      --  is P: set Found, and for a rename Is_Rename plus the old Source name.
+      procedure Scan_For_Path
+        (Raw_Text  : String;
+         P         : String;
+         Found     : out Boolean;
+         Is_Rename : out Boolean;
+         Source    : out Unbounded_String)
+      is
+         Pos : Natural := Raw_Text'First;
+      begin
+         Found := False;
+         Is_Rename := False;
+         Source := Null_Unbounded_String;
+         while Pos <= Raw_Text'Last loop
+            declare
+               Stop : Natural := Pos;
+               Tab  : Natural := 0;
+            begin
+               while Stop <= Raw_Text'Last
+                 and then Raw_Text (Stop) /= Character'Val (10)
+               loop
+                  if Raw_Text (Stop) = Character'Val (9) and then Tab = 0 then
+                     Tab := Stop;
+                  end if;
+                  Stop := Stop + 1;
+               end loop;
+
+               if Tab > 0 and then Raw_Text (Pos) = ':' then
+                  declare
+                     Header : constant String := Raw_Text (Pos .. Tab - 1);
+                     St     : Natural := Header'Last;
+                     Letter : Character;
+                     Paths  : constant String := Raw_Text (Tab + 1 .. Stop - 1);
+                     P2     : Natural := 0;
+                  begin
+                     --  The status is the last space-separated field of the
+                     --  header; its first character is A/M/D/T or R/C.
+                     while St >= Header'First and then Header (St) /= ' ' loop
+                        St := St - 1;
+                     end loop;
+                     Letter := Header (St + 1);
+
+                     if Letter = 'R' or else Letter = 'C' then
+                        for I in Paths'Range loop
+                           if Paths (I) = Character'Val (9) then
+                              P2 := I;
+                              exit;
+                           end if;
+                        end loop;
+                        if P2 > 0
+                          and then Paths (P2 + 1 .. Paths'Last) = P
+                        then
+                           Found := True;
+                           Is_Rename := True;
+                           Source :=
+                             To_Unbounded_String (Paths (Paths'First .. P2 - 1));
+                        end if;
+                     elsif Letter /= 'D' and then Paths = P then
+                        Found := True;
+                     end if;
+                  end;
+               end if;
+
+               exit when Found;
+               Pos := Stop + 1;
+            end;
+         end loop;
+      end Scan_For_Path;
+
+      Current : Version.Objects.Hex_Object_Id := Start;
+      P       : Unbounded_String := To_Unbounded_String (Path);
+      Result  : Unbounded_String;
+      Detect  : constant Version.Diff.Diff_Options :=
+        (Raw            => True,
+         Detect_Renames => Version.Diff.Renames_On,
+         others         => <>);
+   begin
+      loop
+         declare
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object (Repo, Objects, Current);
+            Parent : constant String := Version.Objects.Commit_Parent_Id (Obj);
+            Raw_Text : constant String :=
+              (if Parent'Length > 0
+               then Version.Diff.Diff_Commits
+                      (Repo, Version.Objects.To_Object_Id (Parent),
+                       Current, Detect)
+               else Version.Diff.Diff_Root_Commit (Repo, Current, Detect));
+            Found     : Boolean;
+            Is_Rename : Boolean;
+            Source    : Unbounded_String;
+         begin
+            Scan_For_Path (Raw_Text, To_String (P), Found, Is_Rename, Source);
+
+            if Found then
+               Shown.Append (Current);
+               New_Names.Append (To_String (P));
+               Old_Names.Append
+                 (if Is_Rename then To_String (Source) else To_String (P));
+               if Is_Rename then
+                  P := Source;
+               end if;
+            end if;
+
+            exit when Parent'Length = 0
+              or else (Max_Count > 0
+                       and then Natural (Shown.Length) >= Max_Count);
+            Current := Version.Objects.To_Object_Id (Parent);
+         end;
+      end loop;
+
+      --  Without a diff format the path only affects which commits show, so
+      --  render the whole list in one pass.
+      if not Has_Diff then
+         return Log_List_Text
+           (Repo, Shown,
+            Show_Signature => Show_Signature,
+            Oneline        => Oneline,
+            Kind           => Kind,
+            Show_Notes     => Show_Notes,
+            Date_Mode      => Date_Mode);
+      end if;
+
+      --  Each commit's diff is limited to the file's name(s) at that commit,
+      --  so a rename renders as an R record rather than an add.
+      for I in Shown.First_Index .. Shown.Last_Index loop
+         declare
+            One  : Version.History.Commit_Id_Vectors.Vector;
+            Spec : Version.Pathspec.Pathspec_Vectors.Vector;
+         begin
+            One.Append (Shown (I));
+            Version.Pathspec.Append_Parse (Spec, New_Names (I), "");
+            if Old_Names (I) /= New_Names (I) then
+               Version.Pathspec.Append_Parse (Spec, Old_Names (I), "");
+            end if;
+
+            if I > Shown.First_Index and then not Oneline then
+               Append (Result, Character'Val (10));
+            end if;
+
+            Append
+              (Result,
+               Log_List_Text
+                 (Repo, One,
+                  Show_Signature => Show_Signature,
+                  Stat           => Stat,
+                  Patch          => Patch,
+                  Name_Only      => Name_Only,
+                  Name_Status    => Name_Status,
+                  Numstat        => Numstat,
+                  Shortstat      => Shortstat,
+                  Raw            => Raw,
+                  Context        => Context,
+                  Oneline        => Oneline,
+                  Kind           => Kind,
+                  Show_Notes     => Show_Notes,
+                  Paths          => Spec,
+                  Date_Mode      => Date_Mode));
+         end;
+      end loop;
+
+      return To_String (Result);
+   end Log_Follow_Text;
 
    function Log_Formatted_List_Text
      (Repo    : Version.Repository.Repository_Handle;
