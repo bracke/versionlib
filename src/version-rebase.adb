@@ -1,5 +1,6 @@
 with Ada.Containers; use Ada.Containers;
 with Ada.Containers.Ordered_Sets;
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Containers.Vectors;
 with Ada.Directories; use Ada.Directories;
 with Ada.Environment_Variables;
@@ -15,6 +16,7 @@ with GNAT.OS_Lib;
 with Version.Cherry_Pick_State;
 with Version.Revert_State;
 with Version.Compression;
+with Version.Patch_Id;
 with Version.Config;
 with Version.Files;
 with Version.Hooks;
@@ -143,10 +145,26 @@ package body Version.Rebase is
       Target_Head  : Version.Objects.Hex_Object_Id)
       return Version.Rebase_State.Commit_Vectors.Vector
    is
+      package Patch_Id_Sets is new
+        Ada.Containers.Indefinite_Ordered_Sets (String);
+
       Base : Version.Objects.Hex_Object_Id := Zero_Id;
       Walk : Version.Objects.Hex_Object_Id := Current_Head;
       Reverse_Order : Version.Rebase_State.Commit_Vectors.Vector;
       Result : Version.Rebase_State.Commit_Vectors.Vector;
+
+      --  git's rebase drops a commit whose change is already upstream, keyed
+      --  by patch-id, so a branch that duplicates an upstream commit does not
+      --  reapply it. Collect the upstream patch-ids (base..target) once.
+      Upstream : Patch_Id_Sets.Set;
+
+      function Patch_Id_Of (C : Version.Objects.Hex_Object_Id) return String is
+      begin
+         return Version.Patch_Id.Of_Commit (Repo, C);
+      exception
+         when others =>
+            return "";
+      end Patch_Id_Of;
    begin
       begin
          Base :=
@@ -155,6 +173,28 @@ package body Version.Rebase is
       exception
          when others =>
             raise Ada.IO_Exceptions.Data_Error with "invalid replay commit graph";
+      end;
+
+      declare
+         TW : Version.Objects.Hex_Object_Id := Target_Head;
+      begin
+         while TW /= Base loop
+            declare
+               Obj     : constant Version.Objects.Git_Object :=
+                 Version.Objects.Read_Object (Repo, TW);
+               Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+                 Version.Objects.Commit_Parent_Ids (Obj);
+               PID     : constant String := Patch_Id_Of (TW);
+            begin
+               exit when Version.Objects.Kind (Obj)
+                         /= Version.Objects.Commit_Object
+                 or else Parents.Is_Empty or else Parents.Length > 1;
+               if PID /= "" then
+                  Upstream.Include (PID);
+               end if;
+               TW := Parents.First_Element;
+            end;
+         end loop;
       end;
 
       while Walk /= Base loop
@@ -171,7 +211,14 @@ package body Version.Rebase is
                raise Ada.IO_Exceptions.Data_Error with Merge_Commit_Rebase_Not_Supported;
             end if;
 
-            Reverse_Order.Append (Walk);
+            --  Skip a commit whose change is already upstream (same patch-id).
+            declare
+               PID : constant String := Patch_Id_Of (Walk);
+            begin
+               if PID = "" or else not Upstream.Contains (PID) then
+                  Reverse_Order.Append (Walk);
+               end if;
+            end;
             Walk := Parents.First_Element;
          end;
       end loop;
