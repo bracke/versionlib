@@ -5599,21 +5599,17 @@ package body Version.Merge is
 
                   elsif Target_Pos = Natural'Last then
                      if Current_Changed and then Base_Pos /= Natural'Last then
-                        if Behavior.Favor = Favor_Current then
+                        --  Modify/delete: git leaves this conflicted even under
+                        --  -Xours/-Xtheirs, which favour only in-file content
+                        --  conflicts, not tree-level existence ones.
+                        if Behavior.Materialize_Virtual_Conflicts then
                            Add_Merged_Path (Merged_Index, Current_Item);
-                           Maybe_Write_Worktree_Item (Repo, Current_Item, Behavior);
-                        elsif Behavior.Favor = Favor_Target then
-                           Maybe_Delete_Working_File (Repo, Path_Text, Behavior);
-                        else
-                           if Behavior.Materialize_Virtual_Conflicts then
-                              Add_Merged_Path (Merged_Index, Current_Item);
-                           end if;
-                           Add_Conflict (Conflicts, Path_Text, Delete_Modify_Conflict);
-                           Add_Staged_Conflict_Path
-                             (Merged_Index, Base_Items.Element (Base_Pos), 1);
-                           Add_Staged_Conflict_Path (Merged_Index, Current_Item, 2);
-                           Maybe_Write_Worktree_Item (Repo, Current_Item, Behavior);
                         end if;
+                        Add_Conflict (Conflicts, Path_Text, Delete_Modify_Conflict);
+                        Add_Staged_Conflict_Path
+                          (Merged_Index, Base_Items.Element (Base_Pos), 1);
+                        Add_Staged_Conflict_Path (Merged_Index, Current_Item, 2);
+                        Maybe_Write_Worktree_Item (Repo, Current_Item, Behavior);
                      elsif Current_Changed and then Base_Pos = Natural'Last then
                         Add_Merged_Path (Merged_Index, Current_Item);
                      else
@@ -5785,21 +5781,16 @@ package body Version.Merge is
                        and then not Same_Entry
                          (Target_Item, Base_Items.Element (Base_Pos))
                      then
-                        if Behavior.Favor = Favor_Current then
-                           Maybe_Delete_Working_File (Repo, Path_Text, Behavior);
-                        elsif Behavior.Favor = Favor_Target then
+                        --  Modify/delete: git leaves this conflicted even under
+                        --  -Xours/-Xtheirs (favouring only content conflicts).
+                        if Behavior.Materialize_Virtual_Conflicts then
                            Add_Merged_Path (Merged_Index, Target_Item);
-                           Maybe_Write_Worktree_Item (Repo, Target_Item, Behavior);
-                        else
-                           if Behavior.Materialize_Virtual_Conflicts then
-                              Add_Merged_Path (Merged_Index, Target_Item);
-                           end if;
-                           Add_Conflict (Conflicts, Path_Text, Delete_Modify_Conflict);
-                           Add_Staged_Conflict_Path
-                             (Merged_Index, Base_Items.Element (Base_Pos), 1);
-                           Add_Staged_Conflict_Path (Merged_Index, Target_Item, 3);
-                           Maybe_Write_Worktree_Item (Repo, Target_Item, Behavior);
                         end if;
+                        Add_Conflict (Conflicts, Path_Text, Delete_Modify_Conflict);
+                        Add_Staged_Conflict_Path
+                          (Merged_Index, Base_Items.Element (Base_Pos), 1);
+                        Add_Staged_Conflict_Path (Merged_Index, Target_Item, 3);
+                        Maybe_Write_Worktree_Item (Repo, Target_Item, Behavior);
 
                      elsif Base_Pos = Natural'Last then
                         Add_Merged_Path (Merged_Index, Target_Item);
