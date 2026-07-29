@@ -1344,6 +1344,8 @@ package body Version.Pretty_Format is
                   return Date_Raw (Id);
                elsif Date_Mode = "unix" then
                   return Date_Unix (Id);
+               elsif Date_Mode = "rfc2822" or else Date_Mode = "rfc" then
+                  return Date_RFC2822 (Id);
                elsif Date_Mode = "relative" then
                   return Show_Relative (Now_Unix - Id.Epoch);
                elsif Date_Mode = "human" then

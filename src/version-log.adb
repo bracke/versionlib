@@ -423,6 +423,13 @@ package body Version.Log is
                        then Tz (Tz'First .. Tz'First + 2) & ":"
                             & Tz (Tz'First + 3 .. Tz'Last)
                        else Tz);
+               elsif Mode = "rfc2822" or else Mode = "rfc" then
+                  --  git's DATE_RFC2822: "Www, D Mmm YYYY HH:MM:SS ±ZZZZ" with
+                  --  the day of month unpadded (git's "%d").
+                  return
+                    Weekdays (Natural (Wd)) & ", " & Trim (D) & " "
+                    & Months (Natural (M)) & " " & Trim (Y) & " "
+                    & Pad2 (HH) & ":" & Pad2 (Mn) & ":" & Pad2 (Sc) & " " & Tz;
                end if;
                return
                  Weekdays (Natural (Wd)) & " "
