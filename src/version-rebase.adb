@@ -1063,6 +1063,95 @@ package body Version.Rebase is
       end;
    end Start;
 
+   procedure Start_Onto (Onto : String; Upstream : String) is
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+   begin
+      if Version.Refs.Is_Detached (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with "cannot rebase detached HEAD";
+      end if;
+      if Version.Rebase_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error with "rebase already in progress";
+      end if;
+      if Version.Cherry_Pick_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "cannot rebase: cherry-pick in progress";
+      end if;
+      if Version.Revert_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "cannot rebase: revert in progress";
+      end if;
+      if Version.Merge_State.State_Exists (Repo) then
+         raise Ada.IO_Exceptions.Data_Error
+           with "cannot rebase: merge state already exists";
+      end if;
+
+      Require_Clean_Working_Tree;
+
+      declare
+         Branch_Name : constant String :=
+           Version.Refs.Current_Branch_Name (Repo);
+         Branch_Ref  : constant String := "refs/heads/" & Branch_Name;
+         Original_Head : constant Version.Objects.Hex_Object_Id :=
+           Version.Objects.To_Object_Id (Version.Refs.Current_Commit_Id (Repo));
+         --  Commits come from Upstream..HEAD; they are replayed onto a
+         --  possibly-different Onto.
+         Onto_Head : constant Version.Objects.Hex_Object_Id :=
+           Version.Revisions.Resolve_Commit (Repo => Repo, Text => Onto);
+         Upstream_Head : constant Version.Objects.Hex_Object_Id :=
+           Version.Revisions.Resolve_Commit (Repo => Repo, Text => Upstream);
+         Commits : constant Version.Rebase_State.Commit_Vectors.Vector :=
+           Commits_To_Replay
+             (Repo         => Repo,
+              Current_Head => Original_Head,
+              Target_Head  => Upstream_Head);
+      begin
+         Version.Ref_Names.Require_Ref_Name (Branch_Ref);
+
+         Version.Rebase_State.Write_State
+           (Repo                => Repo,
+            Branch_Ref          => Branch_Ref,
+            Original_Head       => Original_Head,
+            Target_Head         => Onto_Head,
+            Current_Replay_Head => Onto_Head,
+            Next_Index          => 0,
+            Commits             => Commits);
+
+         begin
+            Replay_Remaining
+              (Repo                => Repo,
+               Branch_Ref          => Branch_Ref,
+               Original_Head       => Original_Head,
+               Target_Head         => Onto_Head,
+               Current_Replay_Head => Onto_Head,
+               Next_Index          => 0,
+               Commits             => Commits,
+               Onto_Name           => Onto);
+         exception
+            when others =>
+               declare
+                  Preserve_State : Boolean := False;
+               begin
+                  if Version.Rebase_State.State_Exists (Repo) then
+                     begin
+                        Preserve_State :=
+                          Version.Rebase_State.Paused
+                            (Version.Rebase_State.Read_State (Repo));
+                     exception
+                        when others =>
+                           Preserve_State := False;
+                     end;
+                  end if;
+                  if not Preserve_State then
+                     Version.Rebase_State.Clear_State (Repo);
+                     Version.Merge_State.Clear_State (Repo);
+                  end if;
+               end;
+               raise;
+         end;
+      end;
+   end Start_Onto;
+
    --  The "author Name <email> ts tz" value of a commit (for squash, which
    --  keeps the first commit's authorship).
    function IR_Author_Line
