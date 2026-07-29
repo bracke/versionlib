@@ -64,6 +64,27 @@ package Version.Log is
    --  lines (`|\`, `|/`) are interleaved around it. A parent counts as an edge
    --  only when it is itself in Commits (git's "interesting parent").
 
+   function Log_Graph_List_Text
+     (Repo           : Version.Repository.Repository_Handle;
+      Commits        : Version.History.Commit_Id_Vectors.Vector;
+      Show_Signature : Boolean := False;
+      Stat           : Boolean := False;
+      Patch          : Boolean := False;
+      Name_Only      : Boolean := False;
+      Name_Status    : Boolean := False;
+      Numstat        : Boolean := False;
+      Shortstat      : Boolean := False;
+      Raw            : Boolean := False;
+      Context        : Natural := 3;
+      First_Parent   : Boolean := False;
+      Date_Mode      : String := "") return String;
+   --  git's `log --graph` in the default (multi-line) format: each commit's
+   --  full Log_List_Text block with the ASCII commit graph drawn down its left
+   --  edge -- the commit line, then a graph column line prefixing every
+   --  following line (header, message, and any --stat/-p output), the
+   --  connector rows for merges, and git's graph-prefixed blank line between
+   --  commits.
+
    function Log_Formatted_List_Text
      (Repo    : Version.Repository.Repository_Handle;
       Commits : Version.History.Commit_Id_Vectors.Vector;

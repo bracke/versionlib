@@ -41,12 +41,40 @@ package Version.Log_Graph is
       Commit  : Version.Objects.Hex_Object_Id;
       Parents : Version.Objects.Object_Id_Vectors.Vector) return Step;
    --  Advance the graph to Commit (with the given interesting Parents, in
-   --  order) and return the lines around its commit line.
+   --  order) and return the lines around its commit line. Equivalent to
+   --  Update followed by Begin_Commit; used by the single-line renderer.
 
    function Remainder (G : in out Graph) return Line_Vectors.Vector;
    --  The graph-only connector lines that follow the commit's content line
    --  (post-merge `|\` and collapsing `|/`/`_` rows), in order. Empty when the
    --  commit needs no trailing graph output.
+
+   --  Lower-level primitives mirroring git's show_log, for the multi-line
+   --  (full-format) renderer where each commit spans several content lines.
+
+   procedure Update
+     (G       : in out Graph;
+      Commit  : Version.Objects.Hex_Object_Id;
+      Parents : Version.Objects.Object_Id_Vectors.Vector);
+   --  git's graph_update: fold the previous commit's parents into the columns
+   --  and set up this commit's state. Call before Separator_Line/Begin_Commit.
+
+   function Separator_Line (G : in out Graph) return String;
+   --  The graph prefix for the blank line git prints between two commits
+   --  (git's graph_padding_line): the columns entering this commit drawn as
+   --  `| `, padded to the graph width. Call after Update, before Begin_Commit.
+
+   function Begin_Commit (G : in out Graph) return Step;
+   --  git's graph_show_commit: the pre-commit expansion lines (if any) and the
+   --  commit-line prefix, assuming Update has already run.
+
+   function Next_Line (G : in out Graph) return String;
+   --  One graph line (git's graph_show_oneline): the prefix for the next
+   --  content line of the current commit, advancing the lane state.
+
+   function Is_Finished (G : Graph) return Boolean;
+   --  True once the current commit has no further graph output (git's
+   --  graph_is_commit_finished) -- i.e. the lanes have settled.
 
 private
 

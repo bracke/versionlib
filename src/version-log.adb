@@ -1204,6 +1204,126 @@ package body Version.Log is
       return To_String (Result);
    end Log_Graph_Oneline_List_Text;
 
+   function Log_Graph_List_Text
+     (Repo           : Version.Repository.Repository_Handle;
+      Commits        : Version.History.Commit_Id_Vectors.Vector;
+      Show_Signature : Boolean := False;
+      Stat           : Boolean := False;
+      Patch          : Boolean := False;
+      Name_Only      : Boolean := False;
+      Name_Status    : Boolean := False;
+      Numstat        : Boolean := False;
+      Shortstat      : Boolean := False;
+      Raw            : Boolean := False;
+      Context        : Natural := 3;
+      First_Parent   : Boolean := False;
+      Date_Mode      : String := "") return String
+   is
+      Objects : Version.Object_Cache.Object_Cache;
+      In_Set  : Id_Sets.Set;
+      G       : Version.Log_Graph.Graph;
+      Result  : Unbounded_String;
+      First   : Boolean := True;
+   begin
+      for C of Commits loop
+         In_Set.Include (Version.Objects.To_String (C));
+      end loop;
+
+      Version.Log_Graph.Init (G);
+
+      for C of Commits loop
+         declare
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object (Repo, Objects, C);
+            Parents : Version.Objects.Object_Id_Vectors.Vector;
+            One     : Version.History.Commit_Id_Vectors.Vector;
+
+            --  This commit's full text block, formatted exactly as `log`
+            --  would show it on its own (no leading/trailing blank line).
+            Block   : Unbounded_String;
+            Pos     : Natural;
+            Line_No : Natural := 0;
+            Step    : Version.Log_Graph.Step;
+         begin
+            for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+               if In_Set.Contains (Version.Objects.To_String (P)) then
+                  Parents.Append (P);
+               end if;
+            end loop;
+
+            One.Append (C);
+            Block := To_Unbounded_String
+              (Log_List_Text
+                 (Repo, One,
+                  Show_Signature => Show_Signature,
+                  Stat           => Stat,
+                  Patch          => Patch,
+                  Name_Only      => Name_Only,
+                  Name_Status    => Name_Status,
+                  Numstat        => Numstat,
+                  Shortstat      => Shortstat,
+                  Raw            => Raw,
+                  Context        => Context,
+                  First_Parent   => First_Parent,
+                  Date_Mode      => Date_Mode));
+
+            Version.Log_Graph.Update (G, C, Parents);
+
+            --  git separates commits with a graph-prefixed blank line, drawn
+            --  from the freshly updated (post-Update) lane state.
+            if not First then
+               Append (Result, Version.Log_Graph.Separator_Line (G) & ASCII.LF);
+            end if;
+            First := False;
+
+            Step := Version.Log_Graph.Begin_Commit (G);
+            for L of Step.Pre_Lines loop
+               Append (Result, L & ASCII.LF);
+            end loop;
+
+            --  Prefix every line of the block: the commit line takes the
+            --  commit prefix, each following line one graph column line.
+            Pos := 1;
+            while Pos <= Length (Block) loop
+               declare
+                  Stop : Natural := Pos;
+               begin
+                  while Stop <= Length (Block)
+                    and then Element (Block, Stop) /= ASCII.LF
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+
+                  declare
+                     Text : constant String := Slice (Block, Pos, Stop - 1);
+                  begin
+                     if Line_No = 0 then
+                        Append
+                          (Result,
+                           To_String (Step.Commit_Prefix) & Text & ASCII.LF);
+                     else
+                        Append
+                          (Result,
+                           Version.Log_Graph.Next_Line (G) & Text & ASCII.LF);
+                     end if;
+                  end;
+
+                  Line_No := Line_No + 1;
+                  Pos := Stop + 1;
+               end;
+            end loop;
+
+            --  Any connector rows the commit still owes (a merge whose block
+            --  was shorter than its post-merge/collapse output).
+            while not Version.Log_Graph.Is_Finished (G) loop
+               Append (Result, Version.Log_Graph.Next_Line (G) & ASCII.LF);
+            end loop;
+         end;
+      end loop;
+
+      return To_String (Result);
+   end Log_Graph_List_Text;
+
    function Log_Formatted_List_Text
      (Repo    : Version.Repository.Repository_Handle;
       Commits : Version.History.Commit_Id_Vectors.Vector;

@@ -593,21 +593,27 @@ package body Version.Log_Graph is
       Text := Line;
    end Next_Line;
 
-   -------------
-   -- Advance --
-   -------------
+   ------------
+   -- Update --
+   ------------
 
-   function Advance
+   procedure Update
      (G       : in out Graph;
       Commit  : Version.Objects.Hex_Object_Id;
-      Parents : Version.Objects.Object_Id_Vectors.Vector) return Step
-   is
+      Parents : Version.Objects.Object_Id_Vectors.Vector) is
+   begin
+      Do_Update (G, Commit, Parents);
+   end Update;
+
+   ------------------
+   -- Begin_Commit --
+   ------------------
+
+   function Begin_Commit (G : in out Graph) return Step is
       Result    : Step;
       Text      : Unbounded_String;
       Is_Commit : Boolean;
    begin
-      Do_Update (G, Commit, Parents);
-
       --  Emit graph-only lines (pre-commit expansion / skip) until the commit
       --  line, which becomes the prefix for the commit's content.
       loop
@@ -621,7 +627,72 @@ package body Version.Log_Graph is
       end loop;
 
       return Result;
+   end Begin_Commit;
+
+   -------------
+   -- Advance --
+   -------------
+
+   function Advance
+     (G       : in out Graph;
+      Commit  : Version.Objects.Hex_Object_Id;
+      Parents : Version.Objects.Object_Id_Vectors.Vector) return Step is
+   begin
+      Do_Update (G, Commit, Parents);
+      return Begin_Commit (G);
    end Advance;
+
+   --------------------
+   -- Separator_Line --
+   --------------------
+
+   function Separator_Line (G : in out Graph) return String is
+      Line : Unbounded_String := Null_Unbounded_String;
+   begin
+      --  git's graph_padding_line. When the commit line has not been drawn yet
+      --  (state COMMIT), draw the incoming columns as `| ` -- widening the
+      --  commit's own column for an octopus -- and pad to the graph width.
+      --  In any other state git just emits the next line.
+      if G.State /= S_Commit then
+         declare
+            Ignored : Boolean;
+         begin
+            Next_Line (G, Line, Ignored);
+            return To_String (Line);
+         end;
+      end if;
+
+      for I in 0 .. G.Num_Columns - 1 loop
+         Append (Line, '|');
+         if G.Columns (I) = G.Commit and then G.Num_Parents > 2 then
+            Append (Line, [1 .. (G.Num_Parents - 2) * 2 => ' ']);
+         else
+            Append (Line, ' ');
+         end if;
+      end loop;
+
+      Pad (G, Line);
+      G.Prev_State := S_Padding;
+      return To_String (Line);
+   end Separator_Line;
+
+   ---------------
+   -- Next_Line --
+   ---------------
+
+   function Next_Line (G : in out Graph) return String is
+      Text      : Unbounded_String;
+      Is_Commit : Boolean;
+   begin
+      Next_Line (G, Text, Is_Commit);
+      return To_String (Text);
+   end Next_Line;
+
+   -----------------
+   -- Is_Finished --
+   -----------------
+
+   function Is_Finished (G : Graph) return Boolean is (G.State = S_Padding);
 
    ---------------
    -- Remainder --
