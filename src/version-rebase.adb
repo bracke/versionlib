@@ -1716,11 +1716,46 @@ package body Version.Rebase is
          Version.Ref_Names.Require_Ref_Name (Branch_Ref);
 
          --  Collect the whole first-parent chain, newest first, then reverse
-         --  it so the root commit is replayed first.
+         --  it so the root commit is replayed first -- dropping any commit
+         --  whose change is already on the new base (by patch-id), as git does,
+         --  so a shared history is not re-applied into a conflict.
          declare
+            package Patch_Id_Sets is new
+              Ada.Containers.Indefinite_Ordered_Sets (String);
+            Onto_Patch_Ids : Patch_Id_Sets.Set;
+
+            function Patch_Id_Of
+              (C : Version.Objects.Hex_Object_Id) return String is
+            begin
+               return Version.Patch_Id.Of_Commit (Repo, C);
+            exception
+               when others =>
+                  return "";
+            end Patch_Id_Of;
+
             Newest_First : Version.Rebase_State.Commit_Vectors.Vector;
             Walk : Version.Objects.Hex_Object_Id := Original_Head;
          begin
+            declare
+               OW : Version.Objects.Hex_Object_Id := Target_Head;
+            begin
+               loop
+                  declare
+                     PID : constant String := Patch_Id_Of (OW);
+                     Parents :
+                       constant Version.Objects.Object_Id_Vectors.Vector :=
+                         Version.Objects.Commit_Parent_Ids
+                           (Version.Objects.Read_Object (Repo, OW));
+                  begin
+                     if PID /= "" then
+                        Onto_Patch_Ids.Include (PID);
+                     end if;
+                     exit when Parents.Is_Empty;
+                     OW := Parents.First_Element;
+                  end;
+               end loop;
+            end;
+
             loop
                Newest_First.Append (Walk);
                declare
@@ -1735,7 +1770,14 @@ package body Version.Rebase is
             for I in reverse
               Newest_First.First_Index .. Newest_First.Last_Index
             loop
-               Chain.Append (Newest_First.Element (I));
+               declare
+                  PID : constant String :=
+                    Patch_Id_Of (Newest_First.Element (I));
+               begin
+                  if PID = "" or else not Onto_Patch_Ids.Contains (PID) then
+                     Chain.Append (Newest_First.Element (I));
+                  end if;
+               end;
             end loop;
          end;
 

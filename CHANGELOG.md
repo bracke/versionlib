@@ -1,3 +1,4 @@
+- Git parity: `rebase --root --onto` (`Version.Rebase.Start_Root`) drops a commit whose change is already on the new base (by patch-id), so replaying a branch whose root is shared with the base no longer conflicts on the already-applied commit.
 - Git parity: `Version.Rebase.Start_Onto (Onto, Upstream)` implements `rebase --onto` — replay `Upstream..HEAD` onto `Onto` rather than onto the upstream itself.
 - Git parity: `Version.Rebase.Commits_To_Replay` drops a commit whose change is already upstream (matched by patch-id over base..target), so rebasing a branch that duplicates an upstream commit no longer reapplies it — matching git's default cherry-pick skipping.
 - Git parity: `apply --index` of a rename now reads the moved content from its new path when updating the index (the working-tree pass has already renamed the source away), so a reverse (`-R`) rename applies instead of failing with "no such file"; `--cached` still reads the untouched source path.
