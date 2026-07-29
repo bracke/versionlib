@@ -118,6 +118,17 @@ package Version.Restore is
    procedure Apply_Sparse_Skip_Worktree
      (Repo : Version.Repository.Repository_Handle);
 
+   procedure Apply_Sparse_Update
+     (Repo : Version.Repository.Repository_Handle);
+   --  Bring the working tree into line with the current sparse patterns the way
+   --  git's sparse-checkout does, WITHOUT the full-tree rewrite Restore does:
+   --  materialise a now-included path only when it is absent, remove a
+   --  now-excluded path only when its working copy still matches the index
+   --  (a locally-modified excluded file is left in place, as git leaves it),
+   --  and set each entry's skip-worktree bit to match. Unlike a plain
+   --  Restore_Working_Tree this never clobbers a dirty file, so a
+   --  sparse-checkout set/init needs no clean working tree.
+
    --  Clear every skip-worktree bit from the index (used by `sparse disable`).
    procedure Clear_Skip_Worktree
      (Repo : Version.Repository.Repository_Handle);

@@ -1307,6 +1307,96 @@ package body Version.Restore is
       end if;
    end Apply_Sparse_Skip_Worktree;
 
+   procedure Apply_Sparse_Update
+     (Repo : Version.Repository.Repository_Handle)
+   is
+      Items   : Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+      Enabled : constant Boolean := Version.Sparse.Enabled (Repo);
+      Objects : Version.Object_Cache.Object_Cache;
+      Root    : constant String := Version.Repository.Root_Path (Repo);
+      Changed : Boolean := False;
+
+      function Present (Rel : String) return Boolean is
+        (Ada.Directories.Exists (Version.Files.Join (Root, Rel)));
+
+      --  The working copy still matches what the index records: safe to remove
+      --  when the path becomes excluded. A modified (or vanished) file does
+      --  not match and is therefore left alone.
+      function Working_Matches
+        (Rel : String; Id : Version.Objects.Hex_Object_Id) return Boolean
+      is
+         Abs_Path : constant String := Version.Files.Join (Root, Rel);
+      begin
+         if not Ada.Directories.Exists (Abs_Path)
+           or else Ada.Directories.Kind (Abs_Path)
+                   /= Ada.Directories.Ordinary_File
+         then
+            return False;
+         end if;
+         return Version.Objects.Compute_Object_Id
+                  (Version.Repository.Algorithm (Repo), "blob",
+                   Version.Files.Read_Binary_File (Abs_Path)) = Id;
+      exception
+         when others =>
+            return False;
+      end Working_Matches;
+   begin
+      if Items.Is_Empty then
+         return;
+      end if;
+
+      for I in Items.First_Index .. Items.Last_Index loop
+         declare
+            E        : Version.Staging.Index_Entry := Items.Element (I);
+            Rel      : constant String := To_String (E.Path);
+            Included : constant Boolean :=
+              (not Enabled) or else Version.Sparse.Included (Repo, Rel);
+            New_Skip : Boolean := E.Skip_Worktree;
+         begin
+            if E.Stage /= 0 then
+               null;  --  never touch an unmerged entry
+            elsif Included then
+               if not Present (Rel) then
+                  Write_Tree_Item_To_Working_Tree
+                    (Repo, Objects,
+                     Version.Objects.Tree_Entry'
+                       (Path => E.Path,
+                        Id   => E.Id,
+                        Kind =>
+                          (if To_String (E.Mode) = "160000"
+                           then Version.Objects.Tree_Gitlink
+                           else Version.Objects.Tree_Blob),
+                        Mode => E.Mode),
+                     Rel);
+               end if;
+               New_Skip := False;
+            elsif Present (Rel) then
+               if Working_Matches (Rel, E.Id) then
+                  Delete_Working_Path_If_Present (Repo, Rel);
+                  New_Skip := True;
+               else
+                  --  git keeps a locally-modified excluded file present and
+                  --  does not mark it skip-worktree.
+                  New_Skip := False;
+               end if;
+            else
+               New_Skip := True;
+            end if;
+
+            if New_Skip /= E.Skip_Worktree then
+               E.Skip_Worktree := New_Skip;
+               Items.Replace_Element (I, E);
+               Changed := True;
+            end if;
+         end;
+      end loop;
+
+      if Changed then
+         Version.Staging.Write (Repo, Items);
+      end if;
+   end Apply_Sparse_Update;
+
    procedure Clear_Skip_Worktree
      (Repo : Version.Repository.Repository_Handle)
    is
