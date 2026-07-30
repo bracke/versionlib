@@ -25,15 +25,19 @@ package Version.Blame is
    function Blame_File
      (Repo : Version.Repository.Repository_Handle;
       Tip  : Version.Objects.Hex_Object_Id;
-      Path : String)
+      Path : String;
+      Ignore_Whitespace : Boolean := False)
       return Blame_Vectors.Vector;
    --  Raises Ada.IO_Exceptions.Data_Error when Path is absent at Tip.
+   --  Ignore_Whitespace (git's `blame -w`) compares lines with all whitespace
+   --  removed, so a change touching only whitespace does not break the trail.
 
    function Blame_Working_File
      (Repo         : Version.Repository.Repository_Handle;
       Tip          : Version.Objects.Hex_Object_Id;
       Path         : String;
-      Working_Text : String)
+      Working_Text : String;
+      Ignore_Whitespace : Boolean := False)
       return Blame_Vectors.Vector;
    --  Blame the file as it stands in the working tree, which is what `git
    --  blame <file>` reports. Lines that do not correspond to any line at Tip

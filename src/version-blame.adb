@@ -39,6 +39,21 @@ package body Version.Blame is
       return "";
    end File_Content;
 
+   --  Remove every space and tab, keeping the line breaks, so line alignment
+   --  compares content ignoring all whitespace (git's blame -w).
+   function Fold_WS (S : String) return String is
+      R : String (1 .. S'Length);
+      J : Natural := 0;
+   begin
+      for C of S loop
+         if C /= ' ' and then C /= Character'Val (9) then
+            J := J + 1;
+            R (J) := C;
+         end if;
+      end loop;
+      return R (1 .. J);
+   end Fold_WS;
+
    procedure Split (S : String; Lines : out Line_Vectors.Vector) is
       Start : Positive := S'First;
    begin
@@ -68,7 +83,8 @@ package body Version.Blame is
       Path      : String;
       Final     : Line_Vectors.Vector;
       Start_Pos : Nat_Array;
-      Tip_Text  : String)
+      Tip_Text  : String;
+      Ignore_Whitespace : Boolean)
       return Blame_Vectors.Vector
    is
       N        : constant Natural := Natural (Final.Length);
@@ -116,8 +132,13 @@ package body Version.Blame is
                   --  blame must follow lines exactly where git follows them.
                   A : constant Version.Merge.Line_Match_Vectors.Vector :=
                     Version.Merge.Align_Lines
-                      (Current_Text => To_String (Cur_Text),
-                       Parent_Text  => Par_Text);
+                      (Current_Text =>
+                         (if Ignore_Whitespace
+                          then Fold_WS (To_String (Cur_Text))
+                          else To_String (Cur_Text)),
+                       Parent_Text  =>
+                         (if Ignore_Whitespace then Fold_WS (Par_Text)
+                          else Par_Text));
                begin
                   for I in 1 .. N loop
                      if not Assigned (I) and then Pos (I) > 0 then
@@ -154,7 +175,8 @@ package body Version.Blame is
    function Blame_File
      (Repo : Version.Repository.Repository_Handle;
       Tip  : Version.Objects.Hex_Object_Id;
-      Path : String)
+      Path : String;
+      Ignore_Whitespace : Boolean := False)
       return Blame_Vectors.Vector
    is
       Tip_Content : constant String := File_Content (Repo, Tip, Path);
@@ -176,7 +198,8 @@ package body Version.Blame is
             Pos (I) := I;
          end loop;
 
-         return Walk_History (Repo, Tip, Path, Final, Pos, Tip_Content);
+         return Walk_History
+           (Repo, Tip, Path, Final, Pos, Tip_Content, Ignore_Whitespace);
       end;
    end Blame_File;
 
@@ -184,7 +207,8 @@ package body Version.Blame is
      (Repo         : Version.Repository.Repository_Handle;
       Tip          : Version.Objects.Hex_Object_Id;
       Path         : String;
-      Working_Text : String)
+      Working_Text : String;
+      Ignore_Whitespace : Boolean := False)
       return Blame_Vectors.Vector
    is
       Tip_Content : constant String := File_Content (Repo, Tip, Path);
@@ -202,15 +226,20 @@ package body Version.Blame is
          --  committed yet.
          A : constant Version.Merge.Line_Match_Vectors.Vector :=
            Version.Merge.Align_Lines
-             (Current_Text => Working_Text,
-              Parent_Text  => Tip_Content);
+             (Current_Text =>
+                (if Ignore_Whitespace then Fold_WS (Working_Text)
+                 else Working_Text),
+              Parent_Text  =>
+                (if Ignore_Whitespace then Fold_WS (Tip_Content)
+                 else Tip_Content));
          Pos : Nat_Array (1 .. N);
       begin
          for I in 1 .. N loop
             Pos (I) := (if I > Natural (A.Length) then 0 else A (I));
          end loop;
 
-         return Walk_History (Repo, Tip, Path, Final, Pos, Tip_Content);
+         return Walk_History
+           (Repo, Tip, Path, Final, Pos, Tip_Content, Ignore_Whitespace);
       end;
    end Blame_Working_File;
 
