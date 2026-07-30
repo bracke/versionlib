@@ -1,3 +1,6 @@
+with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Strings.Hash;
+
 with Version.History;
 with Version.Objects;
 with Version.Pathspec;
@@ -56,6 +59,19 @@ package Version.Log is
    --  `log --oneline --name-only`/`--numstat`/`--raw`/... do.
 
    type Decorate_Mode is (No_Decorate, Short_Decorate, Full_Decorate);
+
+   package Decoration_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type        => String,
+      Element_Type    => String,
+      Hash            => Ada.Strings.Hash,
+      Equivalent_Keys => "=");
+
+   function Decorations
+     (Repo : Version.Repository.Repository_Handle;
+      Mode : Decorate_Mode := Short_Decorate) return Decoration_Maps.Map;
+   --  git's `--decorate` map: commit hex id -> "HEAD -> main, tag: v2, side",
+   --  refs gathered in git's decoration order. Used to label commits outside
+   --  the log formatters (e.g. `rev-list --bisect-all`).
 
    function Log_Oneline_List_Text
      (Repo          : Version.Repository.Repository_Handle;

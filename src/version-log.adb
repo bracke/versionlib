@@ -2,7 +2,6 @@ with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Containers.Ordered_Sets;
 with Ada.Containers.Vectors;
 with Ada.IO_Exceptions;
-with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
 
 with Version.Objects; use Version.Objects;
@@ -17,19 +16,13 @@ with Version.Refs;
 with Version.Ref_Format;
 with Version.Notes;
 with Version.Log_Graph;
-with Version.Pathspec;
-with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Indefinite_Vectors;
 
 package body Version.Log is
 
    use Ada.Strings.Unbounded;
 
-   package Decor_Maps is new Ada.Containers.Indefinite_Hashed_Maps
-     (Key_Type        => String,
-      Element_Type    => String,
-      Hash            => Ada.Strings.Hash,
-      Equivalent_Keys => "=");
+   package Decor_Maps renames Decoration_Maps;
 
    --  Build git's `--decorate` map: commit id -> "HEAD -> main, tag: v2".
    --  Refs are gathered in git's decoration order (the current branch first,
@@ -127,6 +120,11 @@ package body Version.Log is
       Scan ("refs/remotes", Skip_Head_Branch => False);
       return Map;
    end Build_Decorations;
+
+   function Decorations
+     (Repo : Version.Repository.Repository_Handle;
+      Mode : Decorate_Mode := Short_Decorate) return Decoration_Maps.Map
+   is (Build_Decorations (Repo, Mode));
 
    function Line_Value (Text : String; Prefix : String) return String is
       Start : Natural := Text'First;
