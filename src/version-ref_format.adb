@@ -1395,7 +1395,9 @@ package body Version.Ref_Format is
       Ref : constant String := To_String (Row.Name);
       Id  : constant String := To_String (Row.Id);
    begin
-      if Key = "refname" then
+      if Key = "refname" or else Key = "version:refname"
+        or else Key = "v:refname"
+      then
          return Ref;
       elsif Key = "objectname" then
          return Id;
@@ -1427,6 +1429,61 @@ package body Version.Ref_Format is
          return Expand (Repo, "%(" & Key & ")", Ref, Id, "");
       end if;
    end Sort_Field;
+
+   --  git's version:refname order: compare rune by rune, but a run of digits
+   --  as a number (leading zeros dropped, then longer run wins, then lexical),
+   --  so v1.2 sorts before v1.10.
+   function Version_Less (A, B : String) return Boolean is
+      IA : Natural := A'First;
+      IB : Natural := B'First;
+
+      function Is_Digit (C : Character) return Boolean is
+        (C in '0' .. '9');
+   begin
+      while IA <= A'Last and then IB <= B'Last loop
+         if Is_Digit (A (IA)) and then Is_Digit (B (IB)) then
+            declare
+               EA : Natural := IA;
+               EB : Natural := IB;
+            begin
+               while EA <= A'Last and then Is_Digit (A (EA)) loop
+                  EA := EA + 1;
+               end loop;
+               while EB <= B'Last and then Is_Digit (B (EB)) loop
+                  EB := EB + 1;
+               end loop;
+               --  Digit runs A(IA .. EA-1) and B(IB .. EB-1); strip zeros.
+               declare
+                  SA : Natural := IA;
+                  SB : Natural := IB;
+               begin
+                  while SA < EA - 1 and then A (SA) = '0' loop
+                     SA := SA + 1;
+                  end loop;
+                  while SB < EB - 1 and then B (SB) = '0' loop
+                     SB := SB + 1;
+                  end loop;
+                  if (EA - SA) /= (EB - SB) then
+                     return (EA - SA) < (EB - SB);
+                  end if;
+                  if A (SA .. EA - 1) /= B (SB .. EB - 1) then
+                     return A (SA .. EA - 1) < B (SB .. EB - 1);
+                  end if;
+               end;
+               IA := EA;
+               IB := EB;
+            end;
+         else
+            if A (IA) /= B (IB) then
+               return A (IA) < B (IB);
+            end if;
+            IA := IA + 1;
+            IB := IB + 1;
+         end if;
+      end loop;
+      --  A prefix sorts before the longer string.
+      return (A'Last - IA) < (B'Last - IB);
+   end Version_Less;
 
    ----------------------------------------------------------------------
    --  Entry point
@@ -1466,12 +1523,19 @@ package body Version.Ref_Format is
          else Sort_Key);
       Numeric    : constant Boolean :=
         Key = "objectsize" or else Is_Date_Key (Key);
+      Version_Sort : constant Boolean :=
+        Key = "version:refname" or else Key = "v:refname";
 
       function Less (L, R : Ref_Row) return Boolean is
          LS : constant String := Sort_Field (Repo, Key, L);
          RS : constant String := Sort_Field (Repo, Key, R);
       begin
-         if Numeric then
+         if Version_Sort then
+            if LS /= RS then
+               return (if Descending then Version_Less (RS, LS)
+                       else Version_Less (LS, RS));
+            end if;
+         elsif Numeric then
             declare
                LN : constant Long_Long_Integer :=
                  (if LS = "" then 0 else Long_Long_Integer'Value (LS));
