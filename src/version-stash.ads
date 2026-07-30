@@ -33,13 +33,17 @@ package Version.Stash is
      (Include_Untracked : Boolean := False;
       Include_Ignored   : Boolean := False;
       Pathspecs         : Version.Pathspec.Pathspec_Vectors.Vector :=
-        Version.Pathspec.Pathspec_Vectors.Empty_Vector);
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Message           : String := "");
+   --  Message is git's `-m`: the stash is titled "On <branch>: <message>"
+   --  instead of the default "WIP on <branch>: <short> <subject>".
 
    function Create
      (Include_Untracked : Boolean := False;
       Include_Ignored   : Boolean := False;
       Pathspecs         : Version.Pathspec.Pathspec_Vectors.Vector :=
-        Version.Pathspec.Pathspec_Vectors.Empty_Vector)
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Message           : String := "")
       return String;
 
    procedure Store

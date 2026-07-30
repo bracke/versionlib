@@ -221,7 +221,8 @@ package body Version.Stash is
    is
    begin
       if Version.Refs.Is_Detached (Repo) then
-         return "detached HEAD";
+         --  git spells a detached HEAD "(no branch)" in stash messages.
+         return "(no branch)";
       else
          return Version.Refs.Current_Branch_Name (Repo);
       end if;
@@ -242,6 +243,22 @@ package body Version.Stash is
            & Short_Id (To_String (Head_Id)) & " " & Subject;
       end if;
    end Stash_Message;
+
+   --  The stash's own title: git's "On <branch>: <message>" when the user
+   --  gave `-m`, otherwise the default "WIP on <branch>: <short> <subject>".
+   function Top_Stash_Message
+     (Repo    : Version.Repository.Repository_Handle;
+      Head_Id : Version.Objects.Hex_Object_Id;
+      Message : String)
+      return String
+   is
+   begin
+      if Message /= "" then
+         return "On " & Head_Name (Repo) & ": " & Message;
+      else
+         return Stash_Message (Repo, Head_Id, "WIP");
+      end if;
+   end Top_Stash_Message;
 
    procedure Require_Head
      (Repo    : Version.Repository.Repository_Handle;
@@ -962,7 +979,8 @@ package body Version.Stash is
      (Include_Untracked : Boolean := False;
       Include_Ignored   : Boolean := False;
       Pathspecs         : Version.Pathspec.Pathspec_Vectors.Vector :=
-        Version.Pathspec.Pathspec_Vectors.Empty_Vector)
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Message           : String := "")
       return String
    is
       Repo : constant Version.Repository.Repository_Handle := Version.Repository.Open;
@@ -1038,7 +1056,7 @@ package body Version.Stash is
                    (Repo    => Repo,
                     Tree_Id => Work_Tree,
                     Parents => Parents,
-                    Message => Stash_Message (Repo, Head_Id, "WIP")));
+                    Message => Top_Stash_Message (Repo, Head_Id, Message)));
          end;
       end;
    end Create;
@@ -1092,7 +1110,8 @@ package body Version.Stash is
      (Include_Untracked : Boolean := False;
       Include_Ignored   : Boolean := False;
       Pathspecs         : Version.Pathspec.Pathspec_Vectors.Vector :=
-        Version.Pathspec.Pathspec_Vectors.Empty_Vector)
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Message           : String := "")
    is
       Repo : constant Version.Repository.Repository_Handle := Version.Repository.Open;
       Head_Id : Version.Objects.Object_Id_Storage;
@@ -1123,11 +1142,13 @@ package body Version.Stash is
               Create
                 (Include_Untracked => Include_Untracked,
                  Include_Ignored   => Include_Ignored,
-                 Pathspecs         => Pathspecs);
+                 Pathspecs         => Pathspecs,
+                 Message           => Message);
             Stash_Id : constant Version.Objects.Hex_Object_Id :=
               Version.Objects.To_Object_Id (Stash_Text);
             Old_Id   : constant String := Current_Ref_Id_Or_Zero (Repo, Stash_Ref);
-            Message  : constant String := Stash_Message (Repo, Head_Id, "WIP");
+            Reflog_Message : constant String :=
+              Top_Stash_Message (Repo, Head_Id, Message);
          begin
             Update_Stash_Ref
               (Repo         => Repo,
@@ -1138,7 +1159,7 @@ package body Version.Stash is
                Ref     => Stash_Ref,
                Old_Id  => Old_Id,
                New_Id  => To_String (Stash_Id),
-               Message => Message);
+               Message => Reflog_Message);
             Restore_Selected_Tracked_Paths
               (Repo      => Repo,
                Head_Id   => Head_Id,

@@ -1281,9 +1281,9 @@ package body Version.Stash.Tests is
               (Version.Stash.List_Entries (Version.Repository.Open)
                  .First_Element
                  .Message),
-            "WIP on detached HEAD:")
+            "WIP on (no branch):")
          /= 0,
-         "detached HEAD stash message must mention detached HEAD");
+         "detached HEAD stash message must spell it ""(no branch)"", as git");
       Ada.Directories.Set_Directory (Old_Dir);
    exception
       when others =>
