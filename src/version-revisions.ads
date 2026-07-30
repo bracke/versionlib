@@ -34,4 +34,13 @@ package Version.Revisions is
    --  objects -- git's `find_unique_abbrev` behaviour for %h/%t/%p. Minimum is
    --  the configured floor (7 for core.abbrev=auto, or the requested width).
 
+   function Objects_With_Prefix
+     (Repo   : Version.Repository.Repository_Handle;
+      Prefix : String)
+      return Version.Objects.Object_Id_Vectors.Vector;
+   --  Every object id (any type, loose or packed) whose hexadecimal spelling
+   --  starts with Prefix, sorted ascending and de-duplicated -- git's
+   --  `rev-parse --disambiguate=<prefix>`.  Prefix shorter than two hex
+   --  digits, or non-hexadecimal, yields the empty vector, as git does.
+
 end Version.Revisions;

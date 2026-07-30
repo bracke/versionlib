@@ -142,6 +142,83 @@ package body Version.Revisions is
          return Min;
    end Unique_Abbrev_Length;
 
+   function Objects_With_Prefix
+     (Repo   : Version.Repository.Repository_Handle;
+      Prefix : String)
+      return Version.Objects.Object_Id_Vectors.Vector
+   is
+      Result : Version.Objects.Object_Id_Vectors.Vector;
+
+      package Id_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
+      Found : Id_Sets.Set;
+
+      use type Ada.Directories.File_Kind;
+   begin
+      --  git requires at least two hex digits to disambiguate; anything
+      --  shorter or non-hex names nothing.
+      if Prefix'Length < 2 or else not Is_Hex_Text (Prefix) then
+         return Result;
+      end if;
+
+      declare
+         Low    : constant String := Lower (Prefix);
+         Fanout : constant String := Low (Low'First .. Low'First + 1);
+         Objects_Dir : constant String :=
+           Join (Version.Repository.Common_Git_Dir (Repo), "objects");
+         Sub    : constant String := Join (Objects_Dir, Fanout);
+         Packs  : Version.Pack_Index_Cache.Cache;
+         Packed : Version.Objects.Object_Id_Vectors.Vector;
+      begin
+         Version.Pack_Index_Cache.Load (Repo => Repo, Item => Packs);
+
+         --  Loose objects share the two-char fanout directory named by the
+         --  prefix; a file name completes the id after the fanout.
+         if Ada.Directories.Exists (Sub)
+           and then Ada.Directories.Kind (Sub) = Ada.Directories.Directory
+         then
+            declare
+               S : Ada.Directories.Search_Type;
+               E : Ada.Directories.Directory_Entry_Type;
+            begin
+               Ada.Directories.Start_Search
+                 (S, Sub, "*",
+                  [Ada.Directories.Ordinary_File => True, others => False]);
+               while Ada.Directories.More_Entries (S) loop
+                  Ada.Directories.Get_Next_Entry (S, E);
+                  declare
+                     Name : constant String :=
+                       Ada.Directories.Simple_Name (E);
+                     Full : constant String := Lower (Fanout & Name);
+                  begin
+                     if Is_Hex_Text (Name)
+                       and then Has_Prefix (Full, Low)
+                     then
+                        Found.Include (Full);
+                     end if;
+                  end;
+               end loop;
+               Ada.Directories.End_Search (S);
+            end;
+         end if;
+
+         --  Packed objects with the same prefix (an ordered set dedups a
+         --  loose object that is also packed).
+         Version.Pack_Index_Cache.List_Prefix (Packs, Low, Packed);
+         for Id of Packed loop
+            Found.Include (Lower (To_String (Id)));
+         end loop;
+
+         for Hex of Found loop
+            Result.Append (Version.Objects.To_Object_Id (Hex));
+         end loop;
+      end;
+
+      return Result;
+   exception
+      when others =>
+         return Version.Objects.Object_Id_Vectors.Empty_Vector;
+   end Objects_With_Prefix;
+
    function Resolve_Ref_Name
      (Repo  : Version.Repository.Repository_Handle;
       Refs  : in out Version.Ref_Cache.Ref_Cache;

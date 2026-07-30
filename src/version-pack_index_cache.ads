@@ -55,6 +55,14 @@ package Version.Pack_Index_Cache is
    --  resolution after loose objects have been considered, so ambiguity is
    --  detected across both stores without reading object contents.
 
+   procedure List_Prefix
+     (Item   : Cache;
+      Prefix : String;
+      Into   : in out Version.Objects.Object_Id_Vectors.Vector);
+   --  Append every packed-object ID whose hexadecimal spelling starts with
+   --  Prefix (case-insensitive) to Into.  Backs `rev-parse --disambiguate`,
+   --  which lists all objects sharing a prefix rather than counting them.
+
 private
 
    package Location_Maps is new Ada.Containers.Ordered_Maps

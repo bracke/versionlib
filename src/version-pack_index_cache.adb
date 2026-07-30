@@ -450,4 +450,33 @@ package body Version.Pack_Index_Cache is
       end loop;
    end Match_Prefix;
 
+   procedure List_Prefix
+     (Item   : Cache;
+      Prefix : String;
+      Into   : in out Version.Objects.Object_Id_Vectors.Vector)
+   is
+      Prefix_Text : constant String :=
+        Ada.Characters.Handling.To_Lower (Prefix);
+      Cursor      : Location_Maps.Cursor := Item.Locations.First;
+   begin
+      while Location_Maps.Has_Element (Cursor) loop
+         declare
+            Candidate      : constant Version.Objects.Hex_Object_Id :=
+              Location_Maps.Key (Cursor);
+            Candidate_Text : constant String := To_String (Candidate);
+         begin
+            if Candidate_Text'Length >= Prefix_Text'Length
+              and then Candidate_Text
+                (Candidate_Text'First
+                 .. Candidate_Text'First + Prefix_Text'Length - 1)
+                = Prefix_Text
+            then
+               Into.Append (Candidate);
+            end if;
+         end;
+
+         Location_Maps.Next (Cursor);
+      end loop;
+   end List_Prefix;
+
 end Version.Pack_Index_Cache;
