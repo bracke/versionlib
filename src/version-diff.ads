@@ -28,6 +28,8 @@ package Version.Diff is
       Abbrev         : Natural := 7;
       Compact_Summary : Boolean := False;
       Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0;
       Diff_Filter     : Ada.Strings.Unbounded.Unbounded_String :=
         Ada.Strings.Unbounded.Null_Unbounded_String;
       Detect_Renames : Rename_Detection := Renames_Default;

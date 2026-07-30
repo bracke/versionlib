@@ -858,7 +858,10 @@ package body Version.Log is
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
       Rename_Score   : Natural := 0;
-      Date_Mode      : String := "") return String
+      Date_Mode      : String := "";
+      Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0) return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
@@ -933,6 +936,9 @@ package body Version.Log is
                      Detect_Renames => Detect,
                      Rename_Score   => Rename_Score,
                      Context_Lines  => Context,
+                     Stat_Width      => Stat_Width,
+                     Stat_Name_Width => Stat_Name_Width,
+                     Stat_Count      => Stat_Count,
                      others         => <>);
                   Patch_Opts : constant Version.Diff.Diff_Options :=
                     (Detect_Renames => Detect,
@@ -1331,7 +1337,10 @@ package body Version.Log is
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
       Rename_Score   : Natural := 0;
-      Date_Mode      : String := "") return String
+      Date_Mode      : String := "";
+      Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0) return String
    is
       Objects : Version.Object_Cache.Object_Cache;
       In_Set  : Id_Sets.Set;
@@ -1383,7 +1392,10 @@ package body Version.Log is
                   Show_Notes     => Show_Notes,
                   Paths          => Paths,
                   Rename_Score   => Rename_Score,
-                  Date_Mode      => Date_Mode));
+                  Date_Mode      => Date_Mode,
+                  Stat_Width      => Stat_Width,
+                  Stat_Name_Width => Stat_Name_Width,
+                  Stat_Count      => Stat_Count));
 
             Version.Log_Graph.Update (G, C, Parents);
 
@@ -1460,7 +1472,10 @@ package body Version.Log is
       Show_Notes     : Boolean := True;
       Max_Count      : Natural := 0;
       Rename_Score   : Natural := 0;
-      Date_Mode      : String := "") return String
+      Date_Mode      : String := "";
+      Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0) return String
    is
       Objects  : Version.Object_Cache.Object_Cache;
       Has_Diff : constant Boolean :=
@@ -1634,7 +1649,10 @@ package body Version.Log is
                   Show_Notes     => Show_Notes,
                   Paths          => Spec,
                   Rename_Score   => Rename_Score,
-                  Date_Mode      => Date_Mode));
+                  Date_Mode      => Date_Mode,
+                  Stat_Width      => Stat_Width,
+                  Stat_Name_Width => Stat_Name_Width,
+                  Stat_Count      => Stat_Count));
          end;
       end loop;
 

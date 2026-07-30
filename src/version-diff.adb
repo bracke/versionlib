@@ -1344,7 +1344,9 @@ package body Version.Diff is
       Min_Count_Width : Natural := 0;
       Apply_Style     : Boolean := False;
       Compact         : Boolean := False;
-      Stat_Width      : Natural := 0) return String
+      Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0) return String
    is
       --  `git --compact-summary` annotates the name column: "(new)"/"(gone)"
       --  for a created/deleted file and "(mode +x)"/"(mode -x)" for an exec
@@ -1384,6 +1386,7 @@ package body Version.Diff is
       Count_W   : Natural := 0;
       Total_Ins : Natural := 0;
       Total_Del : Natural := 0;
+      Shown     : Natural := 0;   --  files printed so far (for --stat-count)
       LF        : constant Character := Character'Val (10);
 
       Max_Change : Natural := 0;
@@ -1454,27 +1457,49 @@ package body Version.Diff is
          return "";
       end if;
 
-      for I in Files.First_Index .. Files.Last_Index loop
-         declare
-            F : constant Stat_Entry := Files.Element (I);
-         begin
-            Name_W := Natural'Max (Name_W, Width_Name (F)'Length);
-            if F.Binary then
-               --  "Bin XXX -> YYY bytes" is not scaled, but it does set the
-               --  width the graph column has to accommodate.
-               Bin_W :=
-                 Natural'Max
-                   (Bin_W,
-                    14 + Count_Image (F.Old_Size)'Length
-                    + Count_Image (F.New_Size)'Length);
-               Count_W := Natural'Max (Count_W, 3);
-            else
-               Max_Change := Natural'Max (Max_Change, F.Ins + F.Del);
-               Total_Ins := Total_Ins + F.Ins;
-               Total_Del := Total_Del + F.Del;
-            end if;
-         end;
-      end loop;
+      --  With --stat-count only the first N files are printed, so git sizes the
+      --  name and graph columns from just those; the footer totals below still
+      --  sum every file.
+      declare
+         Shown_Limit : constant Natural :=
+           (if Stat_Count > 0 and then Stat_Count < Natural (Files.Length)
+            then Stat_Count else Natural (Files.Length));
+         Idx : Natural := 0;
+      begin
+         for I in Files.First_Index .. Files.Last_Index loop
+            declare
+               F : constant Stat_Entry := Files.Element (I);
+            begin
+               Idx := Idx + 1;
+               if not F.Binary then
+                  Total_Ins := Total_Ins + F.Ins;
+                  Total_Del := Total_Del + F.Del;
+               end if;
+               if Idx <= Shown_Limit then
+                  Name_W := Natural'Max (Name_W, Width_Name (F)'Length);
+                  if F.Binary then
+                     --  "Bin XXX -> YYY bytes" is not scaled, but it does set
+                     --  the width the graph column has to accommodate.
+                     Bin_W :=
+                       Natural'Max
+                         (Bin_W,
+                          14 + Count_Image (F.Old_Size)'Length
+                          + Count_Image (F.New_Size)'Length);
+                     Count_W := Natural'Max (Count_W, 3);
+                  else
+                     Max_Change := Natural'Max (Max_Change, F.Ins + F.Del);
+                  end if;
+               end if;
+            end;
+         end loop;
+      end;
+
+      --  git's --stat-name-width (the second field of --stat=W,N) caps the name
+      --  column: a shorter name column is honoured, but it never widens past the
+      --  longest name actually shown; the print loop elides names over the cap.
+      if Stat_Name_Width > 0 and then Stat_Name_Width < Name_W then
+         Name_W := Stat_Name_Width;
+      end if;
 
       Count_W :=
         Natural'Max (Count_W, Count_Image (Max_Change)'Length);
@@ -1511,7 +1536,10 @@ package body Version.Diff is
          --  per-file bar loop is skipped; the totals it needs were summed
          --  in the pre-pass above.
          for I in Files.First_Index .. Files.Last_Index loop
-           if Show_Stat then
+           if Show_Stat
+             and then (Stat_Count = 0 or else Shown < Stat_Count)
+           then
+            Shown := Shown + 1;
             declare
                F    : constant Stat_Entry := Files.Element (I);
                Full : constant String := Disp_Name (F);
@@ -1595,6 +1623,14 @@ package body Version.Diff is
             end;
            end if;
          end loop;
+
+         --  git caps the per-file lines at --stat-count and marks the rest with
+         --  a lone " ..." line; the footer still counts every file.
+         if Show_Stat and then Stat_Count > 0
+           and then Stat_Count < Natural (Files.Length)
+         then
+            Append (Result, " ..." & LF);
+         end if;
 
          declare
             N : constant Natural := Natural (Files.Length);
@@ -1835,6 +1871,8 @@ package body Version.Diff is
       Abbrev      : Natural := 7;
       Compact     : Boolean := False;
       Stat_Width  : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0;
       Diff_Filter : String := "";
       Detect_Renames : Boolean := False;
       Rename_Score   : Natural := 0;
@@ -2192,7 +2230,8 @@ package body Version.Diff is
          return Emit_Stat
            (Stats, Show_Stat => Stat, Show_Summary => Summary,
             Show_Numstat => Numstat, Show_Shortstat => Shortstat,
-            Compact => Compact, Stat_Width => Stat_Width);
+            Compact => Compact, Stat_Width => Stat_Width,
+            Stat_Name_Width => Stat_Name_Width, Stat_Count => Stat_Count);
       end if;
       return To_String (Result);
    end Diff_Sides;
@@ -2230,6 +2269,8 @@ package body Version.Diff is
                  Raw            => Options.Raw, Abbrev => Options.Abbrev,
                  Compact        => Options.Compact_Summary,
                  Stat_Width     => Options.Stat_Width,
+                 Stat_Name_Width => Options.Stat_Name_Width,
+                 Stat_Count      => Options.Stat_Count,
                  Diff_Filter => To_String (Options.Diff_Filter),
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
@@ -2282,6 +2323,8 @@ package body Version.Diff is
                  Raw            => Options.Raw, Abbrev => Options.Abbrev,
                  Compact        => Options.Compact_Summary,
                  Stat_Width     => Options.Stat_Width,
+                 Stat_Name_Width => Options.Stat_Name_Width,
+                 Stat_Count      => Options.Stat_Count,
                  Diff_Filter => To_String (Options.Diff_Filter),
                  Detect_Renames => Renames_Enabled (Repo, Options),
                  Rename_Score   => Options.Rename_Score,
@@ -2325,6 +2368,8 @@ package body Version.Diff is
               Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Stat_Name_Width => Options.Stat_Name_Width,
+              Stat_Count      => Options.Stat_Count,
               Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
@@ -2373,6 +2418,8 @@ package body Version.Diff is
               Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Stat_Name_Width => Options.Stat_Name_Width,
+              Stat_Count      => Options.Stat_Count,
               Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
@@ -2433,6 +2480,8 @@ package body Version.Diff is
            Raw            => Options.Raw, Abbrev => Options.Abbrev,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
+           Stat_Name_Width => Options.Stat_Name_Width,
+           Stat_Count      => Options.Stat_Count,
            Diff_Filter => To_String (Options.Diff_Filter),
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
@@ -2470,6 +2519,8 @@ package body Version.Diff is
            Raw            => Options.Raw, Abbrev => Options.Abbrev,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
+           Stat_Name_Width => Options.Stat_Name_Width,
+           Stat_Count      => Options.Stat_Count,
            Diff_Filter => To_String (Options.Diff_Filter),
            Detect_Renames => Renames_Enabled (Repo, Options),
            Rename_Score   => Options.Rename_Score,
@@ -2510,6 +2561,8 @@ package body Version.Diff is
            Raw            => Options.Raw, Abbrev => Options.Abbrev,
            Compact        => Options.Compact_Summary,
            Stat_Width     => Options.Stat_Width,
+           Stat_Name_Width => Options.Stat_Name_Width,
+           Stat_Count      => Options.Stat_Count,
            Diff_Filter => To_String (Options.Diff_Filter),
            Numstat => Options.Numstat, Shortstat => Options.Shortstat,
            Detect_Renames => Renames_Enabled (Repo, Options),
@@ -2559,6 +2612,8 @@ package body Version.Diff is
               Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Stat_Name_Width => Options.Stat_Name_Width,
+              Stat_Count      => Options.Stat_Count,
               Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
@@ -2618,6 +2673,8 @@ package body Version.Diff is
               Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Stat_Name_Width => Options.Stat_Name_Width,
+              Stat_Count      => Options.Stat_Count,
               Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
@@ -2662,6 +2719,8 @@ package body Version.Diff is
               Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Stat_Name_Width => Options.Stat_Name_Width,
+              Stat_Count      => Options.Stat_Count,
               Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),
@@ -2713,6 +2772,8 @@ package body Version.Diff is
               Raw            => Options.Raw, Abbrev => Options.Abbrev,
               Compact        => Options.Compact_Summary,
               Stat_Width     => Options.Stat_Width,
+              Stat_Name_Width => Options.Stat_Name_Width,
+              Stat_Count      => Options.Stat_Count,
               Diff_Filter => To_String (Options.Diff_Filter),
               Numstat => Options.Numstat, Shortstat => Options.Shortstat,
               Detect_Renames => Renames_Enabled (Repo, Options),

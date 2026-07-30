@@ -44,7 +44,13 @@ package Version.Log is
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
       Rename_Score   : Natural := 0;
-      Date_Mode      : String := "") return String;
+      Date_Mode      : String := "";
+      Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0) return String;
+   --  Stat_Width/Stat_Name_Width/Stat_Count are git's `--stat=<w>,<n>,<c>` (and
+   --  `--stat-width`/`--stat-name-width`/`--stat-count`) sizing for the diffstat
+   --  block; 0 leaves each at git's default.
    --  Rename_Score is git's -M<n>/-C<n> rename similarity threshold (0 =
    --  git's default); a non-zero value forces rename detection on.
    --  Paths, when non-empty, limits each commit's --stat/-p/--raw diff to the
@@ -120,7 +126,10 @@ package Version.Log is
       Show_Notes     : Boolean := True;
       Max_Count      : Natural := 0;
       Rename_Score   : Natural := 0;
-      Date_Mode      : String := "") return String;
+      Date_Mode      : String := "";
+      Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0) return String;
    --  git's `log --follow <path>`: walk first-parent history from Start
    --  showing the commits that changed the single file Path, following it back
    --  across renames (rename-detected diff against each first parent; at a
@@ -146,7 +155,10 @@ package Version.Log is
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
       Rename_Score   : Natural := 0;
-      Date_Mode      : String := "") return String;
+      Date_Mode      : String := "";
+      Stat_Width      : Natural := 0;
+      Stat_Name_Width : Natural := 0;
+      Stat_Count      : Natural := 0) return String;
    --  git's `log --graph` in the default (multi-line) format: each commit's
    --  full Log_List_Text block with the ASCII commit graph drawn down its left
    --  edge -- the commit line, then a graph column line prefixing every
