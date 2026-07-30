@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 
 with Regexp;
 
+with Version.Objects;
 with Version.Pathspec;
 with Version.Repository;
 
@@ -62,6 +63,20 @@ package Version.Grep is
       return Match_Vectors.Vector;
    --  Search the working-tree content of tracked files (stage 0), optionally
    --  limited to Pathspecs. Raises Ada.IO_Exceptions.Data_Error when Pattern
+   --  is not a valid regular expression.
+
+   function Search_Tree
+     (Repo      : Version.Repository.Repository_Handle;
+      Tree_Id   : Version.Objects.Hex_Object_Id;
+      Pattern   : String;
+      Opts      : Options := (others => <>);
+      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector :=
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector)
+      return Match_Vectors.Vector;
+   --  Like Search, but over the blobs of a committed tree (git's
+   --  `grep <tree-ish>`) rather than the working tree: every file in Tree_Id
+   --  is read from the object store, optionally limited to Pathspecs. Paths are
+   --  the tree-relative paths. Raises Ada.IO_Exceptions.Data_Error when Pattern
    --  is not a valid regular expression.
 
    --  Backward-compatible convenience: a simple case-toggled basic search.

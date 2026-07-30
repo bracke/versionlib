@@ -3,6 +3,7 @@ with Ada.IO_Exceptions;
 with Regexp;
 
 with Version.Files;
+with Version.Objects;
 with Version.Staging;
 
 package body Version.Grep is
@@ -99,6 +100,62 @@ package body Version.Grep is
       return Found.Status = Regexp.Match_Ok;
    end Matches;
 
+   --  Split Content into lines and append every matching line, the shared
+   --  core of the working-tree and tree searches. Line numbers are 1-based;
+   --  a file is flagged binary when a NUL appears in its first 8000 bytes
+   --  (git's buffer_is_binary).
+   procedure Scan_Content
+     (Path    : String;
+      Content : String;
+      Expr    : Regexp.Regexp;
+      M_Opts  : Regexp.Match_Options;
+      Invert  : Boolean;
+      Result  : in out Match_Vectors.Vector)
+   is
+      use type Regexp.Match_Status;
+      Start   : Positive := Content'First;
+      Line_No : Positive := 1;
+      Is_Bin  : constant Boolean :=
+        (for some K in Content'First ..
+           Integer'Min (Content'Last, Content'First + 7999)
+         => Content (K) = Character'Val (0));
+
+      function Hit (Line : String) return Boolean is
+         Found : constant Regexp.Match_Result :=
+           Regexp.Find_First (Expr, Line, M_Opts);
+      begin
+         return (Found.Status = Regexp.Match_Ok) xor Invert;
+      end Hit;
+
+      procedure Emit (Line : String) is
+      begin
+         if Hit (Line) then
+            Result.Append
+              (Match'
+                 (Path    => To_Unbounded_String (Path),
+                  Line_No => Line_No,
+                  Text    => To_Unbounded_String (Line),
+                  Binary  => Is_Bin));
+         end if;
+         Line_No := Line_No + 1;
+      end Emit;
+   begin
+      for I in Content'Range loop
+         if Content (I) = LF then
+            Emit (Content (Start .. I - 1));
+            Start := I + 1;
+         end if;
+      end loop;
+      if Start <= Content'Last then
+         Emit (Content (Start .. Content'Last));
+      end if;
+   end Scan_Content;
+
+   function Match_Options_Of (Opts : Options) return Regexp.Match_Options is
+     (Case_Sensitive => not Opts.Ignore_Case,
+      Whole_Word     => Opts.Word_Match,
+      others         => <>);
+
    function Search
      (Repo      : Version.Repository.Repository_Handle;
       Pattern   : String;
@@ -107,24 +164,12 @@ package body Version.Grep is
         Version.Pathspec.Pathspec_Vectors.Empty_Vector)
       return Match_Vectors.Vector
    is
-      use type Regexp.Match_Status;
       Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
         Version.Staging.Load (Repo);
       Root    : constant String := Version.Repository.Root_Path (Repo);
       Result  : Match_Vectors.Vector;
       Expr    : constant Regexp.Regexp := Compile_Pattern (Pattern, Opts.Kind);
-      M_Opts  : constant Regexp.Match_Options :=
-        (Case_Sensitive => not Opts.Ignore_Case,
-         Whole_Word     => Opts.Word_Match,
-         others         => <>);
-
-      function Hit (Line : String) return Boolean is
-         Found   : constant Regexp.Match_Result :=
-           Regexp.Find_First (Expr, Line, M_Opts);
-         Matched : constant Boolean := Found.Status = Regexp.Match_Ok;
-      begin
-         return Matched xor Opts.Invert;
-      end Hit;
+      M_Opts  : constant Regexp.Match_Options := Match_Options_Of (Opts);
    begin
       for E of Entries loop
          if E.Stage = 0 then
@@ -138,42 +183,9 @@ package body Version.Grep is
                      Full : constant String := Version.Files.Join (Root, Path);
                   begin
                      if Version.Files.Is_Ordinary_File (Full) then
-                        declare
-                           Content : constant String :=
-                             Version.Files.Read_Binary_File (Full);
-                           Start   : Positive := Content'First;
-                           Line_No : Positive := 1;
-
-                           --  git's buffer_is_binary: a NUL in the first 8000
-                           --  bytes marks the file binary.
-                           Is_Bin  : constant Boolean :=
-                             (for some K in Content'First ..
-                                Integer'Min (Content'Last, Content'First + 7999)
-                              => Content (K) = Character'Val (0));
-
-                           procedure Emit (Line : String) is
-                           begin
-                              if Hit (Line) then
-                                 Result.Append
-                                   (Match'
-                                      (Path    => To_Unbounded_String (Path),
-                                       Line_No => Line_No,
-                                       Text    => To_Unbounded_String (Line),
-                                       Binary  => Is_Bin));
-                              end if;
-                              Line_No := Line_No + 1;
-                           end Emit;
-                        begin
-                           for I in Content'Range loop
-                              if Content (I) = LF then
-                                 Emit (Content (Start .. I - 1));
-                                 Start := I + 1;
-                              end if;
-                           end loop;
-                           if Start <= Content'Last then
-                              Emit (Content (Start .. Content'Last));
-                           end if;
-                        end;
+                        Scan_Content
+                          (Path, Version.Files.Read_Binary_File (Full),
+                           Expr, M_Opts, Opts.Invert, Result);
                      end if;
                   end;
                end if;
@@ -182,6 +194,42 @@ package body Version.Grep is
       end loop;
       return Result;
    end Search;
+
+   function Search_Tree
+     (Repo      : Version.Repository.Repository_Handle;
+      Tree_Id   : Version.Objects.Hex_Object_Id;
+      Pattern   : String;
+      Opts      : Options := (others => <>);
+      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector :=
+        Version.Pathspec.Pathspec_Vectors.Empty_Vector)
+      return Match_Vectors.Vector
+   is
+      use type Version.Objects.Tree_Entry_Kind;
+      Entries : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+        Version.Objects.Flatten_Tree (Repo, Tree_Id);
+      Result  : Match_Vectors.Vector;
+      Expr    : constant Regexp.Regexp := Compile_Pattern (Pattern, Opts.Kind);
+      M_Opts  : constant Regexp.Match_Options := Match_Options_Of (Opts);
+   begin
+      for E of Entries loop
+         if E.Kind = Version.Objects.Tree_Blob then
+            declare
+               Path : constant String := To_String (E.Path);
+            begin
+               if Pathspecs.Is_Empty
+                 or else Version.Pathspec.Matches_Any (Pathspecs, Path)
+               then
+                  Scan_Content
+                    (Path,
+                     Version.Objects.Content
+                       (Version.Objects.Read_Object (Repo, E.Id)),
+                     Expr, M_Opts, Opts.Invert, Result);
+               end if;
+            end;
+         end if;
+      end loop;
+      return Result;
+   end Search_Tree;
 
    function Search
      (Repo        : Version.Repository.Repository_Handle;
