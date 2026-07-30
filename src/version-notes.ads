@@ -28,11 +28,15 @@ package Version.Notes is
       Element_Type => Note_Entry);
 
    procedure Add
-     (Repo    : Version.Repository.Repository_Handle;
-      Commit  : Version.Objects.Hex_Object_Id;
-      Message : String;
-      Ref     : String := Default_Ref);
-   --  Set (or replace) the note for Commit and advance the notes ref.
+     (Repo            : Version.Repository.Repository_Handle;
+      Commit          : Version.Objects.Hex_Object_Id;
+      Message         : String;
+      Ref             : String := Default_Ref;
+      Cleanup_Message : Boolean := True);
+   --  Set (or replace) the note for Commit and advance the notes ref. Message
+   --  is whitespace-cleaned (trailing blanks trimmed, newline-terminated)
+   --  unless Cleanup_Message is False, in which case it becomes the note blob
+   --  verbatim -- the caller having already assembled the exact bytes.
 
    function Show
      (Repo   : Version.Repository.Repository_Handle;
@@ -60,12 +64,15 @@ package Version.Notes is
    --  Drop Commit's note. Raises when it has none, as git does.
 
    procedure Append
-     (Repo    : Version.Repository.Repository_Handle;
-      Commit  : Version.Objects.Hex_Object_Id;
-      Message : String;
-      Ref     : String := Default_Ref);
+     (Repo            : Version.Repository.Repository_Handle;
+      Commit          : Version.Objects.Hex_Object_Id;
+      Message         : String;
+      Ref             : String := Default_Ref;
+      Cleanup_Message : Boolean := True);
    --  Add Message to any existing note, separated by a blank line -- which is
-   --  how git joins them, and why appending is not merely a rewrite.
+   --  how git joins them, and why appending is not merely a rewrite. When
+   --  Cleanup_Message is False, Message is appended verbatim (the caller has
+   --  already assembled the exact bytes) rather than whitespace-cleaned.
 
    procedure Copy
      (Repo  : Version.Repository.Repository_Handle;

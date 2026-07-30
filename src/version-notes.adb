@@ -111,15 +111,17 @@ package body Version.Notes is
    end Commit_Notes_Tree;
 
    procedure Add
-     (Repo    : Version.Repository.Repository_Handle;
-      Commit  : Version.Objects.Hex_Object_Id;
-      Message : String;
-      Ref     : String := Default_Ref)
+     (Repo            : Version.Repository.Repository_Handle;
+      Commit          : Version.Objects.Hex_Object_Id;
+      Message         : String;
+      Ref             : String := Default_Ref;
+      Cleanup_Message : Boolean := True)
    is
       Entries : Version.Staging.Index_Entry_Vectors.Vector :=
         Notes_Tree_Entries (Repo, Ref);
       Blob    : constant Version.Objects.Hex_Object_Id :=
-        Version.Write.Write_Blob (Repo, Cleanup (Message));
+        Version.Write.Write_Blob
+          (Repo, (if Cleanup_Message then Cleanup (Message) else Message));
    begin
       Version.Staging.Replace_Entry
         (Entries,
@@ -212,19 +214,23 @@ package body Version.Notes is
    end Remove;
 
    procedure Append
-     (Repo    : Version.Repository.Repository_Handle;
-      Commit  : Version.Objects.Hex_Object_Id;
-      Message : String;
-      Ref     : String := Default_Ref)
+     (Repo            : Version.Repository.Repository_Handle;
+      Commit          : Version.Objects.Hex_Object_Id;
+      Message         : String;
+      Ref             : String := Default_Ref;
+      Cleanup_Message : Boolean := True)
    is
       Existing : constant String := Show (Repo, Commit, Ref);
    begin
       if Existing'Length = 0 then
-         Add (Repo, Commit, Message, Ref);
+         Add (Repo, Commit, Message, Ref, Cleanup_Message);
       else
-         --  git separates an appended paragraph with a blank line.
+         --  git separates an appended paragraph with a blank line. Cleanup
+         --  normalises the existing note to a single trailing newline so the
+         --  extra LF makes exactly that blank line; the joined result is then
+         --  written verbatim when the caller supplied pre-assembled bytes.
          Add (Repo, Commit,
-              Cleanup (Existing) & ASCII.LF & Message, Ref);
+              Cleanup (Existing) & ASCII.LF & Message, Ref, Cleanup_Message);
       end if;
    end Append;
 
