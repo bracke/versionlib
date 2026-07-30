@@ -306,9 +306,14 @@ package body Version.Describe is
       Best_Name : Unbounded_String;
       Best_Dist : Natural := Natural'Last;
       Best_Exact : Boolean := False;
-      Best_Annotated : Boolean := False;
+      --  git's describe priority: annotated tag 2, lightweight tag 1, any
+      --  other ref 0. On an equal distance the higher priority wins; two
+      --  annotated tags break by the newest tagger date; every other tie
+      --  keeps the alphabetically smallest full refname (git's found order,
+      --  since it iterates refs sorted by full name).
+      Best_Prio  : Integer := -1;
       Best_Time  : Long_Long_Integer := Long_Long_Integer'First;
-      Any        : Boolean := False;
+      Best_Ref   : Unbounded_String;
 
       --  The tagger timestamp of the annotated tag Ref points at (0 otherwise),
       --  so two tags on one commit break the tie by date, newest first.
@@ -351,7 +356,7 @@ package body Version.Describe is
             return 0;
       end Ref_Tag_Time;
 
-      procedure Consider (Display, Ref : String; Annotated : Boolean) is
+      procedure Consider (Display, Ref : String; Prio : Natural) is
       begin
          if Pattern'Length > 0
            and then not Glob (Display, Pattern)
@@ -372,28 +377,30 @@ package body Version.Describe is
                         (Repo, Base_Id => Ref_Commit, Derived_Id => Commit);
          begin
             if Reachable then
-               Any := True;
                declare
                   Dist : constant Natural :=
                     (if Exact then 0
                      else Distance (Repo, Ref_Commit, Commit));
                   This_Time : constant Long_Long_Integer :=
-                    (if Annotated then Ref_Tag_Time (Ref) else 0);
+                    (if Prio = 2 then Ref_Tag_Time (Ref) else 0);
+                  --  Nearer wins; then higher priority; then (two annotated
+                  --  tags) the newest tagger date; then the smallest full ref.
+                  Better : constant Boolean :=
+                    Dist < Best_Dist
+                    or else (Dist = Best_Dist and then Prio > Best_Prio)
+                    or else (Dist = Best_Dist and then Prio = Best_Prio
+                             and then Prio = 2 and then This_Time > Best_Time)
+                    or else (Dist = Best_Dist and then Prio = Best_Prio
+                             and then (Prio /= 2 or else This_Time = Best_Time)
+                             and then Ref < Best_Ref);
                begin
-                  --  Nearer wins; on a tie git prefers an annotated tag, then
-                  --  the newest tagger date.
-                  if Dist < Best_Dist
-                    or else (Dist = Best_Dist
-                             and then Annotated and then not Best_Annotated)
-                    or else (Dist = Best_Dist
-                             and then Annotated = Best_Annotated
-                             and then This_Time > Best_Time)
-                  then
+                  if Better then
                      Best_Dist := Dist;
                      Best_Name := To_Unbounded_String (Display);
                      Best_Exact := Exact;
-                     Best_Annotated := Annotated;
+                     Best_Prio := Prio;
                      Best_Time := This_Time;
+                     Best_Ref := To_Unbounded_String (Ref);
                   end if;
                end;
             end if;
@@ -412,12 +419,12 @@ package body Version.Describe is
                    (Repo, Version.Refs.Resolve_Ref (Repo, Ref)))
               = Version.Objects.Tag_Object;
          begin
-            Consider ("tags/" & To_String (T), Ref, Annot);
+            Consider ("tags/" & To_String (T), Ref, (if Annot then 2 else 1));
          end;
       end loop;
       for B of Version.Refs.List_Branches (Repo) loop
          Consider
-           ("heads/" & To_String (B), "refs/heads/" & To_String (B), False);
+           ("heads/" & To_String (B), "refs/heads/" & To_String (B), 0);
       end loop;
 
       if Length (Best_Name) > 0 then
