@@ -4680,7 +4680,15 @@ package body Version.Branch is
          declare
             Name : constant String := To_String (E.Display);
          begin
-            Append (Text, (if E.Is_Cur then "* " else "  "));
+            --  git marks a branch checked out in another worktree with "+ ".
+            Append
+              (Text,
+               (if E.Is_Cur then "* "
+                elsif E.Is_Local
+                  and then Version.Worktrees.Branch_Checked_Out_Elsewhere
+                             (Name)
+                then "+ "
+                else "  "));
             Append (Text, Name);
             --  git pads the name to the widest, plus one separating space.
             Append (Text, Spaces (Max_Name_Length - Name'Length + 1));
