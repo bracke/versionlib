@@ -10,8 +10,12 @@ with Version.Repository;
 package Version.Blame is
 
    type Line_Blame is record
-      Commit : Version.Objects.Object_Id_Storage;
-      Text   : Ada.Strings.Unbounded.Unbounded_String;
+      Commit    : Version.Objects.Object_Id_Storage;
+      Text      : Ada.Strings.Unbounded.Unbounded_String;
+      --  The line's number (1-based) in the commit that introduced it, which
+      --  git's `-n`/`--porcelain` report; for an uncommitted line it is the
+      --  line's number in the working file.
+      Orig_Line : Natural := 0;
    end record;
 
    package Blame_Vectors is new Ada.Containers.Vectors

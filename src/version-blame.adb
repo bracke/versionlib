@@ -75,6 +75,9 @@ package body Version.Blame is
       Assigned : array (1 .. N) of Boolean;
       Blamed   : array (1 .. N) of Version.Objects.Object_Id_Storage;
       Pos      : Nat_Array (1 .. N);
+      --  The line's number in the commit it is blamed to, captured at the
+      --  moment of assignment (Pos then holds that position).
+      Orig     : Nat_Array (1 .. N);
       C        : Version.Objects.Hex_Object_Id := Tip;
       Cur_Text : Unbounded_String := To_Unbounded_String (Tip_Text);
    begin
@@ -83,6 +86,8 @@ package body Version.Blame is
          Assigned (I) := Pos (I) = 0;
          Blamed (I) :=
            (if Pos (I) = 0 then Version.Objects.Zero_Object_Id else Tip);
+         --  An uncommitted line keeps its working-tree line number.
+         Orig (I) := (if Pos (I) = 0 then I else 0);
       end loop;
 
       loop
@@ -94,6 +99,7 @@ package body Version.Blame is
                for I in 1 .. N loop
                   if not Assigned (I) and then Pos (I) > 0 then
                      Blamed (I) := C;
+                     Orig (I) := Pos (I);
                      Assigned (I) := True;
                   end if;
                end loop;
@@ -120,6 +126,7 @@ package body Version.Blame is
                         then
                            --  Line at Pos(I) was introduced by C.
                            Blamed (I) := C;
+                           Orig (I) := Pos (I);
                            Assigned (I) := True;
                         else
                            Pos (I) := A (Pos (I));
@@ -137,8 +144,9 @@ package body Version.Blame is
          for I in 1 .. N loop
             Result.Append
               (Line_Blame'
-                 (Commit => Blamed (I),
-                  Text   => Final.Element (I)));
+                 (Commit    => Blamed (I),
+                  Text      => Final.Element (I),
+                  Orig_Line => Orig (I)));
          end loop;
       end return;
    end Walk_History;
