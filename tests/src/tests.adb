@@ -1,11 +1,19 @@
+with Ada.Command_Line;
+with AUnit;
 with Ada.Environment_Variables;
 with AUnit.Reporter.Text;
 with AUnit.Run;
 with All_Suites;
 
+--  AUnit's plain Test_Runner reports success however many assertions
+--  failed, so a build server ticks a job green over a failing suite.
+--  The outcome is carried in the exit status here instead.
 procedure Tests is
-   procedure Runner is new AUnit.Run.Test_Runner (All_Suites.Suite);
+   use type AUnit.Status;
+
+   function Runner is new AUnit.Run.Test_Runner_With_Status (All_Suites.Suite);
    Reporter : AUnit.Reporter.Text.Text_Reporter;
+   Status   : AUnit.Status;
 begin
    --  Run hermetically: now that Version.Config reads git's full system/global
    --  config stack, keep the developer's ambient ~/.gitconfig and
@@ -21,5 +29,9 @@ begin
    Ada.Environment_Variables.Set ("GIT_CONFIG_COUNT", "1");
    Ada.Environment_Variables.Set ("GIT_CONFIG_KEY_0", "init.defaultBranch");
    Ada.Environment_Variables.Set ("GIT_CONFIG_VALUE_0", "main");
-   Runner (Reporter);
+   Status := Runner (Reporter);
+
+   if Status /= AUnit.Success then
+      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+   end if;
 end Tests;
