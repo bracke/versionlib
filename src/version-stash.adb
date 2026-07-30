@@ -1,5 +1,4 @@
 with Ada.Containers; use Ada.Containers;
-with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Directories; use Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
@@ -7,7 +6,6 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with Version.Branch;
-with Version.Diff;
 with Version.Files;
 with Version.Filesystem_Guard;
 with Version.Ignore;
@@ -694,107 +692,6 @@ package body Version.Stash is
       end if;
    end Restore_Selected_Tracked_Paths;
 
-   package Tree_Entry_Maps is new Ada.Containers.Indefinite_Ordered_Maps
-     (Key_Type     => String,
-      Element_Type => Version.Objects.Tree_Entry);
-
-   package Path_Flags is new Ada.Containers.Indefinite_Ordered_Maps
-     (Key_Type     => String,
-      Element_Type => Boolean);
-
-   procedure Append_Line (Text : in out Unbounded_String; Line : String) is
-   begin
-      Append (Text, Line);
-      Append (Text, Character'Val (10));
-   end Append_Line;
-
-   function Tree_Map
-     (Items : Version.Objects.Tree_Entry_Vectors.Vector)
-      return Tree_Entry_Maps.Map
-   is
-      Result : Tree_Entry_Maps.Map;
-   begin
-      if not Items.Is_Empty then
-         for I in Items.First_Index .. Items.Last_Index loop
-            Result.Include (To_String (Items.Element (I).Path), Items.Element (I));
-         end loop;
-      end if;
-      return Result;
-   end Tree_Map;
-
-   function Commit_Tree
-     (Repo      : Version.Repository.Repository_Handle;
-      Commit_Id : Version.Objects.Hex_Object_Id)
-      return Version.Objects.Tree_Entry_Vectors.Vector
-   is
-      Obj : constant Version.Objects.Git_Object :=
-        Version.Objects.Read_Object (Repo, Commit_Id);
-   begin
-      if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
-         raise Ada.IO_Exceptions.Data_Error with "object is not a commit: " & To_String (Commit_Id);
-      end if;
-
-      return
-        Version.Objects.Flatten_Tree
-          (Repo => Repo, Tree_Id => Version.Objects.Commit_Tree_Id (Obj));
-   end Commit_Tree;
-
-   procedure Append_Tree_Summary
-     (Result : in out Unbounded_String;
-      Olds   : Version.Objects.Tree_Entry_Vectors.Vector;
-      News   : Version.Objects.Tree_Entry_Vectors.Vector;
-      Seen   : in out Path_Flags.Map)
-   is
-      Old_Map : constant Tree_Entry_Maps.Map := Tree_Map (Olds);
-      New_Map : constant Tree_Entry_Maps.Map := Tree_Map (News);
-      Paths   : Path_Flags.Map;
-   begin
-      if not Olds.Is_Empty then
-         for I in Olds.First_Index .. Olds.Last_Index loop
-            Paths.Include (To_String (Olds.Element (I).Path), True);
-         end loop;
-      end if;
-
-      if not News.Is_Empty then
-         for I in News.First_Index .. News.Last_Index loop
-            Paths.Include (To_String (News.Element (I).Path), True);
-         end loop;
-      end if;
-
-      declare
-         Cursor : Path_Flags.Cursor := Paths.First;
-      begin
-         while Path_Flags.Has_Element (Cursor) loop
-            declare
-               Path       : constant String := Path_Flags.Key (Cursor);
-               Old_Cursor : constant Tree_Entry_Maps.Cursor := Old_Map.Find (Path);
-               New_Cursor : constant Tree_Entry_Maps.Cursor := New_Map.Find (Path);
-               Old_Has    : constant Boolean := Tree_Entry_Maps.Has_Element (Old_Cursor);
-               New_Has    : constant Boolean := Tree_Entry_Maps.Has_Element (New_Cursor);
-            begin
-               if not Seen.Contains (Path) then
-                  if not Old_Has and then New_Has then
-                     Append_Line (Result, "A " & Path);
-                     Seen.Include (Path, True);
-                  elsif Old_Has and then not New_Has then
-                     Append_Line (Result, "D " & Path);
-                     Seen.Include (Path, True);
-                  elsif Old_Has and then New_Has
-                    and then (Tree_Entry_Maps.Element (Old_Cursor).Id
-                              /= Tree_Entry_Maps.Element (New_Cursor).Id
-                              or else Tree_Entry_Maps.Element (Old_Cursor).Mode
-                                      /= Tree_Entry_Maps.Element (New_Cursor).Mode)
-                  then
-                     Append_Line (Result, "M " & Path);
-                     Seen.Include (Path, True);
-                  end if;
-               end if;
-            end;
-            Path_Flags.Next (Cursor);
-         end loop;
-      end;
-   end Append_Tree_Summary;
-
    procedure Require_Malformed_Stash_Reflog (Condition : Boolean) is
    begin
       if not Condition then
@@ -981,37 +878,9 @@ package body Version.Stash is
       return Entries.Element (Entries.First_Index + N).Id;
    end Resolve_Stash;
 
-   function Filter_Tree
-     (Items     : Version.Objects.Tree_Entry_Vectors.Vector;
-      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector)
-      return Version.Objects.Tree_Entry_Vectors.Vector
-   is
-      Result : Version.Objects.Tree_Entry_Vectors.Vector;
-   begin
-      if Pathspecs.Is_Empty then
-         return Items;
-      end if;
-
-      if not Items.Is_Empty then
-         for I in Items.First_Index .. Items.Last_Index loop
-            declare
-               Path : constant String := To_String (Items.Element (I).Path);
-            begin
-               if Pathspecs.Is_Empty
-                 or else Version.Pathspec.Matches_Any (Pathspecs, Path)
-               then
-                  Result.Append (Items.Element (I));
-               end if;
-            end;
-         end loop;
-      end if;
-
-      return Result;
-   end Filter_Tree;
-
    function Show
      (Spec      : String := "stash@{0}";
-      Patch     : Boolean := False;
+      Options   : Version.Diff.Diff_Options := (others => <>);
       Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector)
       return String
@@ -1030,59 +899,22 @@ package body Version.Stash is
          raise Ada.IO_Exceptions.Data_Error with "malformed stash commit";
       end if;
 
+      --  git renders `stash show` as a diff between the stash and its base,
+      --  through the ordinary diff engine, so every format (the default
+      --  --stat, -p, --name-only/-status, --numstat) follows Options. Only the
+      --  tracked changes are shown; the untracked tree of an
+      --  `--include-untracked` stash (the third parent) is not, as in git.
       declare
          Base_Id : constant Version.Objects.Hex_Object_Id :=
            Parents.Element (Parents.First_Index);
       begin
-         if Patch then
-            declare
-               Result : Unbounded_String;
-            begin
-               Append
-                 (Result,
-                  Version.Diff.Diff_Commits
-                    (Repo      => Repo,
-                     Old_Id    => Base_Id,
-                     New_Id    => Stash_Id,
-                     Pathspecs => Pathspecs));
-               if Parents.Length = 3 then
-                  Append
-                    (Result,
-                     Version.Diff.Diff_Root_Commit
-                       (Repo      => Repo,
-                        Commit_Id => Parents.Element (Parents.First_Index + 2),
-                        Pathspecs => Pathspecs));
-               end if;
-               return To_String (Result);
-            end;
-         else
-            declare
-               Result : Unbounded_String;
-               Seen   : Path_Flags.Map;
-            begin
-               Append_Tree_Summary
-                 (Result => Result,
-                  Olds   => Filter_Tree (Commit_Tree (Repo, Base_Id), Pathspecs),
-                  News   => Filter_Tree (Commit_Tree (Repo, Stash_Id), Pathspecs),
-                  Seen   => Seen);
-               if Parents.Length = 3 then
-                  declare
-                     Empty : Version.Objects.Tree_Entry_Vectors.Vector;
-                  begin
-                     Append_Tree_Summary
-                       (Result => Result,
-                        Olds   => Empty,
-                        News   =>
-                          Filter_Tree
-                            (Commit_Tree
-                               (Repo, Parents.Element (Parents.First_Index + 2)),
-                             Pathspecs),
-                        Seen   => Seen);
-                  end;
-               end if;
-               return To_String (Result);
-            end;
-         end if;
+         return
+           Version.Diff.Diff_Commits
+             (Repo      => Repo,
+              Old_Id    => Base_Id,
+              New_Id    => Stash_Id,
+              Pathspecs => Pathspecs,
+              Options   => Options);
       end;
    end Show;
 

@@ -2581,7 +2581,7 @@ package body Version.Diff is
    is
    begin
       if Pathspecs.Is_Empty then
-         return Diff_Commits (Repo, Old_Id, New_Id);
+         return Diff_Commits (Repo, Old_Id, New_Id, Options);
       end if;
 
       declare

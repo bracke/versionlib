@@ -1478,14 +1478,15 @@ package body Version.Stash.Tests is
       Version.Stash.Push (Include_Untracked => True);
 
       declare
-         Text : constant String := Version.Stash.Show;
+         Text : constant String := Version.Stash.Show
+           (Options => (Name_Status => True, others => <>));
       begin
          Assert
-           (Ada.Strings.Fixed.Index (Text, "M a.txt") /= 0,
+           (Ada.Strings.Fixed.Index (Text, "M" & Character'Val (9) & "a.txt") /= 0,
             "stash show summary must list tracked modifications");
          Assert
-           (Ada.Strings.Fixed.Index (Text, "A u.txt") /= 0,
-            "stash show summary must list untracked additions");
+           (Ada.Strings.Fixed.Index (Text, "u.txt") = 0,
+            "stash show shows only tracked changes by default, as git does");
       end;
 
       Ada.Directories.Set_Directory (Old_Dir);
@@ -1512,7 +1513,7 @@ package body Version.Stash.Tests is
       Version.Stash.Push (Include_Untracked => True);
 
       declare
-         Text : constant String := Version.Stash.Show (Patch => True);
+         Text : constant String := Version.Stash.Show (Options => (others => <>));
       begin
          Assert
            (Ada.Strings.Fixed.Index
@@ -1520,8 +1521,8 @@ package body Version.Stash.Tests is
             "stash show patch must include tracked file diff");
          Assert
            (Ada.Strings.Fixed.Index
-              (Text, "diff --git a/u.txt b/u.txt") /= 0,
-            "stash show patch must include untracked file diff");
+              (Text, "diff --git a/u.txt b/u.txt") = 0,
+            "stash show patch shows only tracked changes by default, as git");
       end;
 
       Ada.Directories.Set_Directory (Old_Dir);
@@ -1551,13 +1552,14 @@ package body Version.Stash.Tests is
       Version.Pathspec.Append_Parse (Specs, "a.txt");
 
       declare
-         Text : constant String := Version.Stash.Show (Pathspecs => Specs);
+         Text : constant String := Version.Stash.Show
+           (Options => (Name_Status => True, others => <>), Pathspecs => Specs);
       begin
          Assert
-           (Ada.Strings.Fixed.Index (Text, "M a.txt") /= 0,
+           (Ada.Strings.Fixed.Index (Text, "M" & Character'Val (9) & "a.txt") /= 0,
             "stash show pathspec summary must include selected tracked path");
          Assert
-           (Ada.Strings.Fixed.Index (Text, "M b.txt") = 0,
+           (Ada.Strings.Fixed.Index (Text, "M" & Character'Val (9) & "b.txt") = 0,
             "stash show pathspec summary must omit non-selected tracked path");
          Assert
            (Ada.Strings.Fixed.Index (Text, "A u.txt") = 0,
@@ -1590,12 +1592,14 @@ package body Version.Stash.Tests is
 
       declare
          Text : constant String :=
-           Version.Stash.Show (Patch => True, Pathspecs => Specs);
+           Version.Stash.Show (Options => (others => <>), Pathspecs => Specs);
       begin
+         --  git's `stash show` shows only tracked changes, so an untracked
+         --  pathspec selects nothing (and the tracked a.txt is filtered out).
          Assert
            (Ada.Strings.Fixed.Index
-              (Text, "diff --git a/u.txt b/u.txt") /= 0,
-            "stash show pathspec patch must include selected untracked path");
+              (Text, "diff --git a/u.txt b/u.txt") = 0,
+            "stash show does not show untracked paths by default, as git");
          Assert
            (Ada.Strings.Fixed.Index
               (Text, "diff --git a/a.txt b/a.txt") = 0,

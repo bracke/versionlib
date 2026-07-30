@@ -1,6 +1,7 @@
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
+with Version.Diff;
 with Version.Objects;
 with Version.Pathspec;
 with Version.Repository;
@@ -53,10 +54,14 @@ package Version.Stash is
 
    function Show
      (Spec      : String := "stash@{0}";
-      Patch     : Boolean := False;
+      Options   : Version.Diff.Diff_Options := (others => <>);
       Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector)
       return String;
+   --  git's `stash show`: the diff between the stash and its base commit,
+   --  rendered per Options (the CLI defaults to `--stat`, git's default). A
+   --  three-parent stash (`--include-untracked`) also appends the untracked
+   --  tree against an empty base.
 
    function Resolve_Stash
      (Repo : Version.Repository.Repository_Handle;
