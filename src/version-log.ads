@@ -40,7 +40,10 @@ package Version.Log is
       Show_Notes     : Boolean := True;
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Rename_Score   : Natural := 0;
       Date_Mode      : String := "") return String;
+   --  Rename_Score is git's -M<n>/-C<n> rename similarity threshold (0 =
+   --  git's default); a non-zero value forces rename detection on.
    --  Paths, when non-empty, limits each commit's --stat/-p/--raw diff to the
    --  matching files, as git's `log -p -- <path>` does (the walk is already
    --  path-limited by rev-list; this restricts the shown diff too).
@@ -100,6 +103,7 @@ package Version.Log is
       Kind           : Pretty_Kind := Pretty_Medium;
       Show_Notes     : Boolean := True;
       Max_Count      : Natural := 0;
+      Rename_Score   : Natural := 0;
       Date_Mode      : String := "") return String;
    --  git's `log --follow <path>`: walk first-parent history from Start
    --  showing the commits that changed the single file Path, following it back
@@ -125,6 +129,7 @@ package Version.Log is
       Show_Notes     : Boolean := True;
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Rename_Score   : Natural := 0;
       Date_Mode      : String := "") return String;
    --  git's `log --graph` in the default (multi-line) format: each commit's
    --  full Log_List_Text block with the ASCII commit graph drawn down its left

@@ -859,6 +859,7 @@ package body Version.Log is
       Show_Notes     : Boolean := True;
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Rename_Score   : Natural := 0;
       Date_Mode      : String := "") return String
    is
       Result  : Unbounded_String;
@@ -918,17 +919,27 @@ package body Version.Log is
                   --  --raw goes through the porcelain engine (Diff_Options.Raw)
                   --  so it detects renames by default (git's diff.renames), as
                   --  `log --raw` does -- the diff-tree plumbing raw does not.
+                  --  git's -M<n>/-C<n> sets the rename similarity threshold;
+                  --  a non-zero score forces rename detection on (it is on by
+                  --  default for these summaries anyway).
+                  Detect : constant Version.Diff.Rename_Detection :=
+                    (if Rename_Score > 0 then Version.Diff.Renames_On
+                     else Version.Diff.Renames_Default);
                   Summary_Opts : constant Version.Diff.Diff_Options :=
-                    (Stat          => Stat,
-                     Name_Only     => Name_Only,
-                     Name_Status   => Name_Status,
-                     Numstat       => Numstat,
-                     Shortstat     => Shortstat,
-                     Raw           => Raw,
-                     Context_Lines => Context,
-                     others        => <>);
+                    (Stat           => Stat,
+                     Name_Only      => Name_Only,
+                     Name_Status    => Name_Status,
+                     Numstat        => Numstat,
+                     Shortstat      => Shortstat,
+                     Raw            => Raw,
+                     Detect_Renames => Detect,
+                     Rename_Score   => Rename_Score,
+                     Context_Lines  => Context,
+                     others         => <>);
                   Patch_Opts : constant Version.Diff.Diff_Options :=
-                    (Context_Lines => Context, others => <>);
+                    (Detect_Renames => Detect,
+                     Rename_Score   => Rename_Score,
+                     Context_Lines  => Context, others => <>);
 
                   --  Use the pathspec overload only when a limit is present;
                   --  the plain overload is the exact unlimited rendering.
@@ -1321,6 +1332,7 @@ package body Version.Log is
       Show_Notes     : Boolean := True;
       Paths          : Version.Pathspec.Pathspec_Vectors.Vector :=
         Version.Pathspec.Pathspec_Vectors.Empty_Vector;
+      Rename_Score   : Natural := 0;
       Date_Mode      : String := "") return String
    is
       Objects : Version.Object_Cache.Object_Cache;
@@ -1372,6 +1384,7 @@ package body Version.Log is
                   Kind           => Kind,
                   Show_Notes     => Show_Notes,
                   Paths          => Paths,
+                  Rename_Score   => Rename_Score,
                   Date_Mode      => Date_Mode));
 
             Version.Log_Graph.Update (G, C, Parents);
@@ -1448,6 +1461,7 @@ package body Version.Log is
       Kind           : Pretty_Kind := Pretty_Medium;
       Show_Notes     : Boolean := True;
       Max_Count      : Natural := 0;
+      Rename_Score   : Natural := 0;
       Date_Mode      : String := "") return String
    is
       Objects  : Version.Object_Cache.Object_Cache;
@@ -1621,6 +1635,7 @@ package body Version.Log is
                   Kind           => Kind,
                   Show_Notes     => Show_Notes,
                   Paths          => Spec,
+                  Rename_Score   => Rename_Score,
                   Date_Mode      => Date_Mode));
          end;
       end loop;
