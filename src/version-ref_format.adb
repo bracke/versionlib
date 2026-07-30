@@ -813,6 +813,14 @@ package body Version.Ref_Format is
             end if;
          elsif Head_A = "objecttype" then
             return Type_Name;
+         elsif Head_A = "object" then
+            --  An annotated tag's "object" header (the target id); empty for a
+            --  non-tag object, as git's %(object)/%(type)/%(tag) are.
+            return Line_Value (Content, "object ");
+         elsif Head_A = "type" then
+            return Line_Value (Content, "type ");
+         elsif Head_A = "tag" then
+            return Line_Value (Content, "tag ");
          elsif Head_A = "objectsize" then
             return Ada.Strings.Fixed.Trim
               (Integer'Image (Version.Objects.Content (Obj)'Length),
