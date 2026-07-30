@@ -7,6 +7,7 @@ maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
 website = "https://github.com/bracke/versionlib"
+long-description = "The library crate behind version — a Git-compatible version-control system written in Ada 2022. versionlib contains all of the functionality (every Version. package: object storage, refs, staging, transports, diff, replay operations, and so on). The version crate is a thin CLI executable that depends on this library and implements each command by calling into it."
 tags = ["version", "vcs", "git"]
 
 [[depends-on]]
