@@ -4,7 +4,7 @@ with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
-with Ada.Strings.Unbounded;
+with Ada.Strings.Fixed;
 with GNAT.OS_Lib;
 with Ada.Containers; use Ada.Containers;
 
@@ -1208,5 +1208,222 @@ package body Version.Write is
          Version.Hooks.Run_Post_Commit (Repo => Repo, Run_Hooks => Run_Hooks);
       end;
    end Save;
+
+   --  The "<secs> <tz>" tail of an identity line, and the part before it.
+   function Ident_Split_Point (Line : String) return Natural is
+   begin
+      for K in reverse Line'Range loop
+         if Line (K) = '>' then
+            return K;
+         end if;
+      end loop;
+      return 0;
+   end Ident_Split_Point;
+
+   function Author_Line_With
+     (Base   : String;
+      Author : String := "";
+      Date   : String := "") return String
+   is
+      Base_GT : constant Natural := Ident_Split_Point (Base);
+      Base_Stamp : constant String :=
+        (if Base_GT /= 0 and then Base_GT + 2 <= Base'Last
+         then Base (Base_GT + 2 .. Base'Last) else "");
+      Result : Unbounded_String;
+   begin
+      if Author'Length > 0 then
+         declare
+            GT : constant Natural := Ident_Split_Point (Author);
+         begin
+            --  A whole "Name <email> <secs> <tz>" line stands as given (a
+            --  reused commit's author); "Name <email>" keeps Base's stamp.
+            if GT /= 0 and then GT + 2 <= Author'Last then
+               return Author_Line_With (Base => Author, Date => Date);
+            end if;
+            Result := To_Unbounded_String
+              (Ada.Strings.Fixed.Trim (Author, Ada.Strings.Both)
+               & " " & Base_Stamp);
+         end;
+      else
+         Result := To_Unbounded_String (Base);
+      end if;
+
+      if Date'Length > 0 then
+         declare
+            Text : constant String := To_String (Result);
+            GT   : constant Natural := Ident_Split_Point (Text);
+         begin
+            Result := To_Unbounded_String
+              (Text (Text'First .. GT) & " " & Date);
+         end;
+      end if;
+      return To_String (Result);
+   end Author_Line_With;
+
+   function Default_Author_Line
+     (Repo  : Version.Repository.Repository_Handle;
+      Amend : Boolean) return String is
+   begin
+      if Amend then
+         declare
+            Current : constant String := Version.Refs.Current_Commit_Id (Repo);
+         begin
+            if Current'Length > 0 then
+               declare
+                  Line : constant String :=
+                    Version.Objects.Commit_Header_Value
+                      (Version.Objects.Read_Object
+                         (Repo, Version.Objects.To_Object_Id (Current)),
+                       "author");
+               begin
+                  if Line'Length > 0 then
+                     return Line;
+                  end if;
+               end;
+            end if;
+         end;
+      end if;
+      return Version.Config.Author_Signature (Repo);
+   end Default_Author_Line;
+
+   function Commit (Request : Commit_Request) return Commit_Outcome is
+      LF   : constant Character := Character'Val (10);
+      Repo : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+
+      Head_Id : constant String := Version.Refs.Current_Commit_Id (Repo);
+      Old_Id  : constant String := Current_Commit_Or_Zero (Repo);
+
+      Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        (if Request.Use_Entries then Request.Entries
+         else Version.Staging.Load (Repo));
+
+      Tree_Id : constant Version.Objects.Hex_Object_Id :=
+        Write_Tree_From_Index (Repo, Entries);
+
+      Parents : Version.Objects.Object_Id_Vectors.Vector;
+      Outcome : Commit_Outcome;
+
+      function Subject (Message : String) return String is
+      begin
+         for I in Message'Range loop
+            if Message (I) = LF then
+               return Message (Message'First .. I - 1);
+            end if;
+         end loop;
+         return Message;
+      end Subject;
+   begin
+      if Request.Amend then
+         if Head_Id'Length = 0 then
+            raise Ada.IO_Exceptions.Data_Error
+              with "You have nothing to amend.";
+         end if;
+         Parents := Version.Objects.Commit_Parent_Ids
+           (Version.Objects.Read_Object
+              (Repo, Version.Objects.To_Object_Id (Head_Id)));
+      elsif Head_Id'Length > 0 then
+         Parents.Append (Version.Objects.To_Object_Id (Head_Id));
+      end if;
+      for P of Request.Extra_Parents loop
+         Parents.Append (P);
+      end loop;
+
+      --  git compares the tree with the first parent's (HEAD, or on --amend
+      --  HEAD's own parent) and, unless --allow-empty, has nothing to do
+      --  when they match. An amend of a merge, and a merge being concluded,
+      --  are always allowed through.
+      if not Request.Allow_Empty
+        and then not (Request.Amend and then Parents.Length > 1)
+        and then Request.Extra_Parents.Is_Empty
+      then
+         declare
+            Reference : constant String :=
+              (if Parents.Is_Empty then ""
+               else To_String (Parents.First_Element));
+            Same : constant Boolean :=
+              (if Reference'Length = 0
+               then Entries.Is_Empty
+               else Same_Tree_As_HEAD (Repo, Tree_Id, Reference));
+         begin
+            if Same then
+               return Outcome;
+            end if;
+         end;
+      end if;
+
+      declare
+         Final_Message : constant String :=
+           Message_After_Commit_Hooks
+             (Repo      => Repo,
+              Message   => To_String (Request.Message),
+              Run_Hooks => Request.Run_Hooks);
+
+         Base_Author : constant String :=
+           Default_Author_Line
+             (Repo, Amend => Request.Amend and then not Request.Reset_Author);
+         Author : constant String :=
+           Author_Line_With
+             (Base   => Base_Author,
+              Author => To_String (Request.Author),
+              Date   => To_String (Request.Author_Date));
+
+         Header : Unbounded_String;
+         Key    : constant String :=
+           Commit_Signing_Key
+             (Repo, Request.Sign, To_String (Request.Signing_Key));
+         Commit_Id : Version.Objects.Hex_Object_Id;
+      begin
+         Append (Header, "tree " & To_String (Tree_Id) & LF);
+         for P of Parents loop
+            Append (Header, "parent " & To_String (P) & LF);
+         end loop;
+         Append (Header, "author " & Author & LF);
+         Append
+           (Header,
+            "committer " & Version.Config.Committer_Signature (Repo) & LF);
+
+         if Key'Length = 0 then
+            Commit_Id := Write_Commit_Content
+              (Repo, Commit_Content_From_Header
+                       (Header => To_String (Header), Message => Final_Message));
+         else
+            Require_Safe_Signing_Key (Key);
+            declare
+               Unsigned : constant String :=
+                 Commit_Content_From_Header
+                   (Header => To_String (Header), Message => Final_Message);
+               Signature : constant String :=
+                 Sign_Commit_Payload (Repo, Unsigned, Key);
+            begin
+               Commit_Id := Write_Commit_Content
+                 (Repo, Commit_Content_From_Header
+                          (Header    => To_String (Header),
+                           Message   => Final_Message,
+                           Signature => Signature));
+            end;
+         end if;
+
+         Advance_HEAD_After_Save
+           (Repo      => Repo,
+            Commit_Id => Commit_Id,
+            Old_Id    => Old_Id,
+            Message   =>
+              "commit"
+              & (if Request.Amend then " (amend)"
+                 elsif Request.Kind = Merge_Commit then " (merge)"
+                 elsif Request.Kind = Cherry_Pick_Commit then " (cherry-pick)"
+                 elsif Request.Kind = Revert_Commit then " (revert)"
+                 elsif Head_Id'Length = 0 then " (initial)"
+                 else "")
+              & ": " & Subject (Final_Message));
+         Version.Hooks.Run_Post_Commit
+           (Repo => Repo, Run_Hooks => Request.Run_Hooks);
+
+         Outcome.Committed := True;
+         Outcome.Commit_Id := Commit_Id;
+         return Outcome;
+      end;
+   end Commit;
 
 end Version.Write;

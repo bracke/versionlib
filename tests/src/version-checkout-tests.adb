@@ -301,8 +301,11 @@ package body Version.Checkout.Tests is
                Main_Log_After : constant String :=
                  Version.Test_Support.Read_Text_File (Main_Log_Path);
             begin
+               --  git's line names both ends: "moving from <branch> to
+               --  <target>", the target being the commit id when nothing
+               --  more specific was typed.
                Assert
-                 (Contains (Head_Log, "checkout: moving to "),
+                 (Contains (Head_Log, "checkout: moving from main to "),
                   "detached checkout must append a HEAD reflog entry");
 
                Assert

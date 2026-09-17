@@ -38,6 +38,13 @@ package Version.Staging is
       (Repo    : Version.Repository.Repository_Handle;
        Tree_Id : Version.Objects.Hex_Object_Id);
 
+   function Entries_From_Tree
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id)
+      return Index_Entry_Vectors.Vector;
+   --  The stage-0 entries an index made from Tree_Id would hold (what
+   --  Write_From_Tree writes), without touching the index file.
+
    function Find_Entry
      (Entries : Index_Entry_Vectors.Vector;
       Path    : String)

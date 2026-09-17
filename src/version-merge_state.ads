@@ -65,6 +65,12 @@ package Version.Merge_State is
      (Repo : Version.Repository.Repository_Handle)
       return Boolean;
 
+   --  The commits MERGE_HEAD names, one per line; empty when there is no
+   --  merge in progress. `commit` uses them as the extra parents.
+   function Merge_Heads
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Object_Id_Vectors.Vector;
+
    --  git's own conflicted-cherry-pick / conflicted-revert markers, left by a
    --  real git that this tool did not drive (a single pick uses these plain
    --  files, no `sequencer/` directory). CHERRY_PICK_HEAD / REVERT_HEAD name

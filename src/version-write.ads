@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;
 with Version.Objects;
 with Version.Repository;
 with Version.Staging;
@@ -115,5 +116,63 @@ package Version.Write is
       Run_Hooks   : Boolean := True;
       Sign        : Sign_Choice := Sign_From_Config;
       Signing_Key : String := "");
+
+   --  `git commit` proper. The caller has already assembled and cleaned the
+   --  message; this decides parents, author and tree, refuses an empty
+   --  commit unless asked not to, writes the object, moves HEAD with git's
+   --  reflog line and runs the hooks. A merge, cherry-pick or revert in
+   --  progress is the caller's to notice (Version.Branch / the sequencer
+   --  finish those); Kind only labels the reflog for them.
+   type Commit_Kind is
+     (Plain_Commit, Merge_Commit, Cherry_Pick_Commit, Revert_Commit);
+
+   type Commit_Request is record
+      Message      : Ada.Strings.Unbounded.Unbounded_String;
+      Amend        : Boolean := False;
+      Run_Hooks    : Boolean := True;
+      Sign         : Sign_Choice := Sign_From_Config;
+      Signing_Key  : Ada.Strings.Unbounded.Unbounded_String;
+      Allow_Empty  : Boolean := False;
+      --  "Name <email>", or a whole "Name <email> <secs> <tz>" author line,
+      --  replacing git's default (the configured identity, or on --amend the
+      --  amended commit's author). Empty keeps the default.
+      Author       : Ada.Strings.Unbounded.Unbounded_String;
+      --  git's "<secs> <tz>" replacing the author timestamp; empty keeps it
+      --  (now for a new commit, the original on --amend).
+      Author_Date  : Ada.Strings.Unbounded.Unbounded_String;
+      --  --amend --reset-author: take the author from the configured
+      --  identity and the clock instead of the amended commit.
+      Reset_Author : Boolean := False;
+      --  A partial commit (`commit <paths>`, --only, --include): the tree
+      --  comes from Entries rather than the index, which is left alone.
+      Use_Entries  : Boolean := False;
+      Entries      : Version.Staging.Index_Entry_Vectors.Vector;
+      Kind         : Commit_Kind := Plain_Commit;
+      --  Parents after HEAD: MERGE_HEAD's commits when concluding a merge.
+      Extra_Parents : Version.Objects.Object_Id_Vectors.Vector;
+   end record;
+
+   type Commit_Outcome is record
+      --  False when the tree matches the parent's and Allow_Empty was off:
+      --  git's "nothing to commit". Nothing was written.
+      Committed : Boolean := False;
+      Commit_Id : Version.Objects.Object_Id_Storage;
+   end record;
+
+   function Commit (Request : Commit_Request) return Commit_Outcome;
+
+   --  The author line a commit made now would carry, before any override:
+   --  what Commit uses as its default, exposed so the editor template can
+   --  show git's "# Author:"/"# Date:" lines when they differ from it.
+   function Default_Author_Line
+     (Repo  : Version.Repository.Repository_Handle;
+      Amend : Boolean) return String;
+
+   --  Apply a `--author` value (name/email, or a whole line) and a
+   --  `--date` "<secs> <tz>" to a base author line.
+   function Author_Line_With
+     (Base   : String;
+      Author : String := "";
+      Date   : String := "") return String;
 
 end Version.Write;

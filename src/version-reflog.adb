@@ -188,6 +188,33 @@ package body Version.Reflog is
       Norm_Old : constant String := Normalized (Old_Id);
       Norm_New : constant String := Normalized (New_Id);
 
+      --  git's copy_reflog_msg: a reflog message is one line, with every
+      --  run of whitespace folded to a single space and none at the ends.
+      function Folded (Text : String) return String is
+         Result : String (1 .. Text'Length);
+         Last   : Natural := 0;
+         Blank  : Boolean := True;   --  drops leading whitespace
+      begin
+         for C of Text loop
+            if C in ' ' | Character'Val (9) | Character'Val (10)
+                 | Character'Val (13) | Character'Val (11) | Character'Val (12)
+            then
+               Blank := True;
+            else
+               if Blank and then Last > 0 then
+                  Last := Last + 1;
+                  Result (Last) := ' ';
+               end if;
+               Blank := False;
+               Last := Last + 1;
+               Result (Last) := C;
+            end if;
+         end loop;
+         return Result (1 .. Last);
+      end Folded;
+
+      Msg : constant String := Folded (Message);
+
       New_Line : constant String :=
         Norm_Old
         & " "
@@ -201,7 +228,7 @@ package body Version.Reflog is
         & "> "
         & Time_Stamp
         & Character'Val (9)
-        & Message
+        & Msg
         & Character'Val (10);
    begin
       if not Version.Objects.Is_Valid_Hex_Object_Id (Norm_Old) then
@@ -227,7 +254,7 @@ package body Version.Reflog is
             Rec.Committer_Email := Identity.Email;
             Rec.Time_Seconds    := Now_Seconds;
             Rec.TZ_Offset       := 0;
-            Rec.Message         := To_Unbounded_String (Message);
+            Rec.Message         := To_Unbounded_String (Msg);
             Logs.Append (Rec);
             Version.Reftable.Writer.Append_Table
               (Repo,

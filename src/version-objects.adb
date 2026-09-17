@@ -528,6 +528,52 @@ package body Version.Objects is
       end;
    end Tag_Target_Id;
 
+   function Commit_Message (Obj : Git_Object) return String is
+      Text : constant String := To_String (Obj.Content_Value);
+      LF   : constant Character := Character'Val (10);
+   begin
+      if Obj.Kind_Value /= Commit_Object then
+         raise Ada.IO_Exceptions.Data_Error with "object is not a commit";
+      end if;
+
+      for Pos in Text'First .. Text'Last - 1 loop
+         if Text (Pos) = LF and then Text (Pos + 1) = LF then
+            return Text (Pos + 2 .. Text'Last);
+         end if;
+      end loop;
+      return "";
+   end Commit_Message;
+
+   function Commit_Header_Value (Obj : Git_Object; Key : String) return String
+   is
+      Text  : constant String := To_String (Obj.Content_Value);
+      LF    : constant Character := Character'Val (10);
+      Start : Natural := Text'First;
+   begin
+      if Obj.Kind_Value /= Commit_Object then
+         raise Ada.IO_Exceptions.Data_Error with "object is not a commit";
+      end if;
+
+      while Start <= Text'Last loop
+         declare
+            Stop : Natural := Start;
+         begin
+            while Stop <= Text'Last and then Text (Stop) /= LF loop
+               Stop := Stop + 1;
+            end loop;
+            exit when Stop = Start;   --  blank line: headers are over
+            if Stop - Start > Key'Length
+              and then Text (Start .. Start + Key'Length - 1) = Key
+              and then Text (Start + Key'Length) = ' '
+            then
+               return Text (Start + Key'Length + 1 .. Stop - 1);
+            end if;
+            Start := Stop + 1;
+         end;
+      end loop;
+      return "";
+   end Commit_Header_Value;
+
    function Commit_Message_First_Line (Obj : Git_Object) return String is
       Text : constant String := To_String (Obj.Content_Value);
       Pos  : Natural := Text'First;
@@ -570,7 +616,19 @@ package body Version.Objects is
                         if Length (Subject) > 0 then
                            Append (Subject, " ");
                         end if;
-                        Append (Subject, Text (Line_Start .. Line_End - 1));
+                        --  git's is_blank_line also trims each line's
+                        --  trailing whitespace before it is folded in.
+                        declare
+                           Last : Natural := Line_End - 1;
+                        begin
+                           while Last >= Line_Start
+                             and then Text (Last) in ' ' | Character'Val (9)
+                                                   | Character'Val (13)
+                           loop
+                              Last := Last - 1;
+                           end loop;
+                           Append (Subject, Text (Line_Start .. Last));
+                        end;
 
                         Line_Start := Line_End + 1;
                      end;

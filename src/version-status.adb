@@ -14,7 +14,6 @@ with Version.Objects;
 with Version.Rebase_State;
 with Version.Refs;
 with Version.Revisions;
-with Version.Repository;
 with Version.Staging;
 with Version.Working_Tree;
 with Version.Ignore;
@@ -1495,7 +1494,10 @@ package body Version.Status is
    end Load_Head_Tree;
 
    function Current_Status
-     (All_Untracked : Boolean := False) return Status_Result is
+     (All_Untracked : Boolean := False;
+      Use_Base      : Boolean := False;
+      Base_Commit   : String := "") return Status_Result
+   is
       Repo          : Version.Repository.Repository_Handle;
       Commit        : Unbounded_String;
       Head_Entries  : Version.Objects.Tree_Entry_Vectors.Vector;
@@ -1510,8 +1512,9 @@ package body Version.Status is
       Repo := Version.Repository.Open;
       Commit :=
         To_Unbounded_String
-          (Version.Ref_Cache.Current_Commit_Id
-             (Repo => Repo, Cache => Ref_Cache));
+          (if Use_Base then Base_Commit
+           else Version.Ref_Cache.Current_Commit_Id
+                  (Repo => Repo, Cache => Ref_Cache));
 
       Head_Entries :=
         Load_Head_Tree
@@ -1719,7 +1722,29 @@ package body Version.Status is
       end if;
    end Short_Id;
 
+   --  The long format is assembled into a buffer rather than printed line by
+   --  line, so `status` and the commit-message template (which quotes the
+   --  same text, without git's "(use ...)" hints) share one renderer.
+   Long_Out   : Unbounded_String;
+   Long_Hints : Boolean := True;
+
+   procedure Emit (Line : String) is
+   begin
+      Append (Long_Out, Line & Ada.Characters.Latin_1.LF);
+   end Emit;
+
+   --  A "(use ...)" advice line: git's advice.statusHints, off in the
+   --  commit template.
+   procedure Hint (Line : String) is
+   begin
+      if Long_Hints then
+         Emit (Line);
+      end if;
+   end Hint;
+
    procedure Print_Head_Line (Repo : Version.Repository.Repository_Handle);
+   procedure Emit_Upstream_Lines
+     (Repo : Version.Repository.Repository_Handle; Branch : String);
    --  Declared ahead of the rebase header, which falls back to it.
 
    --  git's paused-rebase header. Everything here is read back out of the
@@ -1799,36 +1824,36 @@ package body Version.Status is
       function Plural (N : Natural) return String is
         (if N = 1 then "" else "s");
    begin
-      Ada.Text_IO.Put_Line
+      Emit
         ("interactive rebase in progress; onto " & Short (Onto));
 
       if Done = 0 then
-         Ada.Text_IO.Put_Line ("No commands done.");
+         Emit ("No commands done.");
       else
-         Ada.Text_IO.Put_Line
+         Emit
            ("Last command" & (if Done = 1 then "" else "s") & " done ("
             & Natural'Image (Done) (2 .. Natural'Image (Done)'Last)
             & " command" & Plural (Done) & " done):");
          for I in 0 .. Done - 1 loop
-            Ada.Text_IO.Put_Line
+            Emit
               (Command_Line (Action_At (I),
                              Commits.Element (Commits.First_Index + I)));
          end loop;
       end if;
 
       if Remaining = 0 then
-         Ada.Text_IO.Put_Line ("No commands remaining.");
+         Emit ("No commands remaining.");
       else
-         Ada.Text_IO.Put_Line
+         Emit
            ("Next command" & (if Remaining = 1 then "" else "s") & " to do ("
             & Natural'Image (Remaining) (2 .. Natural'Image (Remaining)'Last)
             & " remaining command" & Plural (Remaining) & "):");
          for I in Done .. Natural (Commits.Length) - 1 loop
-            Ada.Text_IO.Put_Line
+            Emit
               (Command_Line (Action_At (I),
                              Commits.Element (Commits.First_Index + I)));
          end loop;
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (use ""git rebase --edit-todo"" to view and edit)");
       end if;
 
@@ -1836,27 +1861,27 @@ package body Version.Status is
            (Version.Rebase_State.Pause_Reason (State),
             Version.Rebase_State.Pause_Edit)
       then
-         Ada.Text_IO.Put_Line
+         Emit
            ("You are currently editing a commit while rebasing branch '"
             & Branch & "' on '" & Short (Onto) & "'.");
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (use ""git commit --amend"" to amend the current commit)");
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (use ""git rebase --continue"" once you are satisfied with your"
             & " changes)");
       else
-         Ada.Text_IO.Put_Line
+         Emit
            ("You are currently rebasing branch '" & Branch & "' on '"
             & Short (Onto) & "'.");
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (fix conflicts and then run ""git rebase --continue"")");
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (use ""git rebase --skip"" to skip this patch)");
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (use ""git rebase --abort"" to check out the original branch)");
       end if;
 
-      Ada.Text_IO.New_Line;
+      Emit ("");
    exception
       --  A rebase state we cannot read must not take `status` down with it.
       when others =>
@@ -1867,7 +1892,7 @@ package body Version.Status is
       Head : constant Version.Refs.Head_Info := Version.Refs.Read_Head (Repo);
    begin
       if Version.Refs.Is_Attached (Head) then
-         Ada.Text_IO.Put_Line ("On branch " & Version.Refs.Branch_Name (Head));
+         Emit ("On branch " & Version.Refs.Branch_Name (Head));
       else
          declare
             Full : constant String := Version.Refs.Commit_Id (Head);
@@ -1876,14 +1901,14 @@ package body Version.Status is
          begin
             --  git names the commit with find_unique_abbrev, not a fixed
             --  width.
-            Ada.Text_IO.Put_Line
+            Emit
               ("HEAD detached at "
                & Full (Full'First .. Full'First
                        + Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7)
                        - 1));
          exception
             when others =>
-               Ada.Text_IO.Put_Line ("HEAD detached at " & Short_Id (Full));
+               Emit ("HEAD detached at " & Short_Id (Full));
          end;
       end if;
    end Print_Head_Line;
@@ -1901,13 +1926,17 @@ package body Version.Status is
          return;
       end if;
 
-      declare
-         Branch : constant String := Version.Refs.Branch_Name (Head);
-      begin
-         if not Version.Tracking.Has_Upstream (Repo, Branch) then
-            return;
-         end if;
+      Emit_Upstream_Lines (Repo, Version.Refs.Branch_Name (Head));
+   end Print_Upstream_Line;
 
+   procedure Emit_Upstream_Lines
+     (Repo : Version.Repository.Repository_Handle; Branch : String) is
+   begin
+      if not Version.Tracking.Has_Upstream (Repo, Branch) then
+         return;
+      end if;
+
+      begin
          declare
             Info          : constant Version.Tracking.Upstream_Info :=
               Version.Tracking.Upstream (Repo, Branch);
@@ -1927,19 +1956,19 @@ package body Version.Status is
               "'" & Remote & "/" & Remote_Branch & "'";
          begin
             if Counts.Ahead > 0 and then Counts.Behind > 0 then
-               Ada.Text_IO.Put_Line
+               Emit
                  ("Your branch and " & Upstream & " have diverged,");
-               Ada.Text_IO.Put_Line
+               Emit
                  ("and have "
                   & Natural_Image (Counts.Ahead)
                   & " and "
                   & Natural_Image (Counts.Behind)
                   & " different commits each, respectively.");
-               Ada.Text_IO.Put_Line
+               Hint
                  ("  (use ""git pull"" if you want to integrate the remote "
                   & "branch with yours)");
             elsif Counts.Ahead > 0 then
-               Ada.Text_IO.Put_Line
+               Emit
                  ("Your branch is ahead of "
                   & Upstream
                   & " by "
@@ -1947,10 +1976,10 @@ package body Version.Status is
                   & " "
                   & Commit_Word (Counts.Ahead)
                   & ".");
-               Ada.Text_IO.Put_Line
+               Hint
                  ("  (use ""git push"" to publish your local commits)");
             elsif Counts.Behind > 0 then
-               Ada.Text_IO.Put_Line
+               Emit
                  ("Your branch is behind "
                   & Upstream
                   & " by "
@@ -1958,20 +1987,38 @@ package body Version.Status is
                   & " "
                   & Commit_Word (Counts.Behind)
                   & ", and can be fast-forwarded.");
-               Ada.Text_IO.Put_Line
+               Hint
                  ("  (use ""git pull"" to update your local branch)");
             else
-               Ada.Text_IO.Put_Line
+               Emit
                  ("Your branch is up to date with " & Upstream & ".");
             end if;
 
-            Ada.Text_IO.New_Line;
+            Emit ("");
          end;
       exception
          when Ada.Text_IO.Data_Error | Ada.IO_Exceptions.Data_Error =>
             null;
       end;
-   end Print_Upstream_Line;
+   end Emit_Upstream_Lines;
+
+   function Upstream_Status_Text
+     (Repo : Version.Repository.Repository_Handle; Branch : String)
+      return String is
+   begin
+      Long_Out   := Null_Unbounded_String;
+      Long_Hints := True;
+      Emit_Upstream_Lines (Repo, Branch);
+      declare
+         Text : constant String := To_String (Long_Out);
+      begin
+         --  Without the blank line the status block ends with.
+         if Text'Length >= 2 and then Text (Text'Last - 1) = ASCII.LF then
+            return Text (Text'First .. Text'Last - 1);
+         end if;
+         return Text;
+      end;
+   end Upstream_Status_Text;
 
    --  git aligns the change label in a fixed column: 12 for the staged and
    --  unstaged sections, 17 for unmerged paths.
@@ -2022,7 +2069,7 @@ package body Version.Status is
       Prefix   : String) is
    begin
       for Change of List loop
-         Ada.Text_IO.Put_Line
+         Emit
            (Long_Status_Line
               (Change.Kind,
                Version.Files.Relative_To_Prefix
@@ -2039,25 +2086,34 @@ package body Version.Status is
    begin
       --  Untracked and ignored entries carry no label, only the path.
       for Change of List loop
-         Ada.Text_IO.Put_Line
+         Emit
            (Tab
             & Version.Files.Relative_To_Prefix
                 (To_String (Change.Path), Prefix));
       end loop;
    end Print_Long_Paths;
 
-   procedure Print_Status_Result
+   --  Render the long format into Long_Out. Hints/Nowarn are git's
+   --  s->hints and s->nowarn: the commit template turns both off (no advice
+   --  lines and no closing "nothing to commit" summary).
+   procedure Build_Long_Status
      (Result          : Status_Result;
-      Include_Ignored : Boolean := False;
-      Show_Untracked  : Boolean := True)
+      Include_Ignored : Boolean;
+      Show_Untracked  : Boolean;
+      Hints           : Boolean;
+      Nowarn          : Boolean;
+      Commit_Template : Boolean;
+      Initial         : Boolean)
    is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
 
       --  Before the first commit git swaps in a different set of hints and
-      --  closing lines, so the two cases have to be told apart.
+      --  closing lines, so the two cases have to be told apart. (An amend
+      --  template compares with HEAD's parent and counts as initial when
+      --  there is none; the caller decides.)
       Is_Initial : constant Boolean :=
-        Version.Refs.Current_Commit_Id (Repo) = "";
+        Initial or else Version.Refs.Current_Commit_Id (Repo) = "";
 
       Merging : constant Boolean :=
         Ada.Directories.Exists
@@ -2103,38 +2159,39 @@ package body Version.Status is
               (Version.Files.Join
                  (Version.Repository.Git_Dir (Repo), "rebase-apply/applying"))
          then
-            Ada.Text_IO.Put_Line ("You are in the middle of an am session.");
-            Ada.Text_IO.Put_Line
+            Emit ("You are in the middle of an am session.");
+            Hint
               ("  (fix conflicts and then run ""git am --continue"")");
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git am --skip"" to skip this patch)");
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git am --abort"" to restore the original branch)");
-            Ada.Text_IO.New_Line;
+            Emit ("");
          end if;
       end if;
 
       if Is_Initial then
-         Ada.Text_IO.New_Line;
-         Ada.Text_IO.Put_Line ("No commits yet");
-         Ada.Text_IO.New_Line;
+         Emit ("");
+         Emit ((if Commit_Template then "Initial commit"
+                else "No commits yet"));
+         Emit ("");
       else
          Print_Upstream_Line (Repo);
       end if;
 
       if Merging then
          if Result.Conflicted.Is_Empty then
-            Ada.Text_IO.Put_Line
+            Emit
               ("All conflicts fixed but you are still merging.");
-            Ada.Text_IO.Put_Line ("  (use ""git commit"" to conclude merge)");
+            Hint ("  (use ""git commit"" to conclude merge)");
          else
-            Ada.Text_IO.Put_Line ("You have unmerged paths.");
-            Ada.Text_IO.Put_Line ("  (fix conflicts and run ""git commit"")");
-            Ada.Text_IO.Put_Line
+            Emit ("You have unmerged paths.");
+            Hint ("  (fix conflicts and run ""git commit"")");
+            Hint
               ("  (use ""git merge --abort"" to abort the merge)");
          end if;
 
-         Ada.Text_IO.New_Line;
+         Emit ("");
       elsif Picking then
          declare
             Head_Hex : constant String :=
@@ -2147,123 +2204,156 @@ package body Version.Status is
             Ing      : constant String :=
               (if Reverting then "reverting" else "cherry-picking");
          begin
-            Ada.Text_IO.Put_Line
+            Emit
               ("You are currently " & Ing & " commit " & Short & ".");
             if Result.Conflicted.Is_Empty then
-               Ada.Text_IO.Put_Line
+               Hint
                  ("  (all conflicts fixed: run ""git " & Verb
                   & " --continue"")");
             else
-               Ada.Text_IO.Put_Line
+               Hint
                  ("  (fix conflicts and run ""git " & Verb & " --continue"")");
             end if;
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git " & Verb & " --skip"" to skip this patch)");
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git " & Verb & " --abort"" to cancel the "
                & Verb & " operation)");
-            Ada.Text_IO.New_Line;
+            Emit ("");
          end;
       end if;
 
       if not Result.Staged.Is_Empty then
-         Ada.Text_IO.Put_Line ("Changes to be committed:");
+         Emit ("Changes to be committed:");
 
          if Is_Initial then
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git rm --cached <file>..."" to unstage)");
          else
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git restore --staged <file>..."" to unstage)");
          end if;
 
          Print_Long_Entries (Result.Staged, Unmerged => False, Prefix => Prefix);
-         Ada.Text_IO.New_Line;
+         Emit ("");
       end if;
 
       if not Result.Conflicted.Is_Empty then
-         Ada.Text_IO.Put_Line ("Unmerged paths:");
+         Emit ("Unmerged paths:");
          --  Mid-merge there is nothing to unstage back to, so git offers only
          --  the resolution hint; unmerged entries from anything else (a
          --  rebase, a cherry-pick) can be unstaged and git says so.
          if not Merging and then not Picking then
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git restore --staged <file>..."" to unstage)");
          end if;
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (use ""git add <file>..."" to mark resolution)");
          Print_Long_Entries
            (Result.Conflicted, Unmerged => True, Prefix => Prefix);
-         Ada.Text_IO.New_Line;
+         Emit ("");
       end if;
 
       if not Result.Changes.Is_Empty then
-         Ada.Text_IO.Put_Line ("Changes not staged for commit:");
+         Emit ("Changes not staged for commit:");
 
          if Has_Deleted then
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git add/rm <file>..."" to update what will be "
                & "committed)");
          else
-            Ada.Text_IO.Put_Line
+            Hint
               ("  (use ""git add <file>..."" to update what will be "
                & "committed)");
          end if;
 
-         Ada.Text_IO.Put_Line
+         Hint
            ("  (use ""git restore <file>..."" to discard changes in working "
             & "directory)");
          Print_Long_Entries (Result.Changes, Unmerged => False, Prefix => Prefix);
-         Ada.Text_IO.New_Line;
+         Emit ("");
       end if;
 
       if Show_Untracked and then not Result.Untracked.Is_Empty then
-         Ada.Text_IO.Put_Line ("Untracked files:");
-         Ada.Text_IO.Put_Line
+         Emit ("Untracked files:");
+         Hint
            ("  (use ""git add <file>..."" to include in what will be "
             & "committed)");
          Print_Long_Paths (Result.Untracked, Prefix);
-         Ada.Text_IO.New_Line;
+         Emit ("");
       end if;
 
       if Include_Ignored and then not Result.Ignored.Is_Empty then
-         Ada.Text_IO.Put_Line ("Ignored files:");
-         Ada.Text_IO.Put_Line
+         Emit ("Ignored files:");
+         Hint
            ("  (use ""git add -f <file>..."" to include in what will be "
             & "committed)");
          Print_Long_Paths (Result.Ignored, Prefix);
-         Ada.Text_IO.New_Line;
+         Emit ("");
       end if;
 
       --  git mentions the suppressed untracked files only when there is
       --  something staged to commit.
       if not Show_Untracked and then Committable then
-         Ada.Text_IO.Put_Line
-           ("Untracked files not listed (use -u option to show untracked "
-            & "files)");
+         Emit
+           ("Untracked files not listed"
+            & (if Hints then " (use -u option to show untracked files)"
+               else ""));
       end if;
 
-      --  The closing summary. Anything staged means git says nothing here.
-      if Committable then
+      --  The closing summary. Anything staged means git says nothing here,
+      --  and a template (nowarn) never carries one.
+      if Committable or else Nowarn then
          null;
       elsif Workdir_Dirty then
-         Ada.Text_IO.Put_Line
-           ("no changes added to commit (use ""git add"" and/or "
-            & """git commit -a"")");
+         Emit
+           ("no changes added to commit"
+            & (if Hints
+               then " (use ""git add"" and/or ""git commit -a"")" else ""));
       elsif Show_Untracked and then not Result.Untracked.Is_Empty then
-         Ada.Text_IO.Put_Line
-           ("nothing added to commit but untracked files present "
-            & "(use ""git add"" to track)");
+         Emit
+           ("nothing added to commit but untracked files present"
+            & (if Hints then " (use ""git add"" to track)" else ""));
       elsif Is_Initial then
-         Ada.Text_IO.Put_Line
-           ("nothing to commit (create/copy files and use ""git add"" to "
-            & "track)");
+         Emit
+           ("nothing to commit"
+            & (if Hints
+               then " (create/copy files and use ""git add"" to track)"
+               else ""));
       elsif not Show_Untracked then
-         Ada.Text_IO.Put_Line
-           ("nothing to commit (use -u to show untracked files)");
+         Emit
+           ("nothing to commit"
+            & (if Hints then " (use -u to show untracked files)" else ""));
       else
-         Ada.Text_IO.Put_Line (Clean_Status_Line);
+         Emit (Clean_Status_Line);
       end if;
+   end Build_Long_Status;
+
+   function Long_Status_Text
+     (Result          : Status_Result;
+      Include_Ignored : Boolean := False;
+      Show_Untracked  : Boolean := True;
+      Hints           : Boolean := True;
+      Nowarn          : Boolean := False;
+      Commit_Template : Boolean := False;
+      Initial         : Boolean := False) return String is
+   begin
+      Long_Out   := Null_Unbounded_String;
+      Long_Hints := Hints;
+      Build_Long_Status
+        (Result, Include_Ignored, Show_Untracked, Hints, Nowarn,
+         Commit_Template, Initial);
+      Long_Hints := True;
+      return To_String (Long_Out);
+   end Long_Status_Text;
+
+   procedure Print_Status_Result
+     (Result          : Status_Result;
+      Include_Ignored : Boolean := False;
+      Show_Untracked  : Boolean := True) is
+   begin
+      Version.Console.Put
+        (Long_Status_Text (Result, Include_Ignored, Show_Untracked));
    end Print_Status_Result;
 
    procedure Print_Status

@@ -78,6 +78,15 @@ package Version.Restore is
      (Repo : Version.Repository.Repository_Handle;
       Path : String);
 
+   --  `checkout --ours/--theirs <path>`: write the index's stage-2 or
+   --  stage-3 version of a conflicted path to the working tree, leaving
+   --  the index as it is. Raises Data_Error when the path has no such
+   --  stage (git: "path '<p>' does not have our/their version").
+   procedure Restore_Path_From_Index_Stage
+     (Repo  : Version.Repository.Repository_Handle;
+      Path  : String;
+      Stage : Positive);
+
    procedure Restore_Index_Path_From_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;

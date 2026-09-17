@@ -40,6 +40,49 @@ package body Version.Merge_State is
         or else Ada.Directories.Exists (Git_State_Path (Repo, "SQUASH_MSG"));
    end Git_State_Exists;
 
+   function Merge_Heads
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Object_Id_Vectors.Vector
+   is
+      Path   : constant String := Git_State_Path (Repo, "MERGE_HEAD");
+      Result : Version.Objects.Object_Id_Vectors.Vector;
+   begin
+      if not Ada.Directories.Exists (Path) then
+         return Result;
+      end if;
+      declare
+         Text  : constant String := Version.Files.Read_Binary_File (Path);
+         Start : Natural := Text'First;
+      begin
+         while Start <= Text'Last loop
+            declare
+               Stop : Natural := Start;
+            begin
+               while Stop <= Text'Last
+                 and then Text (Stop) /= Character'Val (10)
+               loop
+                  Stop := Stop + 1;
+               end loop;
+               declare
+                  Last : Natural := Stop - 1;
+               begin
+                  while Last >= Start
+                    and then Text (Last) in ' ' | Character'Val (13)
+                  loop
+                     Last := Last - 1;
+                  end loop;
+                  if Last >= Start then
+                     Result.Append
+                       (Version.Objects.To_Object_Id (Text (Start .. Last)));
+                  end if;
+               end;
+               Start := Stop + 1;
+            end;
+         end loop;
+      end;
+      return Result;
+   end Merge_Heads;
+
    function With_Final_LF (Text : String) return String is
    begin
       if Text'Length = 0 then

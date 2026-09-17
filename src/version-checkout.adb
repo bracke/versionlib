@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 with Ada.IO_Exceptions;
 with Version.Objects; use Version.Objects;
 with Version.Object_Cache;
+with Version.Staging;
 with Version.Tree_Cache;
 with Version.Refs;
 with Version.Restore;
@@ -15,15 +16,6 @@ with Version.Hooks;
 with Version.Files;
 
 package body Version.Checkout is
-
-   function Short_Id (Id : String) return String is
-   begin
-      if Id'Length <= 12 then
-         return Id;
-      else
-         return Id (Id'First .. Id'First + 11);
-      end if;
-   end Short_Id;
 
    --  An untracked file only blocks a checkout when the commit being checked
    --  out would overwrite it -- that is git's rule, and refusing on *any*
@@ -141,16 +133,32 @@ package body Version.Checkout is
            & " branches." & Character'Val (10) & "Aborting";
       end if;
 
-      for U of Result.Untracked loop
-         for E of Items loop
-            if To_String (E.Path) = To_String (U.Path) then
-               raise Ada.IO_Exceptions.Data_Error with
-                 "cannot checkout commit: untracked working tree file "
-                 & To_String (U.Path)
-                 & " would be overwritten";
-            end if;
+      --  An untracked file is only in the way when the target would write
+      --  that path -- when its entry differs from HEAD's (git's two-way
+      --  merge leaves an unchanged path alone). git lists them all.
+      declare
+         In_The_Way : Unbounded_String;
+      begin
+         for U of Result.Untracked loop
+            for E of Items loop
+               if To_String (E.Path) = To_String (U.Path)
+                 and then Would_Be_Overwritten (To_String (U.Path))
+               then
+                  Append (In_The_Way, Character'Val (9));
+                  Append (In_The_Way, U.Path);
+                  Append (In_The_Way, Character'Val (10));
+               end if;
+            end loop;
          end loop;
-      end loop;
+         if Length (In_The_Way) > 0 then
+            raise Ada.IO_Exceptions.Data_Error with
+              "The following untracked working tree files would be "
+              & "overwritten by checkout:" & Character'Val (10)
+              & To_String (In_The_Way)
+              & "Please move or remove them before you switch branches."
+              & Character'Val (10) & "Aborting";
+         end if;
+      end;
    end Require_Switch_Safe;
 
    function Head_Path
@@ -185,8 +193,12 @@ package body Version.Checkout is
    end Restore_Head_File;
 
    procedure Checkout_Commit
-     (Commit_Id : Version.Objects.Hex_Object_Id;
-      Branch    : String := "")
+     (Commit_Id     : Version.Objects.Hex_Object_Id;
+      Branch        : String := "";
+      Force         : Boolean := False;
+      Reflog_Target : String := "";
+      Reflog_Old    : String := "";
+      Write_Reflog  : Boolean := True)
    is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -204,7 +216,8 @@ package body Version.Checkout is
       --  The reflog "from" name: the departed branch when HEAD was attached,
       --  or the full commit id when it was detached (git's "moving from X").
       Old_Name : constant String :=
-        (if Version.Refs.Is_Attached (Old_Head)
+        (if Reflog_Old'Length > 0 then Reflog_Old
+         elsif Version.Refs.Is_Attached (Old_Head)
          then Version.Refs.Branch_Name (Old_Head)
          else Old_Id);
 
@@ -215,6 +228,73 @@ package body Version.Checkout is
 
       --  Paths whose local edit survives the switch untouched.
       Carried : Version.Path_Safety.Path_Vector;
+
+      --  The index being left, so a carried path's *staged* state (a
+      --  change already added, a staged deletion) rides across too: git
+      --  keeps the index entry, not just the working file.
+      Old_Index : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+
+      function Old_Tree_Items
+        return Version.Objects.Tree_Entry_Vectors.Vector
+      is
+         Empty : Version.Objects.Tree_Entry_Vectors.Vector;
+      begin
+         if Old_Text'Length = 0 then
+            return Empty;
+         end if;
+         return Version.Tree_Cache.Flatten_Tree
+           (Repo, Trees,
+            Version.Objects.Commit_Tree_Id
+              (Version.Object_Cache.Read_Object
+                 (Repo, Objects, Version.Objects.To_Object_Id (Old_Text))));
+      end Old_Tree_Items;
+
+      procedure Carry_Staged_Entries is
+         Old_Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+           Old_Tree_Items;
+         New_Index : Version.Staging.Index_Entry_Vectors.Vector :=
+           Version.Staging.Load (Repo);
+         Changed   : Boolean := False;
+
+         function In_Old_Tree
+           (Path : String; Id : out Version.Objects.Object_Id_Storage)
+            return Boolean is
+         begin
+            for E of Old_Items loop
+               if Ada.Strings.Unbounded.To_String (E.Path) = Path then
+                  Id := E.Id;
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end In_Old_Tree;
+      begin
+         for P of Carried loop
+            declare
+               K       : constant Natural :=
+                 Version.Staging.Find_Path (Old_Index, P);
+               Tree_Id : Version.Objects.Object_Id_Storage;
+               In_Tree : constant Boolean := In_Old_Tree (P, Tree_Id);
+            begin
+               if K /= Natural'Last and then Old_Index.Element (K).Stage = 0
+                 and then (not In_Tree
+                           or else Version.Objects."/="
+                                     (Old_Index.Element (K).Id, Tree_Id))
+               then
+                  Version.Staging.Replace_Entry
+                    (New_Index, Old_Index.Element (K));
+                  Changed := True;
+               elsif K = Natural'Last and then In_Tree then
+                  Version.Staging.Remove_Path (New_Index, P);
+                  Changed := True;
+               end if;
+            end;
+         end loop;
+         if Changed then
+            Version.Staging.Write (Repo, New_Index);
+         end if;
+      end Carry_Staged_Entries;
    begin
       if Version.Objects.Kind (Target_Object) /= Version.Objects.Commit_Object
       then
@@ -235,7 +315,9 @@ package body Version.Checkout is
            with "cannot checkout commit: revert in progress";
       end if;
 
-      Require_Switch_Safe (Repo, Commit_Id, Carried);
+      if not Force then
+         Require_Switch_Safe (Repo, Commit_Id, Carried);
+      end if;
       Preflight_Checkout_Metadata (Repo);
       Version.Restore.Preflight_Working_Tree_For_Commit
         (Repo      => Repo,
@@ -266,16 +348,20 @@ package body Version.Checkout is
             Commit_Id => Commit_Id,
             Objects   => Objects,
             Trees     => Trees);
+         Carry_Staged_Entries;
 
-         Version.Reflog.Append
-           (Repo    => Repo,
-            Ref     => "HEAD",
-            Old_Id  => Old_Id,
-            New_Id  => To_String (Commit_Id),
-            Message =>
-              (if Branch = ""
-               then "checkout: moving to " & Short_Id (To_String (Commit_Id))
-               else "checkout: moving from " & Old_Name & " to " & Branch));
+         if Write_Reflog then
+            Version.Reflog.Append
+              (Repo    => Repo,
+               Ref     => "HEAD",
+               Old_Id  => Old_Id,
+               New_Id  => To_String (Commit_Id),
+               Message =>
+                 "checkout: moving from " & Old_Name & " to "
+                 & (if Reflog_Target'Length > 0 then Reflog_Target
+                    elsif Branch /= "" then Branch
+                    else To_String (Commit_Id)));
+         end if;
 
          Version.Hooks.Run_Post_Checkout
            (Repo   => Repo,

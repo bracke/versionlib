@@ -4145,7 +4145,10 @@ package body Version.Branch is
       Load_Conflicts_From_Index (Repo => Repo, Conflicts => Conflicts);
    end Read_Git_Merge_State;
 
-   procedure Finalize_Integration (Run_Hooks : Boolean := False) is
+   procedure Finalize_Integration
+     (Run_Hooks : Boolean := False;
+      Message   : String := "")
+   is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
 
@@ -4214,13 +4217,17 @@ package body Version.Branch is
            Ada.Strings.Unbounded.To_String (Target_Branch);
 
          Fallback_Message : constant String :=
-           "Integrate branch " & Target_Text;
+           (if Message'Length > 0 then Message
+            else "Integrate branch " & Target_Text);
       begin
          if Version.Merge_State.Git_State_Exists (Repo) then
             declare
                Message : constant String :=
-                 Version.Merge_State.Git_Message_Text
-                   (Repo => Repo, Fallback => Default_Merge_Message (Target_Text));
+                 (if Finalize_Integration.Message'Length > 0
+                  then Finalize_Integration.Message
+                  else Version.Merge_State.Git_Message_Text
+                         (Repo     => Repo,
+                          Fallback => Default_Merge_Message (Target_Text)));
                Mode : constant String := Version.Merge_State.Git_Mode_Text (Repo);
                Squash_Mode : constant Boolean := Is_Squash_Mode (Mode);
                Target_Ids : Version.Objects.Object_Id_Vectors.Vector;

@@ -137,6 +137,19 @@ package Version.Objects is
      (Obj : Git_Object)
       return String;
 
+   function Commit_Message
+     (Obj : Git_Object)
+      return String;
+   --  The whole message: everything after the blank line that ends the
+   --  headers, verbatim (trailing newline included).
+
+   function Commit_Header_Value
+     (Obj : Git_Object;
+      Key : String)
+      return String;
+   --  The value of the first header line named Key ("author", "committer",
+   --  ...) -- the text after "Key " -- or "" when the commit has none.
+
    function Commit_Committer_Time
      (Obj : Git_Object)
       return Long_Long_Integer;

@@ -2,6 +2,7 @@ with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Version.Pathspec;
+with Version.Repository;
 
 package Version.Status is
 
@@ -50,7 +51,13 @@ package Version.Status is
    --  All_Untracked is git's `-uall`: list every untracked file instead of
    --  collapsing a wholly-untracked directory to `dir/`.
    function Current_Status
-     (All_Untracked : Boolean := False) return Status_Result;
+     (All_Untracked : Boolean := False;
+      Use_Base      : Boolean := False;
+      Base_Commit   : String := "") return Status_Result;
+   --  With Use_Base the staged changes are taken against Base_Commit's tree
+   --  ("" = the empty tree) instead of HEAD's: the commit template of an
+   --  --amend shows what the amended commit will contain relative to its
+   --  parent.
 
    function Current_Status
      (Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
@@ -101,6 +108,27 @@ package Version.Status is
    function Branch_Status_Text
      (Result          : Status_Result;
       Include_Ignored : Boolean := False) return String;
+   --  git's tracking report for Branch -- "Your branch is up to date with
+   --  '<u>'." / ahead / behind / diverged, with their hints -- as checkout
+   --  prints it after switching; "" when the branch has no upstream.
+   function Upstream_Status_Text
+     (Repo : Version.Repository.Repository_Handle; Branch : String)
+      return String;
+
+   --  git's long format ("On branch ...", the sectioned lists and the closing
+   --  summary). Hints => False drops every "(use ...)" advice line and
+   --  Nowarn => True the closing summary: the commit-message template's
+   --  rendering.
+   --  Commit_Template selects git's template wording ("Initial commit" for
+   --  "No commits yet") and Initial forces the unborn-branch layout.
+   function Long_Status_Text
+     (Result          : Status_Result;
+      Include_Ignored : Boolean := False;
+      Show_Untracked  : Boolean := True;
+      Hints           : Boolean := True;
+      Nowarn          : Boolean := False;
+      Commit_Template : Boolean := False;
+      Initial         : Boolean := False) return String;
 
    --  Show_Untracked is git's `-uno`: omit the untracked section entirely,
    --  which also changes the closing summary line.

@@ -1492,24 +1492,24 @@ package body Version.Config is
                   return "";
                end if;
 
+               --  Time_Zone => 0: the fields are read as a UTC clock and
+               --  the zone is applied below; Ada.Calendar.Time_Of would
+               --  read them in the machine's zone and shift them twice.
                When_Utc :=
-                 Ada.Calendar.Time_Of
-                   (Year    => Integer'Value (Stamp (Stamp'First
-                                              .. Stamp'First + 3)),
-                    Month   => Integer'Value (Stamp (Stamp'First + 5
-                                              .. Stamp'First + 6)),
-                    Day     => Integer'Value (Stamp (Stamp'First + 8
-                                              .. Stamp'First + 9)),
-                    Seconds =>
-                      Duration
-                        (Integer'Value
-                           (Stamp (Stamp'First + 11 .. Stamp'First + 12))
-                         * 3600
-                         + Integer'Value
-                             (Stamp (Stamp'First + 14 .. Stamp'First + 15))
-                           * 60
-                         + Integer'Value
-                             (Stamp (Stamp'First + 17 .. Stamp'First + 18))));
+                 Ada.Calendar.Formatting.Time_Of
+                   (Year      => Integer'Value (Stamp (Stamp'First
+                                                .. Stamp'First + 3)),
+                    Month     => Integer'Value (Stamp (Stamp'First + 5
+                                                .. Stamp'First + 6)),
+                    Day       => Integer'Value (Stamp (Stamp'First + 8
+                                                .. Stamp'First + 9)),
+                    Hour      => Integer'Value
+                                   (Stamp (Stamp'First + 11 .. Stamp'First + 12)),
+                    Minute    => Integer'Value
+                                   (Stamp (Stamp'First + 14 .. Stamp'First + 15)),
+                    Second    => Integer'Value
+                                   (Stamp (Stamp'First + 17 .. Stamp'First + 18)),
+                    Time_Zone => 0);
 
                Secs := Integer (Ada.Calendar."-" (When_Utc, Epoch));
 

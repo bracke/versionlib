@@ -822,9 +822,10 @@ package body Version.Staging is
       end;
    end Remove_Path;
 
-   procedure Write_From_Tree
-   (Repo    : Version.Repository.Repository_Handle;
+   function Entries_From_Tree
+     (Repo    : Version.Repository.Repository_Handle;
       Tree_Id : Version.Objects.Hex_Object_Id)
+      return Index_Entry_Vectors.Vector
    is
       Tree_Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
       Version.Objects.Flatten_Tree
@@ -855,7 +856,14 @@ package body Version.Staging is
          end loop;
       end if;
 
-      Write (Repo    => Repo, Entries => Index_Items);
+      return Index_Items;
+   end Entries_From_Tree;
+
+   procedure Write_From_Tree
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id) is
+   begin
+      Write (Repo => Repo, Entries => Entries_From_Tree (Repo, Tree_Id));
    end Write_From_Tree;
 
 end Version.Staging;

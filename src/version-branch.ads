@@ -205,7 +205,10 @@ package Version.Branch is
       Options : Merge_Options);
 
    procedure Finalize_Integration
-     (Run_Hooks : Boolean := False);
+     (Run_Hooks : Boolean := False;
+      Message   : String := "");
+   --  Conclude the merge in progress with a merge commit. Message, when
+   --  given, replaces MERGE_MSG (git's `commit -m` mid-merge).
 
    procedure Abort_Integration;
 

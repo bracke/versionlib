@@ -675,8 +675,12 @@ package body Version.Restore is
                  Version.Path_Safety.Normalize_Relative_Path
                    (To_String (Index_Item.Path));
             begin
-               if (not Tree_Positions.Contains (Relative_Path))
-                 or else (not Version.Sparse.Included (Repo, Relative_Path))
+               --  A kept path (a local edit riding across the switch, a
+               --  staged new file among them) stays even when the target
+               --  tree lacks it.
+               if ((not Tree_Positions.Contains (Relative_Path))
+                   or else (not Version.Sparse.Included (Repo, Relative_Path)))
+                 and then not Kept (Relative_Path)
                then
                   Delete_Working_Path_If_Present (Repo, Relative_Path);
                end if;
@@ -1092,6 +1096,45 @@ package body Version.Restore is
          Objects   => Objects,
          Trees     => Trees);
    end Restore_Path_From_Commit;
+
+   procedure Restore_Path_From_Index_Stage
+     (Repo  : Version.Repository.Repository_Handle;
+      Path  : String;
+      Stage : Positive)
+   is
+      Normalized : constant String :=
+        Version.Path_Safety.Normalize_Relative_Path (Path);
+      Objects    : Version.Object_Cache.Object_Cache;
+      Entries    : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+      Pos        : constant Natural :=
+        Version.Staging.Find_Stage_Entry (Entries, Normalized, Stage);
+   begin
+      --  A path that is not in conflict has only its stage-0 entry, which
+      --  git checks out as usual.
+      if Version.Staging.Find_Stage_Entry (Entries, Normalized, 0)
+         /= Natural'Last
+      then
+         Restore_Path_From_Index (Repo, Normalized);
+         return;
+      end if;
+      if Pos = Natural'Last then
+         raise Ada.IO_Exceptions.Data_Error
+           with "path '" & Normalized & "' does not have "
+                & (if Stage = 2 then "our" else "their") & " version";
+      end if;
+      declare
+         Current_Entry : constant Version.Staging.Index_Entry :=
+           Entries.Element (Pos);
+         Item          : constant Version.Objects.Tree_Entry :=
+           (Path => Current_Entry.Path,
+            Id   => Current_Entry.Id,
+            Kind => Version.Objects.Tree_Blob,
+            Mode => Current_Entry.Mode);
+      begin
+         Write_Tree_Item_To_Working_Tree (Repo, Objects, Item, Normalized);
+      end;
+   end Restore_Path_From_Index_Stage;
 
    procedure Restore_Path_From_Index
      (Repo : Version.Repository.Repository_Handle; Path : String)

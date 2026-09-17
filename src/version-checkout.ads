@@ -16,12 +16,23 @@ package Version.Checkout is
    --  Raises git's "Your local changes ... would be overwritten" otherwise.
 
    procedure Checkout_Commit
-     (Commit_Id : Version.Objects.Hex_Object_Id;
-      Branch    : String := "");
+     (Commit_Id     : Version.Objects.Hex_Object_Id;
+      Branch        : String := "";
+      Force         : Boolean := False;
+      Reflog_Target : String := "";
+      Reflog_Old    : String := "";
+      Write_Reflog  : Boolean := True);
    --  Update the working tree to Commit_Id. When Branch is empty HEAD is
    --  left detached at Commit_Id; when it names a local branch (without the
    --  refs/heads/ prefix) HEAD is attached to that branch symbolically, as
    --  `git checkout <branch>` does. Commit_Id must be the branch's tip.
+   --  Force is `checkout -f`: local edits to tracked paths and unmerged
+   --  entries are thrown away instead of blocking the switch.
+   --  The HEAD reflog line is git's "checkout: moving from <old> to
+   --  <target>", where <target> is Reflog_Target as the user typed it
+   --  (the branch, else the commit id) and <old> the departed branch or
+   --  commit unless Reflog_Old names it; Write_Reflog => False writes none
+   --  (a bare `checkout -f` of the current HEAD).
 
    procedure Checkout_Path_From_Commit
      (Commit_Id : Version.Objects.Hex_Object_Id;
