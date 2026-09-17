@@ -43,6 +43,18 @@ zlib = { path = "../zlib" }
 [[pins]]
 cryptolib = { path = "../cryptolib" }
 
+# `ssllib` is httpclient's TLS backend, and its own dependencies come with it.
+# Same reason as cryptolib above: Alire honours pins only in the root crate, so
+# every root that builds this graph has to name them.
+[[pins]]
+ssllib = { path = "../ssllib" }
+
+[[pins]]
+truststores = { path = "../truststores" }
+
+[[pins]]
+hostkit = { path = "../hostkit" }
+
 [[pins]]
 regexp = { path = "../regexp" }
 
