@@ -1,4 +1,7 @@
 with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Containers.Indefinite_Vectors;
+with Ada.Containers.Vectors;
+with Ada.Strings.Unbounded;
 with Ada.Strings.Hash;
 
 with Version.Diff;
@@ -17,13 +20,74 @@ package Version.Log is
    type Pretty_Kind is
      (Pretty_Short, Pretty_Medium, Pretty_Full, Pretty_Fuller, Pretty_Raw);
 
+   type Decorate_Mode is (No_Decorate, Short_Decorate, Full_Decorate);
+
+   package String_Vectors is new Ada.Containers.Indefinite_Vectors
+     (Index_Type => Positive, Element_Type => String);
+
+   --  What a single shown commit carries beyond its id, index-aligned with
+   --  the Commits vector a listing renders: the revision mark git's
+   --  --left-right/--cherry-mark/--boundary put before the id ('<', '>',
+   --  '=', '+', '-'; ' ' for none), the ref it was reached from
+   --  (--source), and the reflog entry it stands for (-g).
+   type Annotation is record
+      Mark           : Character := ' ';
+      Source         : Ada.Strings.Unbounded.Unbounded_String;
+      Reflog_Selector : Ada.Strings.Unbounded.Unbounded_String;
+      Reflog_Ident    : Ada.Strings.Unbounded.Unbounded_String;
+      Reflog_Message  : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+   package Annotation_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Natural, Element_Type => Annotation);
+
+   --  git's header-level log switches, shared by every layout.
+   type Header_Options is record
+      --  --abbrev-commit / --no-abbrev-commit: the `commit` line (and the
+      --  oneline id) abbreviated or spelled out; Abbrev_Len is --abbrev=<n>
+      --  (0: the shortest unique prefix, floored at 7).
+      Abbrev_Commit  : Boolean := False;
+      Full_Oneline   : Boolean := False;
+      Abbrev_Len     : Natural := 0;
+      --  --parents / --children / --boundary for the full-header layouts
+      --  (the oneline listing takes them as parameters).
+      Parents        : Boolean := False;
+      Children       : Boolean := False;
+      Boundary       : Boolean := False;
+      --  --decorate for the full-header layouts, with --decorate-refs /
+      --  --decorate-refs-exclude patterns and --clear-decorations.
+      Decorate       : Decorate_Mode := No_Decorate;
+      Decorate_Refs  : String_Vectors.Vector;
+      Decorate_Refs_Exclude : String_Vectors.Vector;
+      --  --[no-]use-mailmap on the identity lines (git's log.mailmap
+      --  default is on).
+      Mailmap        : Boolean := True;
+      --  --notes=<ref> additions and --[no-]standard-notes.
+      Notes_Refs     : String_Vectors.Vector;
+      Standard_Notes : Boolean := True;
+      --  An explicit --notes: the oneline layout then shows notes too.
+      Notes_Explicit : Boolean := False;
+      --  --log-size: the `log size <n>` line after the commit line.
+      Log_Size       : Boolean := False;
+      --  --expand-tabs[=<n>] / --no-expand-tabs; -1 is git's default (8
+      --  for medium/full/fuller, none otherwise).
+      Expand_Tabs    : Integer := -1;
+      --  -z: NUL between commits instead of the blank line / newline.
+      Nul_Separated  : Boolean := False;
+      --  --show-linear-break[=<barrier>]: the barrier printed between two
+      --  commits that are not parent and child.
+      Linear_Break   : Ada.Strings.Unbounded.Unbounded_String;
+      Annotations    : Annotation_Vectors.Vector;
+   end record;
+
    function Format_Commit
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
       Full_Message : Boolean := False;
       Kind         : Pretty_Kind := Pretty_Medium;
       Show_Notes   : Boolean := True;
-      Date_Mode    : String := "")
+      Date_Mode    : String := "";
+      Header       : Header_Options := (others => <>);
+      Note         : Annotation := (others => <>))
       return String;
 
    function Log_List_Text
@@ -49,7 +113,10 @@ package Version.Log is
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
       Stat_Count      : Natural := 0;
-      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>);
+      Header          : Header_Options := (others => <>);
+      Separate_Merges : Boolean := False;
+      Combined_Merges : Boolean := False)
       return String;
    --  Stat_Width/Stat_Name_Width/Stat_Count are git's `--stat=<w>,<n>,<c>` (and
    --  `--stat-width`/`--stat-name-width`/`--stat-count`) sizing for the diffstat
@@ -66,8 +133,6 @@ package Version.Log is
    --  Oneline replaces each commit's header with git's oneline form and runs
    --  the file changes straight after it (no separating blank), as
    --  `log --oneline --name-only`/`--numstat`/`--raw`/... do.
-
-   type Decorate_Mode is (No_Decorate, Short_Decorate, Full_Decorate);
 
    package Decoration_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type        => String,
@@ -88,7 +153,8 @@ package Version.Log is
       With_Parents  : Boolean := False;
       With_Children : Boolean := False;
       With_Boundary : Boolean := False;
-      Decorate      : Decorate_Mode := No_Decorate) return String;
+      Decorate      : Decorate_Mode := No_Decorate;
+      Header        : Header_Options := (others => <>)) return String;
    --  With_Boundary adds git's `--boundary`: after the shown commits, the
    --  excluded commits that are a parent of a shown one (the traversal's
    --  uninteresting frontier of a range), each prefixed "- ", newest first.
@@ -104,7 +170,10 @@ package Version.Log is
       Commits       : Version.History.Commit_Id_Vectors.Vector;
       With_Parents  : Boolean := False;
       With_Children : Boolean := False;
-      Decorate      : Decorate_Mode := No_Decorate) return String;
+      Decorate      : Decorate_Mode := No_Decorate;
+      Header        : Header_Options := (others => <>);
+      Known         : Version.History.Commit_Id_Vectors.Vector :=
+        Version.History.Commit_Id_Vectors.Empty_Vector) return String;
    --  git's `log --graph --oneline`: the oneline listing of Commits with an
    --  ASCII commit-graph drawn to its left (Version.Log_Graph). Each commit
    --  keeps its Log_Oneline_List_Text content; the graph prefix and connector
@@ -133,7 +202,10 @@ package Version.Log is
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
       Stat_Count      : Natural := 0;
-      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>);
+      Header          : Header_Options := (others => <>);
+      Separate_Merges : Boolean := False;
+      Combined_Merges : Boolean := False)
       return String;
    --  git's `log --follow <path>`: walk first-parent history from Start
    --  showing the commits that changed the single file Path, following it back
@@ -164,7 +236,12 @@ package Version.Log is
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
       Stat_Count      : Natural := 0;
-      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>);
+      Header          : Header_Options := (others => <>);
+      Separate_Merges : Boolean := False;
+      Combined_Merges : Boolean := False;
+      Known           : Version.History.Commit_Id_Vectors.Vector :=
+        Version.History.Commit_Id_Vectors.Empty_Vector)
       return String;
    --  git's `log --graph` in the default (multi-line) format: each commit's
    --  full Log_List_Text block with the ASCII commit graph drawn down its left
@@ -178,7 +255,8 @@ package Version.Log is
       Commits : Version.History.Commit_Id_Vectors.Vector;
       Format  : String;
       Terminate_Records : Boolean := True;
-      Date_Mode : String := "") return String;
+      Date_Mode : String := "";
+      Header    : Header_Options := (others => <>)) return String;
    --  Render an already-selected list of commits. The caller does the
    --  revision walk, so ranges, exclusions, path limits and ordering are
    --  decided once and shared with rev-list rather than re-derived here.

@@ -1,8 +1,6 @@
 with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Containers.Ordered_Sets;
-with Ada.Containers.Vectors;
 with Ada.IO_Exceptions;
-with Ada.Strings.Unbounded;
 
 with Version.Objects; use Version.Objects;
 with Version.Object_Cache;
@@ -10,13 +8,13 @@ with Version.Revisions;
 with Version.Shallow_Cache;
 with Version.Ref_Cache;
 with Version.Pretty_Format;
-with Version.Diff;
 with Version.Verify;
 with Version.Refs;
 with Version.Ref_Format;
 with Version.Notes;
 with Version.Log_Graph;
-with Ada.Containers.Indefinite_Vectors;
+with Version.Ignore;
+with Version.Mailmap;
 
 package body Version.Log is
 
@@ -28,11 +26,53 @@ package body Version.Log is
    --  Refs are gathered in git's decoration order (the current branch first,
    --  then other branches, then tags, then remotes), each peeled to the commit
    --  it names.
+   function Has_Prefix (Text, Prefix : String) return Boolean is
+     (Text'Length >= Prefix'Length
+      and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
+
+   --  git's --decorate-refs DWIM: a pattern is tried as given, under
+   --  "refs/", and under any one "refs/<kind>/" hierarchy.
+   function Ref_Matches (Pattern, Refname : String) return Boolean is
+      Has_Glob : constant Boolean :=
+        (for some C of Pattern => C in '*' | '?' | '[');
+      function M (P : String) return Boolean is
+        (Version.Ignore.Wildcard_Matches (P, Refname)
+         or else (not Has_Glob
+                  and then Version.Ignore.Wildcard_Matches (P & "/*", Refname)));
+   begin
+      return M (Pattern)
+        or else M ("refs/" & Pattern)
+        or else M ("refs/*/" & Pattern);
+   end Ref_Matches;
+
    function Build_Decorations
-     (Repo : Version.Repository.Repository_Handle;
-      Mode : Decorate_Mode) return Decor_Maps.Map
+     (Repo    : Version.Repository.Repository_Handle;
+      Mode    : Decorate_Mode;
+      Include : String_Vectors.Vector := String_Vectors.Empty_Vector;
+      Exclude : String_Vectors.Vector := String_Vectors.Empty_Vector)
+      return Decor_Maps.Map
    is
       Map : Decor_Maps.Map;
+
+      --  --decorate-refs / --decorate-refs-exclude: a ref decorates when it
+      --  matches none of the excludes and (given any includes) one include.
+      function Wanted (Refname : String) return Boolean is
+      begin
+         for P of Exclude loop
+            if Ref_Matches (P, Refname) then
+               return False;
+            end if;
+         end loop;
+         if Include.Is_Empty then
+            return True;
+         end if;
+         for P of Include loop
+            if Ref_Matches (P, Refname) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Wanted;
 
       Head : constant Version.Refs.Head_Info :=
         Version.Refs.Read_Head (Repo);
@@ -86,27 +126,26 @@ package body Version.Log is
          end if;
       end Label;
 
-      procedure Scan (Prefix : String; Skip_Head_Branch : Boolean) is
-         Pats : Version.Ref_Format.String_Vectors.Vector;
-      begin
-         Pats.Append (Prefix);
-         for R of Version.Ref_Format.For_Each_Ref
-           (Repo, Pats, "%(refname)")
-         loop
-            if not (Skip_Head_Branch and then R = Head_Branch) then
-               begin
-                  Add (Version.Objects.To_String
-                         (Version.Revisions.Resolve_Commit (Repo, R)),
-                       Label (R));
-               exception
-                  when others => null;
-               end;
-            end if;
-         end loop;
-      end Scan;
+      --  git loads every ref in sorted order and prepends each decoration
+      --  as it goes, so they read in reverse ref order (tags, stash,
+      --  remotes, heads, ...) after the "HEAD -> <branch>" entry.  Without
+      --  --decorate-refs[-exclude] only the decorated namespaces (heads,
+      --  remotes, tags, stash) take part; with any pattern, every ref does.
+      Default_Namespaces : constant Boolean :=
+        Include.Is_Empty and then Exclude.Is_Empty;
+
+      function In_Default_Namespace (Refname : String) return Boolean is
+        (Has_Prefix (Refname, "refs/heads/")
+         or else Has_Prefix (Refname, "refs/remotes/")
+         or else Has_Prefix (Refname, "refs/tags/")
+         or else Refname = "refs/stash");
+
+      All_Refs : constant Version.Ref_Format.String_Vectors.Vector :=
+        Version.Ref_Format.For_Each_Ref
+          (Repo, Version.Ref_Format.String_Vectors.Empty_Vector, "%(refname)");
    begin
       --  Current branch first, shown as "HEAD -> <branch>".
-      if Head_Branch /= "" then
+      if Head_Branch /= "" and then Wanted (Head_Branch) then
          begin
             Add (Version.Objects.To_String
                    (Version.Revisions.Resolve_Commit (Repo, Head_Branch)),
@@ -115,9 +154,25 @@ package body Version.Log is
             when others => null;
          end;
       end if;
-      Scan ("refs/heads", Skip_Head_Branch => True);
-      Scan ("refs/tags", Skip_Head_Branch => False);
-      Scan ("refs/remotes", Skip_Head_Branch => False);
+      for I in reverse All_Refs.First_Index .. All_Refs.Last_Index loop
+         declare
+            R : constant String := All_Refs.Element (I);
+         begin
+            if R /= Head_Branch
+              and then not Has_Prefix (R, "refs/replace/")
+              and then (not Default_Namespaces or else In_Default_Namespace (R))
+              and then Wanted (R)
+            then
+               begin
+                  Add (Version.Objects.To_String
+                         (Version.Revisions.Resolve_Commit (Repo, R)),
+                       Label (R));
+               exception
+                  when others => null;
+               end;
+            end if;
+         end;
+      end loop;
       return Map;
    end Build_Decorations;
 
@@ -325,6 +380,14 @@ package body Version.Log is
          return Raw;
       elsif Mode = "unix" then
          return Raw (Raw'First .. Sep - 1);
+      elsif Mode /= "" and then Mode /= "default" and then Mode /= "short"
+        and then Mode /= "iso" and then Mode /= "iso8601"
+        and then Mode /= "iso-strict" and then Mode /= "iso8601-strict"
+        and then Mode /= "rfc2822" and then Mode /= "rfc"
+      then
+         --  relative, human, format:<strftime>, the -local variants:
+         --  the pretty-format engine renders those.
+         return Version.Pretty_Format.Format_Date (Raw, Mode);
       end if;
 
       declare
@@ -447,8 +510,36 @@ package body Version.Log is
       Append (Result, Character'Val (10));
    end Append_Line;
 
+   --  A message line with its tabs expanded to Tab_Width columns (git's
+   --  strbuf_add_tabexpand, measured from the line's own start, not the
+   --  indent); 0 leaves tabs alone.
+   function Expanded (Line : String; Tab_Width : Natural) return String is
+      Result : Unbounded_String;
+      Col    : Natural := 0;
+   begin
+      if Tab_Width = 0 then
+         return Line;
+      end if;
+      for C of Line loop
+         if C = ASCII.HT then
+            declare
+               Fill : constant Natural := Tab_Width - (Col mod Tab_Width);
+            begin
+               Append (Result, [1 .. Fill => ' ']);
+               Col := Col + Fill;
+            end;
+         else
+            Append (Result, C);
+            Col := Col + 1;
+         end if;
+      end loop;
+      return To_String (Result);
+   end Expanded;
+
    procedure Append_Indented_Message
-     (Result : in out Unbounded_String; Message : String)
+     (Result    : in out Unbounded_String;
+      Message   : String;
+      Tab_Width : Natural := 0)
    is
       Start : Natural := Message'First;
    begin
@@ -471,7 +562,8 @@ package body Version.Log is
                --  becomes the 4-space prefix alone, not an empty line.
                Append_Line (Result, "    ");
             else
-               Append_Line (Result, "    " & Message (Start .. Stop - 1));
+               Append_Line
+                 (Result, "    " & Expanded (Message (Start .. Stop - 1), Tab_Width));
             end if;
 
             Start := Stop + 1;
@@ -479,50 +571,160 @@ package body Version.Log is
       end loop;
    end Append_Indented_Message;
 
+   --  The id as `log` prints it: --abbrev=<n> when given, else the shortest
+   --  unique prefix floored at 7 (core.abbrev=auto); Full spells it out.
+   function Shown_Id
+     (Repo   : Version.Repository.Repository_Handle;
+      Id     : Version.Objects.Hex_Object_Id;
+      Header : Header_Options;
+      Full   : Boolean) return String
+   is
+      Hex : constant String := To_String (Id);
+      N   : constant Natural :=
+        (if Full then Hex'Length
+         elsif Header.Abbrev_Len > 0
+         then Natural'Min (Natural'Max (Header.Abbrev_Len, 4), Hex'Length)
+         else Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7));
+   begin
+      return Hex (Hex'First .. Hex'First + N - 1);
+   end Shown_Id;
+
+   --  git's put_revision_mark: the --left-right/--cherry/--boundary mark
+   --  and a space before the id, nothing without one.
+   function Mark_Prefix (Note : Annotation) return String is
+     (if Note.Mark = ' ' then "" else Note.Mark & " ");
+
    function Format_Commit_Oneline_With_Cache
      (Repo          : Version.Repository.Repository_Handle;
       Cache         : in out Version.Object_Cache.Object_Cache;
       Commit_Id     : Version.Objects.Hex_Object_Id;
       With_Parents  : Boolean := False;
-      Children_Text : String := "") return String
+      Children_Text : String := "";
+      Header        : Header_Options := (others => <>);
+      Note          : Annotation := (others => <>);
+      Decoration    : String := "";
+      From_Parent   : String := "") return String
    is
       Obj : constant Version.Objects.Git_Object :=
         Version.Object_Cache.Read_Object
           (Repo => Repo, Cache => Cache, Id => Commit_Id);
-      Full : constant String := To_String (Commit_Id);
-      --  git's `log --oneline` abbreviates to the shortest unique prefix,
-      --  floored at 7 (core.abbrev=auto), not a fixed width.
-      Abbrev : constant Natural :=
-        Version.Revisions.Unique_Abbrev_Length (Repo, Commit_Id, 7);
 
       --  --parents inserts the abbreviated parent ids after the commit id.
       function Parents_Text return String is
          Result : Unbounded_String;
       begin
          for P of Version.Objects.Commit_Parent_Ids (Obj) loop
-            declare
-               PS : constant String := Version.Objects.To_String (P);
-               PA : constant Natural :=
-                 Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
-            begin
-               Append (Result, PS (PS'First .. PS'First + PA - 1) & " ");
-            end;
+            Append
+              (Result, " " & Shown_Id (Repo, P, Header, Header.Full_Oneline));
          end loop;
          return To_String (Result);
       end Parents_Text;
+
+      --  Children_Text arrives space-terminated ("c1 c2 ").
+      function Children return String is
+        (if Children_Text'Length = 0 then ""
+         else " " & Children_Text (Children_Text'First .. Children_Text'Last - 1));
    begin
       if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
          raise Ada.IO_Exceptions.Data_Error
            with "object is not a commit: " & To_String (Commit_Id);
       end if;
 
-      return
-        Full (Full'First .. Full'First + Abbrev - 1)
-        & " "
-        & (if With_Parents then Parents_Text else "")
-        & Children_Text
-        & Version.Objects.Commit_Message_First_Line (Obj);
+      --  A reflog walk (-g) shows the entry in place of the subject.
+      if Length (Note.Reflog_Selector) > 0 then
+         return
+           Mark_Prefix (Note)
+           & Shown_Id (Repo, Commit_Id, Header, Header.Full_Oneline)
+           & " " & To_String (Note.Reflog_Selector) & ": "
+           & To_String (Note.Reflog_Message);
+      end if;
+
+      --  git's show_log order: mark, id, parents, children, source,
+      --  decorations, then the subject -- with --log-size wedged between
+      --  as its own line, exactly as git prints it.
+      declare
+         Subject : constant String :=
+           Version.Objects.Commit_Message_First_Line (Obj);
+         Size    : constant String := Natural'Image (Subject'Length);
+      begin
+         return
+           Mark_Prefix (Note)
+           & Shown_Id (Repo, Commit_Id, Header, Header.Full_Oneline)
+           & (if With_Parents then Parents_Text else "")
+           & Children
+           & (if From_Parent'Length > 0 then " (from " & From_Parent & ")" else "")
+           & (if Length (Note.Source) > 0
+              then ASCII.HT & To_String (Note.Source) else "")
+           & (if Decoration'Length > 0 then " (" & Decoration & ")" else "")
+           & " "
+           & (if Header.Log_Size
+              then "log size " & Size (Size'First + 1 .. Size'Last) & ASCII.LF
+              else "")
+           & Subject;
+      end;
    end Format_Commit_Oneline_With_Cache;
+
+   --  The "Notes:" blocks for Commit_Id under Header's notes selection --
+   --  each a blank line, its label, and the indented text -- or "".
+   function Notes_Block
+     (Repo      : Version.Repository.Repository_Handle;
+      Commit_Id : Version.Objects.Hex_Object_Id;
+      Header    : Header_Options;
+      Tab_Width : Natural) return String
+   is
+      Body_Text : Unbounded_String;
+
+      procedure Show_Note (Ref : String; Label : String) is
+         Text : constant String :=
+           Version.Notes.Show (Repo, Commit_Id, Ref);
+         Last : Natural := Text'Last;
+      begin
+         while Last >= Text'First
+           and then Text (Last) = Character'Val (10)
+         loop
+            Last := Last - 1;
+         end loop;
+         if Last >= Text'First then
+            Append_Line (Body_Text, "");
+            Append_Line (Body_Text, Label);
+            Append_Indented_Message
+              (Body_Text, Text (Text'First .. Last), Tab_Width);
+         end if;
+      exception
+         when others =>
+            null;
+      end Show_Note;
+   begin
+      --  The default ref reads "Notes:"; any other names itself
+      --  ("Notes (<ref>):", the refs/notes/ prefix dropped).
+      if Header.Standard_Notes then
+         Show_Note (Version.Notes.Default_Ref, "Notes:");
+      end if;
+      for R of Header.Notes_Refs loop
+         declare
+            Full : constant String :=
+              (if R'Length >= 11
+                 and then R (R'First .. R'First + 10) = "refs/notes/"
+               then R
+               elsif R'Length >= 6
+                 and then R (R'First .. R'First + 5) = "notes/"
+               then "refs/" & R
+               else "refs/notes/" & R);
+            Short : constant String :=
+              Full (Full'First + 11 .. Full'Last);
+         begin
+            if Full /= Version.Notes.Default_Ref
+              or else not Header.Standard_Notes
+            then
+               Show_Note
+                 (Full,
+                  (if Full = Version.Notes.Default_Ref then "Notes:"
+                   else "Notes (" & Short & "):"));
+            end if;
+         end;
+      end loop;
+      return To_String (Body_Text);
+   end Notes_Block;
 
    function Format_Commit_With_Cache
      (Repo           : Version.Repository.Repository_Handle;
@@ -532,14 +734,78 @@ package body Version.Log is
       Show_Signature : Boolean := False;
       Kind           : Pretty_Kind := Pretty_Medium;
       Show_Notes     : Boolean := True;
-      Date_Mode      : String := "") return String
+      Date_Mode      : String := "";
+      Header         : Header_Options := (others => <>);
+      Note           : Annotation := (others => <>);
+      Decoration     : String := "";
+      From_Parent    : String := "";
+      Children_Text  : String := "") return String
    is
       use type Version.Verify.Verify_Result;
+
+      --  --parents: the parent ids after the commit id, abbreviated only
+      --  under --abbrev-commit.
+      function Parents_Suffix return String is
+         R : Unbounded_String;
+      begin
+         if Header.Parents then
+            for P of Version.Objects.Commit_Parent_Ids
+              (Version.Object_Cache.Read_Object (Repo, Cache, Commit_Id))
+            loop
+               Append (R, " " & Shown_Id (Repo, P, Header, not Header.Abbrev_Commit));
+            end loop;
+         end if;
+         return To_String (R);
+      end Parents_Suffix;
       Obj     : constant Version.Objects.Git_Object :=
         Version.Object_Cache.Read_Object
           (Repo => Repo, Cache => Cache, Id => Commit_Id);
       Content : constant String := Version.Objects.Content (Obj);
       Result  : Unbounded_String;
+      --  Everything after the commit line (and the reflog lines) is what
+      --  git measures for --log-size, so it is built apart.
+      Body_Text : Unbounded_String;
+
+      --  --[no-]use-mailmap rewrites the identity on the Author/Commit
+      --  lines; the date tail stays.
+      Map : constant Version.Mailmap.Entries :=
+        (if Header.Mailmap then Version.Mailmap.Load (Repo)
+         else Version.Mailmap.Parse (""));
+
+      function Mapped (Ident_Line : String) return String is
+         LT, GT : Natural := 0;
+      begin
+         if not Header.Mailmap then
+            return Ident_Line;
+         end if;
+         for K in Ident_Line'Range loop
+            if Ident_Line (K) = '<' and then LT = 0 then
+               LT := K;
+            elsif Ident_Line (K) = '>' then
+               GT := K;
+            end if;
+         end loop;
+         if LT = 0 or else GT < LT then
+            return Ident_Line;
+         end if;
+         declare
+            Name  : constant String :=
+              (if LT > Ident_Line'First + 1
+               then Ident_Line (Ident_Line'First .. LT - 2) else "");
+            Email : constant String := Ident_Line (LT + 1 .. GT - 1);
+            New_Name, New_Email : Unbounded_String;
+         begin
+            Version.Mailmap.Apply (Map, Name, Email, New_Name, New_Email);
+            return To_String (New_Name) & " <" & To_String (New_Email) & ">"
+              & Ident_Line (GT + 1 .. Ident_Line'Last);
+         end;
+      end Mapped;
+
+      --  --expand-tabs: git's default is 8 for the indented layouts.
+      Tab_Width : constant Natural :=
+        (if Header.Expand_Tabs >= 0 then Header.Expand_Tabs
+         elsif Kind in Pretty_Medium | Pretty_Full | Pretty_Fuller then 8
+         else 0);
       --  Short shows only the folded subject; every other format shows the
       --  whole message when Full_Message asks for it.
       Show_Body : constant Boolean :=
@@ -556,7 +822,25 @@ package body Version.Log is
            with "object is not a commit: " & To_String (Commit_Id);
       end if;
 
-      Append_Line (Result, "commit " & To_String (Commit_Id));
+      Append_Line
+        (Result,
+         "commit " & Mark_Prefix (Note)
+         & Shown_Id (Repo, Commit_Id, Header, not Header.Abbrev_Commit)
+         & Parents_Suffix
+         & (if Children_Text'Length = 0 then ""
+            else " " & Children_Text (Children_Text'First .. Children_Text'Last - 1))
+         & (if From_Parent'Length > 0 then " (from " & From_Parent & ")" else "")
+         & (if Length (Note.Source) > 0
+            then ASCII.HT & To_String (Note.Source) else "")
+         & (if Decoration'Length > 0 then " (" & Decoration & ")" else ""));
+      if Length (Note.Reflog_Selector) > 0 then
+         Append_Line
+           (Result,
+            "Reflog: " & To_String (Note.Reflog_Selector)
+            & " (" & To_String (Note.Reflog_Ident) & ")");
+         Append_Line
+           (Result, "Reflog message: " & To_String (Note.Reflog_Message));
+      end if;
 
       if Kind = Pretty_Raw then
          --  Raw prints the commit object's own headers verbatim (tree, parent
@@ -574,7 +858,7 @@ package body Version.Log is
                end if;
             end loop;
             if Sep >= Content'First then
-               Append_Line (Result, Content (Content'First .. Sep - 1));
+               Append_Line (Body_Text, Content (Content'First .. Sep - 1));
             end if;
          end;
       else
@@ -589,19 +873,9 @@ package body Version.Log is
                   Line : Unbounded_String := To_Unbounded_String ("Merge:");
                begin
                   for P of Parents loop
-                     declare
-                        Full_P : constant String :=
-                          Version.Objects.To_String (P);
-                        Abbrev : constant Natural :=
-                          Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
-                     begin
-                        Append
-                          (Line,
-                           " "
-                           & Full_P (Full_P'First .. Full_P'First + Abbrev - 1));
-                     end;
+                     Append (Line, " " & Shown_Id (Repo, P, Header, False));
                   end loop;
-                  Append_Line (Result, To_String (Line));
+                  Append_Line (Body_Text, To_String (Line));
                end;
             end if;
          end;
@@ -613,7 +887,7 @@ package body Version.Log is
                Version.Verify.Verify_Object_Reporting
                  (Repo, Commit_Id, VR, Out_Text);
                if VR /= Version.Verify.No_Signature then
-                  Append (Result, To_String (Out_Text));
+                  Append (Body_Text, To_String (Out_Text));
                end if;
             end;
          end if;
@@ -623,28 +897,28 @@ package body Version.Log is
          --  fuller shows both identities with both dates (colon-aligned to 12).
          case Kind is
             when Pretty_Short =>
-               Append_Line (Result, "Author: " & Author_Name_Date (Content));
+               Append_Line (Body_Text, "Author: " & Mapped (Author_Name_Date (Content)));
             when Pretty_Medium =>
-               Append_Line (Result, "Author: " & Author_Name_Date (Content));
+               Append_Line (Body_Text, "Author: " & Mapped (Author_Name_Date (Content)));
                Append_Line
-                 (Result,
+                 (Body_Text,
                   "Date:   "
                   & Format_Git_Date (Author_Date (Content), Date_Mode));
             when Pretty_Full =>
-               Append_Line (Result, "Author: " & Author_Name_Date (Content));
+               Append_Line (Body_Text, "Author: " & Mapped (Author_Name_Date (Content)));
                Append_Line
-                 (Result, "Commit: " & Committer_Name_Date (Content));
+                 (Body_Text, "Commit: " & Mapped (Committer_Name_Date (Content)));
             when Pretty_Fuller =>
                Append_Line
-                 (Result, "Author:     " & Author_Name_Date (Content));
+                 (Body_Text, "Author:     " & Mapped (Author_Name_Date (Content)));
                Append_Line
-                 (Result,
+                 (Body_Text,
                   "AuthorDate: "
                   & Format_Git_Date (Author_Date (Content), Date_Mode));
                Append_Line
-                 (Result, "Commit:     " & Committer_Name_Date (Content));
+                 (Body_Text, "Commit:     " & Mapped (Committer_Name_Date (Content)));
                Append_Line
-                 (Result,
+                 (Body_Text,
                   "CommitDate: "
                   & Format_Git_Date (Committer_Date (Content), Date_Mode));
             when Pretty_Raw =>
@@ -652,32 +926,25 @@ package body Version.Log is
          end case;
       end if;
 
-      Append_Line (Result, "");
-      Append_Indented_Message (Result, Message);
+      Append_Line (Body_Text, "");
+      Append_Indented_Message (Body_Text, Message, Tab_Width);
 
       --  git shows the commit's note (from the default notes ref) after the
       --  message, blank-separated and indented like the message -- but the
       --  automatic display is suppressed once an explicit --pretty/--format is
       --  given (Show_Notes carries that), and the raw format never carries it.
       if Full_Message and then Kind /= Pretty_Raw and then Show_Notes then
-         declare
-            Note : constant String :=
-              Version.Notes.Show (Repo, Commit_Id);
-            Last : Natural := Note'Last;
-         begin
-            while Last >= Note'First
-              and then Note (Last) = Character'Val (10)
-            loop
-               Last := Last - 1;
-            end loop;
-            if Last >= Note'First then
-               Append_Line (Result, "");
-               Append_Line (Result, "Notes:");
-               Append_Indented_Message (Result, Note (Note'First .. Last));
-            end if;
-         end;
+         Append (Body_Text, Notes_Block (Repo, Commit_Id, Header, Tab_Width));
       end if;
 
+      if Header.Log_Size then
+         declare
+            Img : constant String := Natural'Image (Length (Body_Text));
+         begin
+            Append_Line (Result, "log size " & Img (Img'First + 1 .. Img'Last));
+         end;
+      end if;
+      Append (Result, Body_Text);
       return To_String (Result);
    end Format_Commit_With_Cache;
 
@@ -687,7 +954,9 @@ package body Version.Log is
       Full_Message : Boolean := False;
       Kind         : Pretty_Kind := Pretty_Medium;
       Show_Notes   : Boolean := True;
-      Date_Mode    : String := "") return String
+      Date_Mode    : String := "";
+      Header       : Header_Options := (others => <>);
+      Note         : Annotation := (others => <>)) return String
    is
       Cache : Version.Object_Cache.Object_Cache;
    begin
@@ -697,6 +966,8 @@ package body Version.Log is
            Cache        => Cache,
            Commit_Id    => Commit_Id,
            Full_Message => Full_Message,
+           Header       => Header,
+           Note         => Note,
            Kind         => Kind,
            Show_Notes   => Show_Notes,
            Date_Mode    => Date_Mode);
@@ -839,6 +1110,170 @@ package body Version.Log is
       return Result;
    end To_Commit_List;
 
+   --  The annotation for the Index-th shown commit; none when the caller
+   --  gave no annotations.
+   function Note_At (Header : Header_Options; Index : Natural)
+     return Annotation
+   is
+   begin
+      if Index >= Header.Annotations.First_Index
+        and then Index <= Header.Annotations.Last_Index
+      then
+         return Header.Annotations.Element (Index);
+      end if;
+      return (others => <>);
+   end Note_At;
+
+   --  The one-element annotation vector for a listing of a single commit
+   --  (the graph renderer formats each commit on its own).
+   function Note_Of (Header : Header_Options; Index : Natural)
+     return Annotation_Vectors.Vector
+   is
+      V : Annotation_Vectors.Vector;
+   begin
+      V.Append (Note_At (Header, Index));
+      return V;
+   end Note_Of;
+
+   --  Whether Parent_Id is a parent of the commit Child_Hex names.
+   function Is_Parent_Of
+     (Repo      : Version.Repository.Repository_Handle;
+      Objects   : in out Version.Object_Cache.Object_Cache;
+      Parent_Id : Version.Objects.Hex_Object_Id;
+      Child_Hex : Unbounded_String) return Boolean
+   is
+      Child : constant Version.Objects.Git_Object :=
+        Version.Object_Cache.Read_Object
+          (Repo, Objects,
+           Version.Objects.To_Object_Id (To_String (Child_Hex)));
+   begin
+      for P of Version.Objects.Commit_Parent_Ids (Child) loop
+         if Version.Objects.To_String (P)
+            = Version.Objects.To_String (Parent_Id)
+         then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Is_Parent_Of;
+
+   --  git's `--children`: for each shown commit, the shown commits that
+   --  list it as a parent, abbreviated and space-terminated ("c1 c2 ").
+   --  git records a child by prepending it as the (newest-first) walk
+   --  reaches it, so iterating Commits in display order and prepending
+   --  reproduces its per-commit order.
+   function Children_Map
+     (Repo    : Version.Repository.Repository_Handle;
+      Objects : in out Version.Object_Cache.Object_Cache;
+      Commits : Version.History.Commit_Id_Vectors.Vector;
+      Header  : Header_Options;
+      Full    : Boolean) return Decor_Maps.Map
+   is
+      Kids   : Decor_Maps.Map;
+      In_Set : Id_Sets.Set;
+   begin
+      for C of Commits loop
+         In_Set.Include (Version.Objects.To_String (C));
+      end loop;
+      for C of Commits loop
+         declare
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object (Repo, Objects, C);
+            Child : constant String := Shown_Id (Repo, C, Header, Full);
+         begin
+            for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+               declare
+                  P_Hex : constant String := Version.Objects.To_String (P);
+               begin
+                  if In_Set.Contains (P_Hex) then
+                     Kids.Include
+                       (P_Hex,
+                        Child & " "
+                        & (if Kids.Contains (P_Hex) then Kids.Element (P_Hex)
+                           else ""));
+                  end if;
+               end;
+            end loop;
+         end;
+      end loop;
+      return Kids;
+   end Children_Map;
+
+   --  git's `--boundary`: the excluded parents of the shown commits (the
+   --  uninteresting frontier of a range).
+   function Boundary_Commits
+     (Repo    : Version.Repository.Repository_Handle;
+      Objects : in out Version.Object_Cache.Object_Cache;
+      Commits : Version.History.Commit_Id_Vectors.Vector)
+      return Version.History.Commit_Id_Vectors.Vector
+   is
+      In_Set   : Id_Sets.Set;
+      Seen     : Id_Sets.Set;
+      Boundary : Version.History.Commit_Id_Vectors.Vector;
+   begin
+      for C of Commits loop
+         In_Set.Include (Version.Objects.To_String (C));
+      end loop;
+      for C of Commits loop
+         declare
+            Obj : constant Version.Objects.Git_Object :=
+              Version.Object_Cache.Read_Object (Repo, Objects, C);
+         begin
+            for P of Version.Objects.Commit_Parent_Ids (Obj) loop
+               declare
+                  P_Hex : constant String := Version.Objects.To_String (P);
+               begin
+                  if not In_Set.Contains (P_Hex)
+                    and then not Seen.Contains (P_Hex)
+                  then
+                     Seen.Include (P_Hex);
+                     Boundary.Append (P);
+                  end if;
+               end;
+            end loop;
+         end;
+      end loop;
+      --  git records a boundary parent as each shown commit comes out (in
+      --  parent order), builds its list by prepending, and then sorts that
+      --  list topologically in graph order -- which keeps the list order
+      --  for unrelated commits and puts a boundary commit's own boundary
+      --  ancestors after it.
+      declare
+         Reversed : Version.History.Commit_Id_Vectors.Vector;
+      begin
+         for I in reverse Boundary.First_Index .. Boundary.Last_Index loop
+            Reversed.Append (Boundary.Element (I));
+         end loop;
+         return Version.History.Topological_Order (Repo, Reversed);
+      end;
+   end Boundary_Commits;
+
+   --  A name-only rendering of the same pairs the caller's options select:
+   --  stands in for git's diff queue when deciding whether a commit has
+   --  anything to show.
+   function Probe_Opts
+     (Base         : Version.Diff.Diff_Options;
+      Detect       : Version.Diff.Rename_Detection;
+      Rename_Score : Natural) return Version.Diff.Diff_Options
+   is ((Base with delta
+        Name_Only => True, Name_Status => False, Stat => False,
+        Summary => False, Numstat => False, Shortstat => False, Raw => False,
+        Compact_Summary => False, Detect_Renames => Detect,
+        Rename_Score => Rename_Score));
+
+   --  Two consecutive shown commits are "linear" when one is the other's
+   --  parent -- whichever way round, so --reverse reads the same.
+   function Linear
+     (Repo    : Version.Repository.Repository_Handle;
+      Objects : in out Version.Object_Cache.Object_Cache;
+      Current : Version.Objects.Hex_Object_Id;
+      Previous_Hex : Unbounded_String) return Boolean
+   is (Is_Parent_Of (Repo, Objects, Current, Previous_Hex)
+       or else Is_Parent_Of
+                 (Repo, Objects,
+                  Version.Objects.To_Object_Id (To_String (Previous_Hex)),
+                  To_Unbounded_String (Version.Objects.To_String (Current))));
+
    function Log_List_Text
      (Repo           : Version.Repository.Repository_Handle;
       Commits        : Version.History.Commit_Id_Vectors.Vector;
@@ -862,148 +1297,339 @@ package body Version.Log is
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
       Stat_Count      : Natural := 0;
-      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>);
+      Header          : Header_Options := (others => <>);
+      Separate_Merges : Boolean := False;
+      Combined_Merges : Boolean := False)
       return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       First   : Boolean := True;
+      Decor   : constant Decor_Maps.Map :=
+        (if Header.Decorate = No_Decorate then Decor_Maps.Empty_Map
+         else Build_Decorations
+                (Repo, Header.Decorate,
+                 Header.Decorate_Refs, Header.Decorate_Refs_Exclude));
+      Previous : Unbounded_String;   --  the last shown commit, for the break
+      Kids     : constant Decor_Maps.Map :=
+        (if Header.Children
+         then Children_Map (Repo, Objects, Commits, Header, not Header.Abbrev_Commit)
+         else Decor_Maps.Empty_Map);
    begin
-      for Current_Id of Commits loop
+      for Index in Commits.First_Index .. Commits.Last_Index loop
          declare
+            Current_Id : constant Version.Objects.Hex_Object_Id :=
+              Commits.Element (Index);
             Obj        : constant Version.Objects.Git_Object :=
               Version.Object_Cache.Read_Object
                 (Repo => Repo, Cache => Objects, Id => Current_Id);
+            Hex        : constant String := Version.Objects.To_String (Current_Id);
+            Note       : constant Annotation := Note_At (Header, Index);
+            Decoration : constant String :=
+              (if Decor.Contains (Hex) then Decor.Element (Hex) else "");
+            --  One log entry: the header, then the diff against Parent
+            --  when a diff format is on.  A merge under -m gets one entry
+            --  per parent, labelled "(from <parent>)".
+            procedure Emit_Entry
+              (Parent : String; From_Label : String; Show_Diff : Boolean) is
+            begin
+               if Oneline then
+                  Append
+                    (Result,
+                     Format_Commit_Oneline_With_Cache
+                       (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
+                        Header => Header, Note => Note,
+                        Decoration => Decoration,
+                        From_Parent => From_Label));
+                  if not Header.Nul_Separated
+                    or else Length (Note.Reflog_Selector) > 0
+                  then
+                     Append (Result, ASCII.LF);
+                  end if;
+                  --  An explicit --notes shows the note under the oneline
+                  --  header too, blank-terminated.
+                  if Show_Notes and then Header.Notes_Explicit then
+                     declare
+                        Block : constant String :=
+                          Notes_Block (Repo, Current_Id, Header, 0);
+                     begin
+                        if Block'Length > 0 then
+                           Append (Result, Block (Block'First + 1 .. Block'Last));
+                           Append_Line (Result, "");
+                        end if;
+                     end;
+                  end if;
+               else
+                  Append
+                    (Result,
+                     Format_Commit_With_Cache
+                       (Repo           => Repo,
+                        Cache          => Objects,
+                        Commit_Id      => Current_Id,
+                        Full_Message   => True,
+                        Show_Signature => Show_Signature,
+                        Kind           => Kind,
+                        Show_Notes     => Show_Notes,
+                        Date_Mode      => Date_Mode,
+                        Header         => Header,
+                        Note           => Note,
+                        Decoration     => Decoration,
+                        From_Parent    => From_Label,
+                        Children_Text  =>
+                          (if Kids.Contains (Hex) then Kids.Element (Hex) else "")));
+               end if;
+               if Show_Diff then
+                  --  git's --stat/-p: a blank line, then the diffstat or the
+                  --  patch against Parent (or the empty tree for a root commit).
+                  declare
+                     Has_Summary : constant Boolean :=
+                       Stat or else Name_Only or else Name_Status
+                       or else Numstat or else Shortstat or else Raw
+                       or else Diff_Base.Summary;
+                     --  A summary format (--stat/--name-only/...) and a patch (-p)
+                     --  need separate diff passes: Diff_Options suppresses the
+                     --  patch body whenever a summary field is set.
+                     --  --raw goes through the porcelain engine (Diff_Options.Raw)
+                     --  so it detects renames by default (git's diff.renames), as
+                     --  `log --raw` does -- the diff-tree plumbing raw does not.
+                     --  git's -M<n>/-C<n> sets the rename similarity threshold;
+                     --  a non-zero score forces rename detection on (it is on by
+                     --  default for these summaries anyway).
+                     Detect : constant Version.Diff.Rename_Detection :=
+                       (if Rename_Score > 0 then Version.Diff.Renames_On
+                        else Version.Diff.Renames_Default);
+                     --  Diff_Base carries the caller's diff switches (-w, --color,
+                     --  --diff-algorithm, ...); the log-level fields go on top.
+                     Summary_Opts : constant Version.Diff.Diff_Options :=
+                       (Diff_Base with delta
+                        Stat           => Stat,
+                        Name_Only      => Name_Only,
+                        Name_Status    => Name_Status,
+                        Numstat        => Numstat,
+                        Shortstat      => Shortstat,
+                        Raw            => Raw,
+                        Detect_Renames => Detect,
+                        Rename_Score   => Rename_Score,
+                        Context_Lines  => Context,
+                        Stat_Width      => Stat_Width,
+                        Stat_Name_Width => Stat_Name_Width,
+                        Stat_Count      => Stat_Count);
+                     Patch_Opts : constant Version.Diff.Diff_Options :=
+                       (Diff_Base with delta
+                        Detect_Renames => Detect,
+                        Rename_Score   => Rename_Score,
+                        Context_Lines  => Context);
+
+                     --  Use the pathspec overload only when a limit is present;
+                     --  the plain overload is the exact unlimited rendering.
+                     function Diff_Of (Opts : Version.Diff.Diff_Options)
+                        return String
+                     is (if Paths.Is_Empty then
+                           (if Parent'Length > 0
+                            then Version.Diff.Diff_Commits
+                                   (Repo, Version.Objects.To_Object_Id (Parent),
+                                    Current_Id, Opts)
+                            else Version.Diff.Diff_Root_Commit
+                                   (Repo, Current_Id, Opts))
+                         elsif Parent'Length > 0
+                         then Version.Diff.Diff_Commits
+                                (Repo, Version.Objects.To_Object_Id (Parent),
+                                 Current_Id, Paths, Opts)
+                         else Version.Diff.Diff_Root_Commit
+                                (Repo, Current_Id, Paths, Opts));
+                     Summary_Text : constant String :=
+                       (if Has_Summary then Diff_Of (Summary_Opts) else "");
+                     Patch_Text   : constant String :=
+                       (if Patch and then not (Name_Only or else Name_Status)
+                        then Diff_Of (Patch_Opts) else "");
+                     --  git prints the separator whenever the diff queue has
+                     --  a pair, even when the chosen format then says nothing
+                     --  (--summary of a plain edit); a queue emptied by
+                     --  --relative or whitespace folding gets none.  A
+                     --  name-only pass stands in for the queue.
+                     Has_Pairs : constant Boolean :=
+                       Summary_Text'Length > 0 or else Patch_Text'Length > 0
+                       or else Diff_Of (Probe_Opts (Diff_Base, Detect, Rename_Score))'Length > 0;
+                  begin
+                     --  The full header ends with the message, so a separator
+                     --  precedes the file changes; the oneline header runs
+                     --  straight into them. git leads a diffstat that is followed
+                     --  by a patch with "---" rather than a blank line.
+                     if not Oneline and then Has_Pairs then
+                        if Stat and then Patch then
+                           Append_Line (Result, "---");
+                        else
+                           Append_Line (Result, "");
+                        end if;
+                     end if;
+
+                     Append (Result, Summary_Text);
+
+                     --  git shows the patch after the summary, blank-separated --
+                     --  but the name-only/name-status formats replace the patch
+                     --  entirely, so -p adds nothing there.
+                     if Patch_Text'Length > 0 then
+                        if Has_Summary then
+                           Append_Line (Result, "");
+                        end if;
+                        Append (Result, Patch_Text);
+                     end if;
+                  end;
+               end if;
+            end Emit_Entry;
+
+            Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+              Version.Objects.Commit_Parent_Ids (Obj);
+            Is_Merge : constant Boolean := Natural (Parents.Length) >= 2;
+            Any_Diff : constant Boolean :=
+              Stat or else Patch or else Name_Only or else Name_Status
+              or else Numstat or else Shortstat or else Raw
+              or else Diff_Base.Summary;
          begin
-            --  The full-header format blank-separates entries; the oneline
-            --  form runs them together, as git does.
-            if not First and then not Oneline then
-               Append_Line (Result, "");
-            end if;
-            First := False;
-            if Oneline then
-               Append_Line
-                 (Result,
-                  Format_Commit_Oneline_With_Cache
-                    (Repo => Repo, Cache => Objects, Commit_Id => Current_Id));
-            else
-               Append
-                 (Result,
-                  Format_Commit_With_Cache
-                    (Repo           => Repo,
-                     Cache          => Objects,
-                     Commit_Id      => Current_Id,
-                     Full_Message   => True,
-                     Show_Signature => Show_Signature,
-                     Kind           => Kind,
-                     Show_Notes     => Show_Notes,
-                     Date_Mode      => Date_Mode));
-            end if;
-            if (Stat or else Patch or else Name_Only or else Name_Status
-                or else Numstat or else Shortstat or else Raw)
-              and then
-                (Natural (Version.Objects.Commit_Parent_Ids (Obj).Length) < 2
-                 or else First_Parent)
-            then
-               --  git's --stat/-p: a blank line, then the diffstat or the
-               --  patch against the first parent (or the empty tree for a
-               --  root commit). Merge commits (two or more parents) produce
-               --  no diff by default -- git needs -m/-c/--cc, or --first-parent
-               --  to diff the merge against its first parent.
+            --  --diff-filter prunes a commit whose diff has nothing left to
+            --  show (git shows the header only when the diff did).
+            if Any_Diff and then Length (Diff_Base.Diff_Filter) > 0 then
                declare
-                  Parent : constant String :=
-                    Version.Objects.Commit_Parent_Id (Obj);
-                  Has_Summary : constant Boolean :=
-                    Stat or else Name_Only or else Name_Status
-                    or else Numstat or else Shortstat or else Raw;
-                  --  A summary format (--stat/--name-only/...) and a patch (-p)
-                  --  need separate diff passes: Diff_Options suppresses the
-                  --  patch body whenever a summary field is set.
-                  --  --raw goes through the porcelain engine (Diff_Options.Raw)
-                  --  so it detects renames by default (git's diff.renames), as
-                  --  `log --raw` does -- the diff-tree plumbing raw does not.
-                  --  git's -M<n>/-C<n> sets the rename similarity threshold;
-                  --  a non-zero score forces rename detection on (it is on by
-                  --  default for these summaries anyway).
                   Detect : constant Version.Diff.Rename_Detection :=
                     (if Rename_Score > 0 then Version.Diff.Renames_On
                      else Version.Diff.Renames_Default);
-                  --  Diff_Base carries the caller's diff switches (-w, --color,
-                  --  --diff-algorithm, ...); the log-level fields go on top.
-                  Summary_Opts : constant Version.Diff.Diff_Options :=
-                    (Diff_Base with delta
-                     Stat           => Stat,
-                     Name_Only      => Name_Only,
-                     Name_Status    => Name_Status,
-                     Numstat        => Numstat,
-                     Shortstat      => Shortstat,
-                     Raw            => Raw,
-                     Detect_Renames => Detect,
-                     Rename_Score   => Rename_Score,
-                     Context_Lines  => Context,
-                     Stat_Width      => Stat_Width,
-                     Stat_Name_Width => Stat_Name_Width,
-                     Stat_Count      => Stat_Count);
-                  Patch_Opts : constant Version.Diff.Diff_Options :=
-                    (Diff_Base with delta
-                     Detect_Renames => Detect,
-                     Rename_Score   => Rename_Score,
-                     Context_Lines  => Context);
-
-                  --  Use the pathspec overload only when a limit is present;
-                  --  the plain overload is the exact unlimited rendering.
-                  function Diff_Of (Opts : Version.Diff.Diff_Options)
-                     return String
-                  is (if Paths.Is_Empty then
-                        (if Parent'Length > 0
-                         then Version.Diff.Diff_Commits
-                                (Repo, Version.Objects.To_Object_Id (Parent),
-                                 Current_Id, Opts)
-                         else Version.Diff.Diff_Root_Commit
-                                (Repo, Current_Id, Opts))
-                      elsif Parent'Length > 0
-                      then Version.Diff.Diff_Commits
-                             (Repo, Version.Objects.To_Object_Id (Parent),
-                              Current_Id, Paths, Opts)
-                      else Version.Diff.Diff_Root_Commit
-                             (Repo, Current_Id, Paths, Opts));
-                  Summary_Text : constant String :=
-                    (if Has_Summary then Diff_Of (Summary_Opts) else "");
-                  Patch_Text   : constant String :=
-                    (if Patch and then not (Name_Only or else Name_Status)
-                     then Diff_Of (Patch_Opts) else "");
+                  Probe  : constant Version.Diff.Diff_Options :=
+                    Probe_Opts (Diff_Base, Detect, Rename_Score);
+                  Any    : Boolean := False;
                begin
-                  --  The full header ends with the message, so a separator
-                  --  precedes the file changes; the oneline header runs
-                  --  straight into them. git leads a diffstat that is followed
-                  --  by a patch with "---" rather than a blank line -- and
-                  --  prints no separator at all when there is nothing to
-                  --  show (a --relative or whitespace-folded empty diff).
-                  if not Oneline
-                    and then (Summary_Text'Length > 0 or else Patch_Text'Length > 0)
+                  if Is_Merge and then not Separate_Merges and then not First_Parent
                   then
-                     if Stat and then Patch then
-                        Append_Line (Result, "---");
-                     else
-                        Append_Line (Result, "");
+                     Any := False;
+                  else
+                     for K in Parents.First_Index .. Parents.Last_Index loop
+                        exit when not Separate_Merges and then K > Parents.First_Index;
+                        if String'(if Paths.Is_Empty
+                                   then Version.Diff.Diff_Commits
+                                          (Repo, Parents.Element (K), Current_Id,
+                                           Probe)
+                                   else Version.Diff.Diff_Commits
+                                          (Repo, Parents.Element (K), Current_Id,
+                                           Paths, Probe))'Length > 0
+                        then
+                           Any := True;
+                        end if;
+                     end loop;
+                     if Parents.Is_Empty
+                       and then String'(if Paths.Is_Empty
+                                        then Version.Diff.Diff_Root_Commit
+                                               (Repo, Current_Id, Probe)
+                                        else Version.Diff.Diff_Root_Commit
+                                               (Repo, Current_Id, Paths,
+                                                Probe))'Length > 0
+                     then
+                        Any := True;
                      end if;
                   end if;
-
-                  Append (Result, Summary_Text);
-
-                  --  git shows the patch after the summary, blank-separated --
-                  --  but the name-only/name-status formats replace the patch
-                  --  entirely, so -p adds nothing there.
-                  if Patch_Text'Length > 0 then
-                     if Has_Summary then
-                        Append_Line (Result, "");
-                     end if;
-                     Append (Result, Patch_Text);
+                  if not Any then
+                     goto Skip_Commit;
                   end if;
                end;
             end if;
+
+            --  --show-linear-break: "\n<bar>\n" before a commit that is not
+            --  the parent of the one shown before it (git prints it ahead
+            --  of the usual separator).
+            if not First and then Length (Header.Linear_Break) > 0
+              and then not Linear (Repo, Objects, Current_Id, Previous)
+            then
+               Append (Result, ASCII.LF);
+               Append_Line (Result, To_String (Header.Linear_Break));
+            end if;
+            --  The full-header format blank-separates entries; the oneline
+            --  form runs them together, as git does.  -z puts a NUL where
+            --  the separator (or the oneline newline) would go.
+            if not First then
+               if Header.Nul_Separated then
+                  Append (Result, ASCII.NUL);
+               elsif not Oneline then
+                  Append_Line (Result, "");
+               end if;
+            end if;
+            First := False;
+            Previous := To_Unbounded_String (Hex);
+            if Is_Merge and then Any_Diff and then Separate_Merges then
+               --  Each parent's entry is a separate, blank-separated block
+               --  (git's -m), the label abbreviated in the oneline form.
+               for K in Parents.First_Index .. Parents.Last_Index loop
+                  if K > Parents.First_Index then
+                     if Header.Nul_Separated then
+                        Append (Result, ASCII.NUL);
+                     elsif not Oneline then
+                        Append_Line (Result, "");
+                     end if;
+                  end if;
+                  Emit_Entry
+                    (Version.Objects.To_String (Parents.Element (K)),
+                     Shown_Id (Repo, Parents.Element (K), Header,
+                               Full => not Oneline),
+                     Show_Diff => True);
+               end loop;
+            elsif Is_Merge and then Any_Diff and then Combined_Merges
+              and then not First_Parent
+            then
+               --  -c/--cc: the combined diff itself is not rendered; git
+               --  still prints the separator when the merge touched
+               --  anything relative to a parent.
+               Emit_Entry
+                 (Version.Objects.Commit_Parent_Id (Obj), "", Show_Diff => False);
+               declare
+                  Detect : constant Version.Diff.Rename_Detection :=
+                    (if Rename_Score > 0 then Version.Diff.Renames_On
+                     else Version.Diff.Renames_Default);
+                  Probe  : constant Version.Diff.Diff_Options :=
+                    Probe_Opts (Diff_Base, Detect, Rename_Score);
+               begin
+                  for K in Parents.First_Index .. Parents.Last_Index loop
+                     if String'(if Paths.Is_Empty
+                                then Version.Diff.Diff_Commits
+                                       (Repo, Parents.Element (K), Current_Id,
+                                        Probe)
+                                else Version.Diff.Diff_Commits
+                                       (Repo, Parents.Element (K), Current_Id,
+                                        Paths, Probe))'Length > 0
+                     then
+                        --  diff_tree_combined prints this newline after the
+                        --  header in every layout, oneline included.
+                        Append_Line (Result, "");
+                        exit;
+                     end if;
+                  end loop;
+               end;
+            else
+               Emit_Entry
+                 (Version.Objects.Commit_Parent_Id (Obj), "",
+                  Show_Diff => Any_Diff and then (not Is_Merge or else First_Parent));
+            end if;
+            <<Skip_Commit>>
          end;
       end loop;
+
+      --  --boundary: the range's excluded parents, marked "-", after the
+      --  shown commits.
+      if Header.Boundary and then not Oneline then
+         for B of Boundary_Commits (Repo, Objects, Commits) loop
+            Append_Line (Result, "");
+            Append
+              (Result,
+               Format_Commit_With_Cache
+                 (Repo           => Repo,
+                  Cache          => Objects,
+                  Commit_Id      => B,
+                  Full_Message   => True,
+                  Show_Signature => Show_Signature,
+                  Kind           => Kind,
+                  Show_Notes     => Show_Notes,
+                  Date_Mode      => Date_Mode,
+                  Header         => Header,
+                  Note           => (Mark => '-', others => <>)));
+         end loop;
+      end if;
 
       return To_String (Result);
    end Log_List_Text;
@@ -1032,158 +1658,86 @@ package body Version.Log is
       With_Parents  : Boolean := False;
       With_Children : Boolean := False;
       With_Boundary : Boolean := False;
-      Decorate      : Decorate_Mode := No_Decorate) return String
+      Decorate      : Decorate_Mode := No_Decorate;
+      Header        : Header_Options := (others => <>)) return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       Decor   : constant Decor_Maps.Map :=
         (if Decorate = No_Decorate then Decor_Maps.Empty_Map
-         else Build_Decorations (Repo, Decorate));
+         else Build_Decorations
+                (Repo, Decorate,
+                 Header.Decorate_Refs, Header.Decorate_Refs_Exclude));
 
-      --  git's `--children`: the shown commits that list each commit as a
-      --  parent. git records a child by prepending it as the (newest-first)
-      --  walk reaches it, so iterating Commits in display order and prepending
-      --  reproduces its per-commit order.
       Kids : Decor_Maps.Map;
 
-      procedure Build_Children_Map is
-         In_Set : Id_Sets.Set;
-      begin
-         for C of Commits loop
-            In_Set.Include (Version.Objects.To_String (C));
-         end loop;
-         for C of Commits loop
-            declare
-               Obj : constant Version.Objects.Git_Object :=
-                 Version.Object_Cache.Read_Object (Repo, Objects, C);
-               C_Hex : constant String := Version.Objects.To_String (C);
-               Ab    : constant Natural :=
-                 Version.Revisions.Unique_Abbrev_Length (Repo, C, 7);
-               Child : constant String := C_Hex (C_Hex'First .. C_Hex'First + Ab - 1);
-            begin
-               for P of Version.Objects.Commit_Parent_Ids (Obj) loop
-                  declare
-                     P_Hex : constant String := Version.Objects.To_String (P);
-                  begin
-                     if In_Set.Contains (P_Hex) then
-                        Kids.Include
-                          (P_Hex,
-                           Child & " "
-                           & (if Kids.Contains (P_Hex) then Kids.Element (P_Hex)
-                              else ""));
-                     end if;
-                  end;
-               end loop;
-            end;
-         end loop;
-      end Build_Children_Map;
-
       procedure Append_Boundary is
-         In_Set   : Id_Sets.Set;
-         Seen     : Id_Sets.Set;
-         Boundary : Version.History.Commit_Id_Vectors.Vector;
       begin
-         for C of Commits loop
-            In_Set.Include (Version.Objects.To_String (C));
-         end loop;
-         --  Excluded parents of the shown commits are the boundary.
-         for C of Commits loop
-            declare
-               Obj : constant Version.Objects.Git_Object :=
-                 Version.Object_Cache.Read_Object (Repo, Objects, C);
-            begin
-               for P of Version.Objects.Commit_Parent_Ids (Obj) loop
-                  declare
-                     P_Hex : constant String := Version.Objects.To_String (P);
-                  begin
-                     if not In_Set.Contains (P_Hex)
-                       and then not Seen.Contains (P_Hex)
-                     then
-                        Seen.Include (P_Hex);
-                        Boundary.Append (P);
-                     end if;
-                  end;
-               end loop;
-            end;
-         end loop;
-         --  git emits them in its priority-queue order: newest date first.
-         declare
-            function Date_Of (Id : Version.Objects.Hex_Object_Id)
-              return Long_Long_Integer
-            is (Commit_Date_Value
-                  (Version.Objects.Content
-                     (Version.Object_Cache.Read_Object (Repo, Objects, Id))));
-         begin
-            for A in Boundary.First_Index .. Boundary.Last_Index loop
-               declare
-                  Max : Natural := A;
-               begin
-                  for B in A + 1 .. Boundary.Last_Index loop
-                     if Date_Of (Boundary (B)) > Date_Of (Boundary (Max)) then
-                        Max := B;
-                     end if;
-                  end loop;
-                  if Max /= A then
-                     declare
-                        Tmp : constant Version.Objects.Hex_Object_Id :=
-                          Boundary (A);
-                     begin
-                        Boundary.Replace_Element (A, Boundary (Max));
-                        Boundary.Replace_Element (Max, Tmp);
-                     end;
-                  end if;
-               end;
-            end loop;
-         end;
-         for B of Boundary loop
+         for B of Boundary_Commits (Repo, Objects, Commits) loop
             Append_Line
               (Result,
-               "- "
-               & Format_Commit_Oneline_With_Cache
-                   (Repo => Repo, Cache => Objects, Commit_Id => B));
+               Format_Commit_Oneline_With_Cache
+                 (Repo => Repo, Cache => Objects, Commit_Id => B,
+                  Header => Header, Note => (Mark => '-', others => <>)));
          end loop;
       end Append_Boundary;
 
-      --  git puts the "(refs)" between the id (and parents) and the subject;
-      --  splice it in after the first space that ends the id/parents run.
-      function With_Decoration (Line, Hex : String) return String is
-      begin
-         if not Decor.Contains (Hex) then
-            return Line;
-         end if;
-         declare
-            Cut : Natural := Line'First;
-         begin
-            --  Skip the id and any parent ids (space-separated hex runs); the
-            --  subject begins after them. For oneline the id is one token, so
-            --  the first space is the split point (parents keep their own).
-            while Cut <= Line'Last and then Line (Cut) /= ' ' loop
-               Cut := Cut + 1;
-            end loop;
-            return Line (Line'First .. Cut - 1)
-              & " (" & Decor.Element (Hex) & ")"
-              & Line (Cut .. Line'Last);
-         end;
-      end With_Decoration;
    begin
       if With_Children then
-         Build_Children_Map;
+         Kids := Children_Map (Repo, Objects, Commits, Header, Header.Full_Oneline);
       end if;
 
-      for Current_Id of Commits loop
+      for Index in Commits.First_Index .. Commits.Last_Index loop
          declare
+            Current_Id : constant Version.Objects.Hex_Object_Id :=
+              Commits.Element (Index);
             Hex : constant String := Version.Objects.To_String (Current_Id);
          begin
-            Append_Line
+            --  --show-linear-break before a commit that does not parent the
+            --  one above it.
+            if Index > Commits.First_Index
+              and then Length (Header.Linear_Break) > 0
+              and then not Linear
+                             (Repo, Objects, Current_Id,
+                              To_Unbounded_String
+                                (Version.Objects.To_String
+                                   (Commits.Element (Index - 1))))
+            then
+               Append (Result, ASCII.LF);
+               Append_Line (Result, To_String (Header.Linear_Break));
+            end if;
+            Append
               (Result,
-               With_Decoration
-                 (Format_Commit_Oneline_With_Cache
-                    (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
-                     With_Parents  => With_Parents,
-                     Children_Text =>
-                       (if With_Children and then Kids.Contains (Hex)
-                        then Kids.Element (Hex) else "")),
-                  Hex));
+               Format_Commit_Oneline_With_Cache
+                 (Repo => Repo, Cache => Objects, Commit_Id => Current_Id,
+                  With_Parents  => With_Parents,
+                  Children_Text =>
+                    (if With_Children and then Kids.Contains (Hex)
+                     then Kids.Element (Hex) else ""),
+                  Header        => Header,
+                  Note          => Note_At (Header, Index),
+                  Decoration    =>
+                    (if Decor.Contains (Hex) then Decor.Element (Hex)
+                     else "")));
+            --  -z terminates each line with NUL instead of a newline; a
+            --  reflog entry line keeps its newline (git prints it itself).
+            Append
+              (Result,
+               (if Header.Nul_Separated
+                  and then Length (Note_At (Header, Index).Reflog_Selector) = 0
+                then ASCII.NUL else ASCII.LF));
+            --  An explicit --notes shows the note under the line too.
+            if Header.Notes_Explicit then
+               declare
+                  Block : constant String :=
+                    Notes_Block (Repo, Current_Id, Header, 0);
+               begin
+                  if Block'Length > 0 then
+                     Append (Result, Block (Block'First + 1 .. Block'Last));
+                     Append_Line (Result, "");
+                  end if;
+               end;
+            end if;
          end;
       end loop;
 
@@ -1259,7 +1813,10 @@ package body Version.Log is
       Commits       : Version.History.Commit_Id_Vectors.Vector;
       With_Parents  : Boolean := False;
       With_Children : Boolean := False;
-      Decorate      : Decorate_Mode := No_Decorate) return String
+      Decorate      : Decorate_Mode := No_Decorate;
+      Header        : Header_Options := (others => <>);
+      Known         : Version.History.Commit_Id_Vectors.Vector :=
+        Version.History.Commit_Id_Vectors.Empty_Vector) return String
    is
       --  Render each commit's oneline content once through the shared path, so
       --  ids/subjects/decorations match `--oneline` exactly, then draw the
@@ -1271,7 +1828,8 @@ package body Version.Log is
            With_Parents  => With_Parents,
            With_Children => With_Children,
            With_Boundary => False,
-           Decorate      => Decorate);
+           Decorate      => Decorate,
+           Header        => (Header with delta Nul_Separated => False));
 
       Objects : Version.Object_Cache.Object_Cache;
       In_Set  : Id_Sets.Set;
@@ -1293,7 +1851,11 @@ package body Version.Log is
          return Content (Start .. Stop - 1);
       end Next_Content_Line;
    begin
-      for C of Commits loop
+      --  Edges go to every parent the walk would show: with -<n> cutting
+      --  the listing short, Known (the uncapped selection) says which.
+      for C of Version.History.Commit_Id_Vectors.Vector'
+        (if Known.Is_Empty then Commits else Known)
+      loop
          In_Set.Include (Version.Objects.To_String (C));
       end loop;
 
@@ -1353,7 +1915,12 @@ package body Version.Log is
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
       Stat_Count      : Natural := 0;
-      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>);
+      Header          : Header_Options := (others => <>);
+      Separate_Merges : Boolean := False;
+      Combined_Merges : Boolean := False;
+      Known           : Version.History.Commit_Id_Vectors.Vector :=
+        Version.History.Commit_Id_Vectors.Empty_Vector)
       return String
    is
       Objects : Version.Object_Cache.Object_Cache;
@@ -1362,14 +1929,17 @@ package body Version.Log is
       Result  : Unbounded_String;
       First   : Boolean := True;
    begin
-      for C of Commits loop
+      for C of Version.History.Commit_Id_Vectors.Vector'
+        (if Known.Is_Empty then Commits else Known)
+      loop
          In_Set.Include (Version.Objects.To_String (C));
       end loop;
 
       Version.Log_Graph.Init (G);
 
-      for C of Commits loop
+      for I in Commits.First_Index .. Commits.Last_Index loop
          declare
+            C   : constant Version.Objects.Hex_Object_Id := Commits.Element (I);
             Obj : constant Version.Objects.Git_Object :=
               Version.Object_Cache.Read_Object (Repo, Objects, C);
             Parents : Version.Objects.Object_Id_Vectors.Vector;
@@ -1410,7 +1980,11 @@ package body Version.Log is
                   Stat_Width      => Stat_Width,
                   Stat_Name_Width => Stat_Name_Width,
                   Stat_Count      => Stat_Count,
-                  Diff_Base       => Diff_Base));
+                  Diff_Base       => Diff_Base,
+                  Header          => (Header with delta
+                                        Annotations => Note_Of (Header, I)),
+                  Separate_Merges => Separate_Merges,
+                  Combined_Merges => Combined_Merges));
 
             Version.Log_Graph.Update (G, C, Parents);
 
@@ -1491,7 +2065,10 @@ package body Version.Log is
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
       Stat_Count      : Natural := 0;
-      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>);
+      Header          : Header_Options := (others => <>);
+      Separate_Merges : Boolean := False;
+      Combined_Merges : Boolean := False)
       return String
    is
       Objects  : Version.Object_Cache.Object_Cache;
@@ -1670,7 +2247,10 @@ package body Version.Log is
                   Stat_Width      => Stat_Width,
                   Stat_Name_Width => Stat_Name_Width,
                   Stat_Count      => Stat_Count,
-                  Diff_Base       => Diff_Base));
+                  Diff_Base       => Diff_Base,
+                  Header          => Header,
+                  Separate_Merges => Separate_Merges,
+                  Combined_Merges => Combined_Merges));
          end;
       end loop;
 
@@ -1682,23 +2262,43 @@ package body Version.Log is
       Commits : Version.History.Commit_Id_Vectors.Vector;
       Format  : String;
       Terminate_Records : Boolean := True;
-      Date_Mode : String := "") return String
+      Date_Mode : String := "";
+      Header    : Header_Options := (others => <>)) return String
    is
       LF      : constant Character := Character'Val (10);
       Result  : Unbounded_String;
       First   : Boolean := True;
+      --  -z: NUL where the record terminator / separator would go.
+      Sep     : constant Character :=
+        (if Header.Nul_Separated then ASCII.NUL else LF);
    begin
-      for Current_Id of Commits loop
+      for Index in Commits.First_Index .. Commits.Last_Index loop
          declare
+            Current_Id : constant Version.Objects.Hex_Object_Id :=
+              Commits.Element (Index);
+            Note : constant Annotation := Note_At (Header, Index);
+            Text : constant String :=
+              Version.Pretty_Format.Expand
+                (Repo, Current_Id, Format, Date_Mode,
+                 Reflog => (Selector => Note.Reflog_Selector,
+                            Ident    => Note.Reflog_Ident,
+                            Message  => Note.Reflog_Message));
          begin
             if not First and then not Terminate_Records then
-               Append (Result, LF);
+               Append (Result, Sep);
             end if;
             First := False;
-            Append (Result, Version.Pretty_Format.Expand
-                              (Repo, Current_Id, Format, Date_Mode));
+            --  --log-size names the record's length ahead of it.
+            if Header.Log_Size then
+               declare
+                  Img : constant String := Natural'Image (Text'Length);
+               begin
+                  Append (Result, "log size " & Img (Img'First + 1 .. Img'Last) & LF);
+               end;
+            end if;
+            Append (Result, Text);
             if Terminate_Records then
-               Append (Result, LF);
+               Append (Result, Sep);
             end if;
          end;
       end loop;

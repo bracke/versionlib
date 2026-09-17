@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+
 with Version.Objects;
 with Version.Repository;
 
@@ -13,15 +15,29 @@ package Version.Pretty_Format is
    --  formats (%ad %aD %ai %aI %as %at, %c*), %s %f %b %B %e %n %% %x??.
    --  Unknown/not-yet-supported placeholders are emitted literally, exactly as
    --  git leaves an unrecognized "%x" sequence.
+   --  The reflog entry a `log -g` record stands for, feeding %gd/%gD/%gs
+   --  and the %gn/%gN/%ge/%gE identity; empty outside a reflog walk.
+   type Reflog_Info is record
+      Selector : Ada.Strings.Unbounded.Unbounded_String;
+      Ident    : Ada.Strings.Unbounded.Unbounded_String;   --  "Name <mail>"
+      Message  : Ada.Strings.Unbounded.Unbounded_String;
+   end record;
+
    function Expand
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
       Format    : String;
-      Date_Mode : String := "")
+      Date_Mode : String := "";
+      Reflog    : Reflog_Info := (others => <>))
       return String;
    --  Date_Mode is git's --date=<mode>: it changes what the plain %ad/%cd
    --  atoms render ("iso"/"iso8601", "iso-strict", "short", "raw", "unix",
    --  "relative", "human"); "" keeps git's default date. The explicit date
    --  atoms (%ai/%as/%at/...) are unaffected.
+
+   --  The "<epoch> <tz>" tail of an ident line rendered under git's
+   --  --date=<mode> ("" is the default layout; also "relative", "human",
+   --  "format:<strftime>", and any mode with a "-local" suffix).
+   function Format_Date (Ident_Tail : String; Mode : String) return String;
 
 end Version.Pretty_Format;

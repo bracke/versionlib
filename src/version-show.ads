@@ -22,7 +22,8 @@ package Version.Show is
       First_Parent : Boolean := False;
       Combined_M   : Boolean := False;
       Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
-      Show_Notes   : Boolean := True)
+      Show_Notes   : Boolean := True;
+      Layout       : Version.Log.Header_Options := (others => <>))
       return String;
    --  Combined_M is git's -m: a merge is shown once per parent, each header
    --  carrying "(from <parent>)" and followed by the diff against that parent.
@@ -46,7 +47,8 @@ package Version.Show is
       First_Parent : Boolean := False;
       Combined_M   : Boolean := False;
       Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
-      Show_Notes   : Boolean := True)
+      Show_Notes   : Boolean := True;
+      Layout       : Version.Log.Header_Options := (others => <>))
       return String;
    --  `git show <object>` for any object type: a commit via Show_Commit, an
    --  annotated tag as its "tag/Tagger/Date" header and message followed by the

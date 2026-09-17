@@ -70,6 +70,10 @@ package Version.Diff is
       --  Abbrev, which the raw format reads and which diff-tree sets to the
       --  full length while its patches keep the short index line.
       Index_Abbrev   : Natural := 0;
+      --  --output-indicator-new/old/context=<char>: the hunk line markers.
+      Indicator_New     : Character := '+';
+      Indicator_Old     : Character := '-';
+      Indicator_Context : Character := ' ';
       --  --no-indent-heuristic turns off git's hunk-boundary sliding.
       Indent_Heuristic : Boolean := True;
       --  -w / -b / --ignore-space-at-eol / --ignore-cr-at-eol.

@@ -2,7 +2,6 @@ with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded;
 with Ada.Strings.Fixed;
 
-with Version.Log;
 with Version.Objects; use Version.Objects;
 with Version.Revisions;
 with Version.Ref_Format;
@@ -35,7 +34,8 @@ package body Version.Show is
       First_Parent : Boolean := False;
       Combined_M   : Boolean := False;
       Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
-      Show_Notes   : Boolean := True)
+      Show_Notes   : Boolean := True;
+      Layout       : Version.Log.Header_Options := (others => <>))
       return String
    is
       Obj      : constant Version.Objects.Git_Object :=
@@ -95,7 +95,7 @@ package body Version.Show is
                           Version.Log.Format_Commit
                             (Repo, Commit_Id, Full_Message => True,
                              Kind => Kind, Show_Notes => Show_Notes,
-                             Date_Mode => Date_Mode);
+                             Date_Mode => Date_Mode, Header => Layout);
                         NL  : constant Natural :=
                           Ada.Strings.Fixed.Index (Hdr, "" & LF);
                      begin
@@ -148,7 +148,7 @@ package body Version.Show is
             Version.Log.Format_Commit
               (Repo, Commit_Id, Full_Message => True,
                Kind => Kind, Show_Notes => Show_Notes,
-               Date_Mode => Date_Mode));
+               Date_Mode => Date_Mode, Header => Layout));
          --  The blank line here separates the header from the diff that
          --  follows. With -s there is no diff, so git ends at the message.
          if not No_Patch then
@@ -212,7 +212,8 @@ package body Version.Show is
       First_Parent : Boolean := False;
       Combined_M   : Boolean := False;
       Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
-      Show_Notes   : Boolean := True)
+      Show_Notes   : Boolean := True;
+      Layout       : Version.Log.Header_Options := (others => <>))
       return String
    is
       Raw : constant Version.Objects.Hex_Object_Id :=
@@ -252,7 +253,7 @@ package body Version.Show is
          when Version.Objects.Commit_Object =>
             return Show_Commit
               (Repo, Raw, Options, No_Patch, Oneline, Format, Format_Oneline,
-               Date_Mode, First_Parent, Combined_M, Kind, Show_Notes);
+               Date_Mode, First_Parent, Combined_M, Kind, Show_Notes, Layout);
 
          when Version.Objects.Tag_Object =>
             declare

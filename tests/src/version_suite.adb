@@ -72,6 +72,7 @@ with Version.Ref_Format.Tests;
 with Version.Text_Filter.Tests;
 with Version.LFS.Tests;
 with Version.Pretty_Format.Tests;
+with Version.Approxidate.Tests;
 with Version.Cherry_Pick.Tests;
 with Version.Revert.Tests;
 with Version.Stash.Tests;
@@ -171,6 +172,7 @@ package body Version_Suite is
       Result.Add_Test (new Version.Text_Filter.Tests.Test_Case);
       Result.Add_Test (new Version.LFS.Tests.Test_Case);
       Result.Add_Test (new Version.Pretty_Format.Tests.Test_Case);
+      Result.Add_Test (new Version.Approxidate.Tests.Test_Case);
       Result.Add_Test (new Version.Cherry_Pick.Tests.Test_Case);
       Result.Add_Test (new Version.Revert.Tests.Test_Case);
       Result.Add_Test (new Version.Stash.Tests.Test_Case);

@@ -1,3 +1,6 @@
+with Ada.Calendar;
+with Ada.Calendar.Formatting;
+with Ada.Calendar.Time_Zones;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
@@ -445,8 +448,10 @@ package body Version.Pretty_Format is
    function Date_ISO_Strict (Id : Identity) return String is
       B  : constant Broken_Down := Break_Down (Id.Epoch, To_String (Id.TZ));
       TZ : constant String := To_String (Id.TZ);
+      --  git writes "Z" for a zero offset, whatever its sign.
       Colon_TZ : constant String :=
-        (if TZ'Length >= 5
+        (if TZ = "+0000" or else TZ = "-0000" then "Z"
+         elsif TZ'Length >= 5
          then TZ (TZ'First .. TZ'First + 2) & ":" & TZ (TZ'First + 3 .. TZ'Last)
          else TZ);
    begin
@@ -579,6 +584,192 @@ package body Version.Pretty_Format is
       end if;
       return To_String (Result);
    end Show_Human;
+
+   --  The local zone's offset at Epoch as git spells it ("+0200").
+   function Local_TZ (Epoch : Long_Long_Integer) return String is
+      use type Ada.Calendar.Time;
+      Minutes : Integer;
+   begin
+      begin
+         Minutes := Integer
+           (Ada.Calendar.Time_Zones.UTC_Time_Offset
+              (Ada.Calendar.Formatting.Time_Of
+                 (1970, 1, 1, 0, 0, 0, Time_Zone => 0)
+               + Duration (Epoch)));
+      exception
+         when others =>
+            Minutes := 0;
+      end;
+      declare
+         A : constant Integer := abs Minutes;
+      begin
+         return (if Minutes < 0 then "-" else "+")
+           & Pad2 (A / 60) & Pad2 (A mod 60);
+      end;
+   end Local_TZ;
+
+   --  --date=format:<fmt>: the strftime conversions git's dates need.
+   function Strftime (Id : Identity; Fmt : String) return String is
+      B  : constant Broken_Down := Break_Down (Id.Epoch, To_String (Id.TZ));
+      TZ : constant String := To_String (Id.TZ);
+      Weekday_Full : constant array (0 .. 6) of String (1 .. 9) :=
+        ["Sunday   ", "Monday   ", "Tuesday  ", "Wednesday", "Thursday ",
+         "Friday   ", "Saturday "];
+      Month_Full : constant array (1 .. 12) of String (1 .. 9) :=
+        ["January  ", "February ", "March    ", "April    ", "May      ",
+         "June     ", "July     ", "August   ", "September", "October  ",
+         "November ", "December "];
+      function Trimmed (S : String) return String is
+         L : Natural := S'Last;
+      begin
+         while L >= S'First and then S (L) = ' ' loop
+            L := L - 1;
+         end loop;
+         return S (S'First .. L);
+      end Trimmed;
+      function Day_Of_Year return Integer is
+         Cum : constant array (1 .. 12) of Integer :=
+           [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+         Leap : constant Boolean :=
+           (B.Year mod 4 = 0 and then B.Year mod 100 /= 0)
+           or else B.Year mod 400 = 0;
+      begin
+         return Cum (B.Month) + B.Day + (if Leap and then B.Month > 2 then 1 else 0);
+      end Day_Of_Year;
+      Result : Unbounded_String;
+      I      : Natural := Fmt'First;
+   begin
+      while I <= Fmt'Last loop
+         if Fmt (I) = '%' and then I < Fmt'Last then
+            I := I + 1;
+            case Fmt (I) is
+               when 'Y' => Append (Result, Img (B.Year));
+               when 'y' => Append (Result, Pad2 (B.Year mod 100));
+               when 'C' => Append (Result, Pad2 (B.Year / 100));
+               when 'm' => Append (Result, Pad2 (B.Month));
+               when 'd' => Append (Result, Pad2 (B.Day));
+               when 'e' =>
+                  Append (Result, (if B.Day < 10 then " " else "") & Img (B.Day));
+               when 'H' => Append (Result, Pad2 (B.Hour));
+               when 'I' =>
+                  Append
+                    (Result,
+                     Pad2 (if B.Hour mod 12 = 0 then 12 else B.Hour mod 12));
+               when 'M' => Append (Result, Pad2 (B.Minute));
+               when 'S' => Append (Result, Pad2 (B.Second));
+               when 'p' => Append (Result, (if B.Hour < 12 then "AM" else "PM"));
+               when 'P' => Append (Result, (if B.Hour < 12 then "am" else "pm"));
+               when 'z' => Append (Result, TZ);
+               when 'Z' => Append (Result, "");
+               when 'a' => Append (Result, Weekday_Abbrev (B.Weekday));
+               when 'A' => Append (Result, Trimmed (Weekday_Full (B.Weekday)));
+               when 'b' | 'h' => Append (Result, Month_Abbrev (B.Month));
+               when 'B' => Append (Result, Trimmed (Month_Full (B.Month)));
+               when 'j' =>
+                  declare
+                     D : constant String := Img (Day_Of_Year);
+                  begin
+                     Append (Result, [1 .. 3 - D'Length => '0'] & D);
+                  end;
+               when 'u' =>
+                  Append (Result, Img (if B.Weekday = 0 then 7 else B.Weekday));
+               when 'w' => Append (Result, Img (B.Weekday));
+               when 's' => Append (Result, Date_Unix (Id));
+               when 'F' =>
+                  Append
+                    (Result,
+                     Img (B.Year) & "-" & Pad2 (B.Month) & "-" & Pad2 (B.Day));
+               when 'T' =>
+                  Append
+                    (Result,
+                     Pad2 (B.Hour) & ":" & Pad2 (B.Minute) & ":" & Pad2 (B.Second));
+               when 'R' => Append (Result, Pad2 (B.Hour) & ":" & Pad2 (B.Minute));
+               when 'D' =>
+                  Append
+                    (Result,
+                     Pad2 (B.Month) & "/" & Pad2 (B.Day) & "/"
+                     & Pad2 (B.Year mod 100));
+               when 'c' => Append (Result, Date_Default (Id));
+               when 'x' =>
+                  Append
+                    (Result,
+                     Pad2 (B.Month) & "/" & Pad2 (B.Day) & "/"
+                     & Pad2 (B.Year mod 100));
+               when 'X' =>
+                  Append
+                    (Result,
+                     Pad2 (B.Hour) & ":" & Pad2 (B.Minute) & ":" & Pad2 (B.Second));
+               when 'n' => Append (Result, ASCII.LF);
+               when 't' => Append (Result, ASCII.HT);
+               when '%' => Append (Result, '%');
+               when others => Append (Result, '%' & Fmt (I));
+            end case;
+         else
+            Append (Result, Fmt (I));
+         end if;
+         I := I + 1;
+      end loop;
+      return To_String (Result);
+   end Strftime;
+
+   --  git's --date=<mode> rendering of an identity's date.  A "-local"
+   --  suffix (or "local") shows the moment in the local zone instead of the
+   --  one recorded; "format:<strftime>" is the custom layout.
+   function Date_By_Mode (Id_In : Identity; Mode_In : String) return String is
+      Fmt_Local : constant Boolean :=
+        Mode_In'Length > 13
+        and then Mode_In (Mode_In'First .. Mode_In'First + 12) = "format-local:";
+      Local : constant Boolean :=
+        Fmt_Local
+        or else Mode_In = "local"
+        or else (Mode_In'Length > 6
+                 and then Mode_In (Mode_In'Last - 5 .. Mode_In'Last) = "-local");
+      Mode  : constant String :=
+        (if Mode_In = "local" then "default"
+         elsif Fmt_Local then "format:" & Mode_In (Mode_In'First + 13 .. Mode_In'Last)
+         elsif Local then Mode_In (Mode_In'First .. Mode_In'Last - 6)
+         else Mode_In);
+      Id    : Identity := Id_In;
+   begin
+      if Local then
+         Id.TZ := To_Unbounded_String (Local_TZ (Id.Epoch));
+      end if;
+      if Local and then (Mode = "default" or else Mode = "") then
+         --  git's default-local layout leaves the zone off: it is yours.
+         declare
+            D : constant String := Date_Default (Id);
+         begin
+            return D (D'First .. D'Last - 6);
+         end;
+      end if;
+      if Mode = "iso" or else Mode = "iso8601" then
+         return Date_ISO (Id);
+      elsif Mode = "iso-strict" or else Mode = "iso8601-strict" then
+         return Date_ISO_Strict (Id);
+      elsif Mode = "short" then
+         return Date_Short (Id);
+      elsif Mode = "raw" then
+         return Date_Raw (Id);
+      elsif Mode = "unix" then
+         return Date_Unix (Id);
+      elsif Mode = "rfc2822" or else Mode = "rfc" then
+         return Date_RFC2822 (Id);
+      elsif Mode = "relative" then
+         return Show_Relative (Now_Unix - Id.Epoch);
+      elsif Mode = "human" then
+         return Show_Human (Id);
+      elsif Mode'Length > 7 and then Mode (Mode'First .. Mode'First + 6) = "format:"
+      then
+         return Strftime (Id, Mode (Mode'First + 7 .. Mode'Last));
+      else
+         return Date_Default (Id);
+      end if;
+   end Date_By_Mode;
+
+   function Format_Date (Ident_Tail : String; Mode : String) return String is
+   begin
+      return Date_By_Mode (Parse_Identity ("x <x> " & Ident_Tail), Mode);
+   end Format_Date;
 
    --------------------------------------------------------------------------
    --  Trailers (%(trailers[:options]))
@@ -1166,7 +1357,8 @@ package body Version.Pretty_Format is
      (Repo      : Version.Repository.Repository_Handle;
       Commit_Id : Version.Objects.Hex_Object_Id;
       Format    : String;
-      Date_Mode : String := "")
+      Date_Mode : String := "";
+      Reflog    : Reflog_Info := (others => <>))
       return String
    is
       Cache  : Version.Object_Cache.Object_Cache;
@@ -1332,27 +1524,7 @@ package body Version.Pretty_Format is
             when 'L' => return Email_Local_Part (Mapped_Email);
             when 'd' =>
                --  git's --date=<mode> overrides the plain %ad/%cd rendering.
-               if Date_Mode = "iso" or else Date_Mode = "iso8601" then
-                  return Date_ISO (Id);
-               elsif Date_Mode = "iso-strict"
-                 or else Date_Mode = "iso8601-strict"
-               then
-                  return Date_ISO_Strict (Id);
-               elsif Date_Mode = "short" then
-                  return Date_Short (Id);
-               elsif Date_Mode = "raw" then
-                  return Date_Raw (Id);
-               elsif Date_Mode = "unix" then
-                  return Date_Unix (Id);
-               elsif Date_Mode = "rfc2822" or else Date_Mode = "rfc" then
-                  return Date_RFC2822 (Id);
-               elsif Date_Mode = "relative" then
-                  return Show_Relative (Now_Unix - Id.Epoch);
-               elsif Date_Mode = "human" then
-                  return Show_Human (Id);
-               else
-                  return Date_Default (Id);
-               end if;
+               return Date_By_Mode (Id, Date_Mode);
             when 'D' => return Date_RFC2822 (Id);
             when 'i' => return Date_ISO (Id);
             when 'I' => return Date_ISO_Strict (Id);
@@ -1562,6 +1734,33 @@ package body Version.Pretty_Format is
                            I := I + 1;
                         end if;
                      end;
+                  when 'g' =>
+                     --  Reflog placeholders (`log -g`): %gd/%gD selector,
+                     --  %gs message, %gn/%gN/%ge/%gE identity.  Outside a
+                     --  reflog walk they expand to nothing, as in git.
+                     if I + 2 <= Format'Last
+                       and then Format (I + 2) in 'd' | 'D' | 's' | 'n' | 'N' | 'e' | 'E'
+                     then
+                        declare
+                           Who : constant Identity :=
+                             Parse_Identity (To_String (Reflog.Ident) & " 0 +0000");
+                        begin
+                           case Format (I + 2) is
+                              when 'd' | 'D' =>
+                                 Append (Result, Reflog.Selector);
+                              when 's' =>
+                                 Append (Result, Reflog.Message);
+                              when 'n' | 'N' =>
+                                 Append (Result, Who.Name);
+                              when others =>
+                                 Append (Result, Who.Email);
+                           end case;
+                        end;
+                        I := I + 3;
+                     else
+                        Append (Result, '%');
+                        I := I + 1;
+                     end if;
                   when 'a' | 'c' =>
                      if I + 2 <= Format'Last
                        and then Known_Ident_Field (Format (I + 2))

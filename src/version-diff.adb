@@ -960,9 +960,9 @@ package body Version.Diff is
          T    : constant String := To_String (Op.Text);
          Lead : constant Character :=
            (case Op.Kind is
-               when Op_Context => ' ',
-               when Op_Delete  => '-',
-               when Op_Insert  => '+');
+               when Op_Context => Opts.Indicator_Context,
+               when Op_Delete  => Opts.Indicator_Old,
+               when Op_Insert  => Opts.Indicator_New);
          Set  : constant String :=
            (case Op.Kind is
                when Op_Context => "",

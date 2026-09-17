@@ -645,7 +645,8 @@ package body Version.Objects is
       return "";
    end Commit_Message_First_Line;
 
-   function Commit_Committer_Time (Obj : Git_Object) return Long_Long_Integer
+   function Commit_Header_Time
+     (Obj : Git_Object; Key : String) return Long_Long_Integer
    is
       LF   : constant Character := Character'Val (10);
       Text : constant String := To_String (Obj.Content_Value);
@@ -667,7 +668,7 @@ package body Version.Objects is
 
       Start :=
         Ada.Strings.Fixed.Index
-          (Text (Text'First .. Head_End), LF & "committer ");
+          (Text (Text'First .. Head_End), LF & Key & " ");
       if Start = 0 then
          return 0;
       end if;
@@ -702,7 +703,13 @@ package body Version.Objects is
    exception
       when Constraint_Error =>
          return 0;
-   end Commit_Committer_Time;
+   end Commit_Header_Time;
+
+   function Commit_Committer_Time (Obj : Git_Object) return Long_Long_Integer
+   is (Commit_Header_Time (Obj, "committer"));
+
+   function Commit_Author_Time (Obj : Git_Object) return Long_Long_Integer
+   is (Commit_Header_Time (Obj, "author"));
 
    procedure Append_Flattened_Tree
      (Repo      : Version.Repository.Repository_Handle;

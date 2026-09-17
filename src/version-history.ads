@@ -60,6 +60,12 @@ package Version.History is
       Min_Parents  : Natural := 0;
       Max_Parents  : Integer := No_Parent_Limit;
       Paths        : Path_Vectors.Vector;
+      --  git's --full-history: under a path limit, follow every parent of
+      --  a merge and show a commit unless its tree is the same as all its
+      --  parents' (the default drops a commit that matches any parent and
+      --  follows only that one).  --sparse shows the TREESAME commits too.
+      Full_History : Boolean := False;
+      Sparse       : Boolean := False;
    end record;
    --  Max_Count caps the number of commits returned (git's `-<n>`); 0 means
    --  unlimited. Skip drops that many commits from the front of the selection
@@ -92,6 +98,15 @@ package Version.History is
    --  the boundary is known). Merge commits are traversed through every
    --  parent, so unlike a first-parent walk this sees side-branch history.
 
+   --  git's --ancestry-path[=<commit>]: of Selected, only the commits that
+   --  descend from one of Bottoms (the range's excluded side, or the named
+   --  commit) -- the ones on a direct line between the two ends.
+   function Ancestry_Path
+     (Repo     : Version.Repository.Repository_Handle;
+      Selected : Commit_Id_Vectors.Vector;
+      Bottoms  : Commit_Id_Vectors.Vector)
+      return Commit_Id_Vectors.Vector;
+
    function Apply_Limits
      (Commits : Commit_Id_Vectors.Vector;
       Options : Rev_List_Options)
@@ -101,9 +116,15 @@ package Version.History is
    --  selection first (for `--topo-order`) has to defer the caps until after
    --  the reordering, which is what git does too.
 
+   --  What breaks ties among the commits whose children are all out:
+   --  git's --topo-order takes the most recently readied one, --date-order
+   --  the newest committer date, --author-date-order the newest author date.
+   type Topo_Priority is (Most_Recent_Ready, Commit_Date, Author_Date);
+
    function Topological_Order
      (Repo     : Version.Repository.Repository_Handle;
-      Selected : Commit_Id_Vectors.Vector)
+      Selected : Commit_Id_Vectors.Vector;
+      Priority : Topo_Priority := Most_Recent_Ready)
       return Commit_Id_Vectors.Vector;
    --  Reorder a Rev_List selection the way git's `--topo-order` does: never
    --  emit a commit before every selected child of it has been emitted.

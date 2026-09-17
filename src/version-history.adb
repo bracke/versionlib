@@ -641,12 +641,37 @@ package body Version.History is
                      end if;
                   end loop;
 
-                  if Parents.Is_Empty then
+                  if Options.Full_History then
+                     --  Every parent is followed; the commit is TREESAME
+                     --  (and dropped, unless --sparse) only when it
+                     --  matches all of them.
+                     declare
+                        All_Same : Boolean := not Parents.Is_Empty;
+                     begin
+                        for I in Parents.First_Index .. Parents.Last_Index loop
+                           if Signature (Parents.Element (I)) /= Mine then
+                              All_Same := False;
+                           end if;
+                        end loop;
+                        if Parents.Is_Empty then
+                           Emit := Emit
+                             and then (Options.Sparse
+                                       or else Mine /= Null_Unbounded_String);
+                        else
+                           Emit := Emit
+                             and then (Options.Sparse or else not All_Same);
+                        end if;
+                        Same_Parent := -1;
+                     end;
+                  elsif Parents.Is_Empty then
                      --  A root commit counts as a change when the paths
                      --  exist in it at all.
-                     Emit := Emit and then Mine /= Null_Unbounded_String;
+                     Emit := Emit
+                       and then (Options.Sparse
+                                 or else Mine /= Null_Unbounded_String);
                   else
-                     Emit := Emit and then Same_Parent < 0;
+                     Emit := Emit
+                       and then (Options.Sparse or else Same_Parent < 0);
                   end if;
                end;
             end if;
@@ -724,12 +749,26 @@ package body Version.History is
 
    function Topological_Order
      (Repo     : Version.Repository.Repository_Handle;
-      Selected : Commit_Id_Vectors.Vector)
+      Selected : Commit_Id_Vectors.Vector;
+      Priority : Topo_Priority := Most_Recent_Ready)
       return Commit_Id_Vectors.Vector
    is
       package Index_Maps is new Ada.Containers.Ordered_Maps
         (Key_Type     => Version.Objects.Object_Id_Storage,
          Element_Type => Natural);
+
+      --  The ready set under a date priority: newest date first, then the
+      --  most recently readied (git's prio_queue with insertion counter).
+      type Ready_Entry is record
+         Time : Long_Long_Integer;
+         Seq  : Natural;
+         Id   : Version.Objects.Object_Id_Storage;
+      end record;
+      function "<" (L, R : Ready_Entry) return Boolean is
+        (if L.Time /= R.Time then L.Time > R.Time else L.Seq > R.Seq);
+      package Ready_Sets is new Ada.Containers.Ordered_Sets (Ready_Entry);
+      Ready : Ready_Sets.Set;
+      Seq   : Natural := 0;
 
       Position : Index_Maps.Map;   --  id -> its slot in Selected
       Children : array (0 .. Natural'Max (Natural (Selected.Length), 1) - 1)
@@ -750,6 +789,48 @@ package body Version.History is
            (Repo => Repo, Objects => Objects, Shallow => Shallow,
             Commit_Id => Id);
       end Parents_Of;
+
+      function Time_Of (Id : Version.Objects.Hex_Object_Id)
+        return Long_Long_Integer
+      is
+         Obj : constant Version.Objects.Git_Object :=
+           Version.Object_Cache.Read_Object (Repo, Objects, Id);
+      begin
+         return
+           (if Priority = Author_Date
+            then Version.Objects.Commit_Author_Time (Obj)
+            else Version.Objects.Commit_Committer_Time (Obj));
+      exception
+         when others =>
+            return 0;
+      end Time_Of;
+
+      procedure Make_Ready (Id : Version.Objects.Hex_Object_Id) is
+      begin
+         if Priority = Most_Recent_Ready then
+            Stack.Append (Id);
+         else
+            Ready.Insert ((Time => Time_Of (Id), Seq => Seq, Id => Id));
+            Seq := Seq + 1;
+         end if;
+      end Make_Ready;
+
+      function Take_Ready return Version.Objects.Object_Id_Storage is
+      begin
+         if Priority = Most_Recent_Ready then
+            return Id : constant Version.Objects.Object_Id_Storage :=
+              Stack.Last_Element
+            do
+               Stack.Delete_Last;
+            end return;
+         else
+            return Id : constant Version.Objects.Object_Id_Storage :=
+              Ready.First_Element.Id
+            do
+               Ready.Delete_First;
+            end return;
+         end if;
+      end Take_Ready;
    begin
       if Selected.Is_Empty then
          return Result;
@@ -778,17 +859,15 @@ package body Version.History is
       --  newest is popped first.
       for I in reverse Selected.First_Index .. Selected.Last_Index loop
          if Children (I) = 0 then
-            Stack.Append (Selected.Element (I));
+            Make_Ready (Selected.Element (I));
          end if;
       end loop;
 
-      while not Stack.Is_Empty loop
+      while not Stack.Is_Empty or else not Ready.Is_Empty loop
          declare
-            Id  : constant Version.Objects.Object_Id_Storage :=
-              Stack.Last_Element;
+            Id  : constant Version.Objects.Object_Id_Storage := Take_Ready;
             Idx : constant Natural := Position.Element (Id);
          begin
-            Stack.Delete_Last;
 
             if not Emitted (Idx) then
                Emitted (Idx) := True;
@@ -807,7 +886,7 @@ package body Version.History is
                            --  LIFO: the parent that just became ready is
                            --  taken next, so a side branch stays contiguous.
                            if Children (PI) = 0 then
-                              Stack.Append (P);
+                              Make_Ready (P);
                            end if;
                         end;
                      end if;
@@ -819,6 +898,66 @@ package body Version.History is
 
       return Result;
    end Topological_Order;
+
+   function Ancestry_Path
+     (Repo     : Version.Repository.Repository_Handle;
+      Selected : Commit_Id_Vectors.Vector;
+      Bottoms  : Commit_Id_Vectors.Vector)
+      return Commit_Id_Vectors.Vector
+   is
+      package Id_Sets is new Ada.Containers.Ordered_Sets
+        (Version.Objects.Object_Id_Storage);
+      Objects   : Version.Object_Cache.Object_Cache;
+      Shallow   : Version.Shallow_Cache.Shallow_Cache;
+      In_Set    : Id_Sets.Set;
+      Descends  : Id_Sets.Set;   --  has a bottom among its ancestors
+      Result    : Commit_Id_Vectors.Vector;
+   begin
+      for Id of Selected loop
+         In_Set.Include (Id);
+      end loop;
+      for B of Bottoms loop
+         Descends.Include (B);
+      end loop;
+
+      --  A commit descends from a bottom when one of its parents is a
+      --  bottom or descends from one.  Selected is roughly oldest-last, so
+      --  walking it backwards settles almost everything in one pass; the
+      --  loop repeats until nothing new is marked (clock skew, topo order).
+      loop
+         declare
+            Changed : Boolean := False;
+         begin
+            for I in reverse Selected.First_Index .. Selected.Last_Index loop
+               declare
+                  Id : constant Version.Objects.Object_Id_Storage :=
+                    Selected.Element (I);
+               begin
+                  if not Descends.Contains (Id) then
+                     for P of Parent_Commits
+                       (Repo => Repo, Objects => Objects, Shallow => Shallow,
+                        Commit_Id => Id)
+                     loop
+                        if Descends.Contains (P) then
+                           Descends.Include (Id);
+                           Changed := True;
+                           exit;
+                        end if;
+                     end loop;
+                  end if;
+               end;
+            end loop;
+            exit when not Changed;
+         end;
+      end loop;
+
+      for Id of Selected loop
+         if Descends.Contains (Id) and then In_Set.Contains (Id) then
+            Result.Append (Id);
+         end if;
+      end loop;
+      return Result;
+   end Ancestry_Path;
 
    function Object_List
      (Repo     : Version.Repository.Repository_Handle;
