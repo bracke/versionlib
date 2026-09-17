@@ -123,7 +123,7 @@ package body Version.Format_Patch is
       Numbering    : Numbering_Mode := Auto;
       Reroll       : Natural := 0;
       Emit_Signature : Boolean := True;
-      Signature    : String := "2.54.0";
+      Signature    : String := "2.55.0";
       Context      : Natural := 3;
       Show_Summary : Boolean := True;
       Message_Id   : String := "";

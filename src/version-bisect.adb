@@ -581,12 +581,17 @@ package body Version.Bisect is
      (Repo : Version.Repository.Repository_Handle;
       Kind : Status_Kind) return String
    is
+      --  git 2.55 names the session's terms, quoted.
+      T    : constant Terms := Current_Terms (Repo);
+      Good : constant String := "'" & To_String (T.Good) & "'";
+      Bad  : constant String := "'" & To_String (T.Bad) & "'";
    begin
       case Kind is
          when Need_Both =>
-            return "waiting for both good and bad commits";
+            return "waiting for both " & Good & " and " & Bad & " commits";
          when Need_Good =>
-            return "waiting for good commit(s), bad commit known";
+            return "waiting for " & Good & " commit(s), " & Bad
+              & " commit known";
          when Need_Bad =>
             declare
                N : constant Natural := Good_Count (Repo);
@@ -596,9 +601,9 @@ package body Version.Bisect is
                   return S (S'First + 1 .. S'Last);
                end Img;
             begin
-               return "waiting for bad commit, " & Img (N)
-                 & (if N = 1 then " good commit known"
-                    else " good commits known");
+               return "waiting for " & Bad & " commit, " & Img (N)
+                 & (if N = 1 then " " & Good & " commit known"
+                    else " " & Good & " commits known");
             end;
          when others =>
             return "";

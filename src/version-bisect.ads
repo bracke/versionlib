@@ -73,8 +73,8 @@ package Version.Bisect is
    function Compute
      (Repo : Version.Repository.Repository_Handle) return Bisection;
 
-   --  Human-readable "waiting ..." text for the waiting kinds (git wording;
-   --  always literal good/bad regardless of custom terms).
+   --  Human-readable "waiting ..." text for the waiting kinds (git 2.55's
+   --  wording: the session's terms, quoted).
    function Status_Text
      (Repo : Version.Repository.Repository_Handle;
       Kind : Status_Kind) return String;
