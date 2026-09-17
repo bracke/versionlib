@@ -4476,6 +4476,14 @@ package body Version.Branch is
         (Repo      => Repo,
          Commit_Id => Current_Id);
 
+      --  git's --abort is `reset --hard HEAD` under the hood, and logs
+      --  exactly that on HEAD and the branch.
+      Append_HEAD_And_Current_Branch_Reflog
+        (Repo    => Repo,
+         Old_Id  => Current_Id,
+         New_Id  => Current_Id,
+         Message => "reset: moving to HEAD");
+
       Version.Merge_State.Clear_State (Repo);
       Apply_Merge_Autostash (Repo);
    end Abort_Integration;
