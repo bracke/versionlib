@@ -164,6 +164,13 @@ package Version.Submodules is
       Path : String)
       return String;
 
+   --  The submodule's git directory (a `.git` directory in its worktree or
+   --  the one its `.git` file points into), "" when the submodule is not
+   --  checked out.
+   function Resolved_Submodule_Git_Dir
+     (Repo : Version.Repository.Repository_Handle; Path : String)
+      return String;
+
    procedure Stage_Submodule
      (Repo : Version.Repository.Repository_Handle;
       Path : String);

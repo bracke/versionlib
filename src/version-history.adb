@@ -432,10 +432,18 @@ package body Version.History is
          Id            : Version.Objects.Object_Id_Storage;
       end record;
 
-      --  Newest first; Seq breaks ties so the order is total (and stable in
-      --  discovery order, as git's insertion-ordered queue is).
+      --  Newest first; among equal times the uninteresting frontier goes
+      --  first, then Seq keeps discovery order (git's insertion-ordered
+      --  queue).  git marks a boundary's whole ancestry uninteresting the
+      --  moment it pops the boundary; popping the boundary side first among
+      --  same-second commits is what keeps an interesting commit that is an
+      --  ancestor of a same-second boundary (a rebase's run of commits, or
+      --  `rev-list X ^child-of-X`) from being emitted before the mark
+      --  reaches it.
       function "<" (L, R : Queue_Entry) return Boolean is
-        (if L.Time /= R.Time then L.Time > R.Time else L.Seq < R.Seq);
+        (if L.Time /= R.Time then L.Time > R.Time
+         elsif L.Uninteresting /= R.Uninteresting then L.Uninteresting
+         else L.Seq < R.Seq);
 
       package Queue_Sets is new Ada.Containers.Ordered_Sets
         (Element_Type => Queue_Entry, "<" => "<");

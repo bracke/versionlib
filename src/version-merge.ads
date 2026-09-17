@@ -153,11 +153,15 @@ package Version.Merge is
 
    --  Indent_Heuristic is git's diff.indentHeuristic, which `git diff` turns on
    --  by default and the merge machinery leaves off.
+   --  Whitespace folds lines for comparison the way git's -w/-b/--ignore-*
+   --  flags do; the indent heuristic still measures the unfolded lines.
    function Text_Changes
      (Old_Text         : String;
       New_Text         : String;
       Algorithm        : Diff_Algorithm := Diff_Algorithm_Myers;
-      Indent_Heuristic : Boolean := False) return Text_Change_Vectors.Vector;
+      Indent_Heuristic : Boolean := False;
+      Whitespace       : Whitespace_Mode := Whitespace_Strict)
+      return Text_Change_Vectors.Vector;
 
    package Line_Match_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Natural);

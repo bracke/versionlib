@@ -557,14 +557,20 @@ package body Version.Merge is
    --  which is what keeps merge hunks (and rerere's preimage) aligned with
    --  git's.  git runs the merge diff with flags = 0, so the indent heuristic
    --  is deliberately not applied here.
+   --  Indent_Lines are the lines the indent heuristic measures: the unfolded
+   --  originals when a whitespace mode folded Lines for comparison (xdiff
+   --  compares hashed records but measures the raw bytes).
    procedure Change_Compact
      (Flags            : in out Changed_Array;
       Lines            : Line_Vectors.Vector;
       Other_Flags      : in out Changed_Array;
       Other_Lines      : Line_Vectors.Vector;
       Histogram        : Boolean;
-      Indent_Heuristic : Boolean := False)
+      Indent_Heuristic : Boolean := False;
+      Indent_Lines     : Line_Vectors.Vector := Line_Vectors.Empty_Vector)
    is
+      Measured    : constant Line_Vectors.Vector :=
+        (if Indent_Lines.Is_Empty then Lines else Indent_Lines);
       Count       : constant Natural := Natural (Lines.Length);
       Other_Count : constant Natural := Natural (Other_Lines.Length);
       Group, Other_Group : Change_Group;
@@ -642,9 +648,9 @@ package body Version.Merge is
                         M     : Split_Measurement;
                         Score : Split_Score;
                      begin
-                        Measure_Split (Lines, Shift, M);
+                        Measure_Split (Measured, Shift, M);
                         Score_Add_Split (M, Score);
-                        Measure_Split (Lines, Shift - Size, M);
+                        Measure_Split (Measured, Shift - Size, M);
                         Score_Add_Split (M, Score);
 
                         if Best_Shift = -1
@@ -1854,7 +1860,10 @@ package body Version.Merge is
      (Base_Lines       : Line_Vectors.Vector;
       Variant_Lines    : Line_Vectors.Vector;
       Algorithm        : Diff_Algorithm;
-      Indent_Heuristic : Boolean := False) return Edit_Span_Vectors.Vector
+      Indent_Heuristic : Boolean := False;
+      Base_Raw         : Line_Vectors.Vector := Line_Vectors.Empty_Vector;
+      Variant_Raw      : Line_Vectors.Vector := Line_Vectors.Empty_Vector)
+      return Edit_Span_Vectors.Vector
    is
       Base_Length    : constant Natural := Natural (Base_Lines.Length);
       Variant_Length : constant Natural := Natural (Variant_Lines.Length);
@@ -1905,14 +1914,16 @@ package body Version.Merge is
          Other_Flags      => Variant_Changed,
          Other_Lines      => Variant_Lines,
          Histogram        => Algorithm = Diff_Algorithm_Histogram,
-         Indent_Heuristic => Indent_Heuristic);
+         Indent_Heuristic => Indent_Heuristic,
+         Indent_Lines     => Base_Raw);
       Change_Compact
         (Flags            => Variant_Changed,
          Lines            => Variant_Lines,
          Other_Flags      => Base_Changed,
          Other_Lines      => Base_Lines,
          Histogram        => Algorithm = Diff_Algorithm_Histogram,
-         Indent_Heuristic => Indent_Heuristic);
+         Indent_Heuristic => Indent_Heuristic,
+         Indent_Lines     => Variant_Raw);
 
       --  Build the spans: unchanged lines pair up one-to-one and in order, so
       --  a run of changed lines on either side opens a span.
@@ -5924,12 +5935,20 @@ package body Version.Merge is
      (Old_Text         : String;
       New_Text         : String;
       Algorithm        : Diff_Algorithm := Diff_Algorithm_Myers;
-      Indent_Heuristic : Boolean := False) return Text_Change_Vectors.Vector
+      Indent_Heuristic : Boolean := False;
+      Whitespace       : Whitespace_Mode := Whitespace_Strict)
+      return Text_Change_Vectors.Vector
    is
       Old_Lines : constant Line_Vectors.Vector := Split_Lines (Old_Text);
       New_Lines : constant Line_Vectors.Vector := Split_Lines (New_Text);
       Edits : constant Edit_Span_Vectors.Vector :=
-        Diff_Edits (Old_Lines, New_Lines, Algorithm, Indent_Heuristic);
+        (if Whitespace = Whitespace_Strict
+         then Diff_Edits (Old_Lines, New_Lines, Algorithm, Indent_Heuristic)
+         else Diff_Edits
+           (Normalize_Lines (Old_Lines, Whitespace),
+            Normalize_Lines (New_Lines, Whitespace),
+            Algorithm, Indent_Heuristic,
+            Base_Raw => Old_Lines, Variant_Raw => New_Lines));
       Result : Text_Change_Vectors.Vector;
    begin
       for Span of Edits loop

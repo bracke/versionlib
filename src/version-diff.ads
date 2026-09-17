@@ -1,5 +1,7 @@
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Strings.Unbounded;
 
+with Version.Merge;
 with Version.Objects;
 with Version.Repository;
 with Version.Pathspec;
@@ -14,6 +16,22 @@ package Version.Diff is
    --  WD_Porcelain emits one line per word (space/-/+ prefixed) with `~` for a
    --  newline.
    type Word_Diff_Kind is (WD_None, WD_Plain, WD_Porcelain);
+
+   --  git's --submodule=<format>: Sub_Short is the "Subproject commit" pair,
+   --  Sub_Log the "Submodule a..b:" block with the commits' subjects, Sub_Diff
+   --  the inline patch between the two submodule commits.
+   type Submodule_Format is (Sub_Short, Sub_Log, Sub_Diff);
+
+   package String_Vectors is new Ada.Containers.Indefinite_Vectors
+     (Index_Type => Positive, Element_Type => String);
+
+   --  git's --ws-error-highlight=<kind>: which line kinds get whitespace
+   --  errors painted (`new` is git's default).
+   type WS_Highlight is record
+      New_Lines     : Boolean := True;
+      Old_Lines     : Boolean := False;
+      Context_Lines : Boolean := False;
+   end record;
 
    type Diff_Options is record
       Context_Lines  : Natural := 3;
@@ -43,6 +61,52 @@ package Version.Diff is
         Ada.Strings.Unbounded.To_Unbounded_String ("a/");
       Dst_Prefix     : Ada.Strings.Unbounded.Unbounded_String :=
         Ada.Strings.Unbounded.To_Unbounded_String ("b/");
+      --  --diff-algorithm / --patience / --histogram / --minimal; Default
+      --  reads `diff.algorithm` and falls back to Myers.
+      Algorithm      : Version.Merge.Diff_Algorithm :=
+        Version.Merge.Diff_Algorithm_Default;
+      --  The `index <old>..<new>` line's abbreviation: --abbrev=<n> and
+      --  --full-index (the full id); 0 is git's default of 7.  Separate from
+      --  Abbrev, which the raw format reads and which diff-tree sets to the
+      --  full length while its patches keep the short index line.
+      Index_Abbrev   : Natural := 0;
+      --  --no-indent-heuristic turns off git's hunk-boundary sliding.
+      Indent_Heuristic : Boolean := True;
+      --  -w / -b / --ignore-space-at-eol / --ignore-cr-at-eol.
+      Whitespace     : Version.Merge.Whitespace_Mode :=
+        Version.Merge.Whitespace_Strict;
+      --  --ignore-blank-lines and -I<regex>: changes made only of such lines
+      --  are dropped unless they fall inside another hunk's context.
+      Ignore_Blank_Lines : Boolean := False;
+      Ignore_Regexes     : String_Vectors.Vector;
+      --  -R: swap the two sides.
+      Reverse_Sides  : Boolean := False;
+      --  --relative[=<path>]: restrict to and show paths relative to this
+      --  directory prefix (with a trailing '/').  Relative_Set says the flag
+      --  was given (an empty prefix means the repository root).
+      Relative_Set   : Boolean := False;
+      Relative       : Ada.Strings.Unbounded.Unbounded_String;
+      --  -W / --function-context and --inter-hunk-context=<n>.
+      Function_Context   : Boolean := False;
+      Inter_Hunk_Context : Natural := 0;
+      --  --check: report whitespace errors on added lines instead of the
+      --  patch (the caller exits 2 when the report is non-empty).
+      Check_Whitespace : Boolean := False;
+      --  --color: git's default palette with whitespace-error highlighting
+      --  on the kinds WS_Errors selects (--ws-error-highlight).
+      Color          : Boolean := False;
+      WS_Errors      : WS_Highlight;
+      --  -O<orderfile>: paths matching an earlier glob come first.
+      Order_File     : Ada.Strings.Unbounded.Unbounded_String;
+      --  --submodule=<format>.
+      Submodule      : Submodule_Format := Sub_Short;
+      --  --ita-visible-in-index: an intent-to-add entry is otherwise absent
+      --  from the index (`diff` shows it as a new file, `diff --cached` drops
+      --  it); visible, `--cached` shows it as an empty new file.
+      Ita_Visible    : Boolean := False;
+      --  --textconv / --no-textconv: run the `diff.<driver>.textconv` filter
+      --  a `diff=<driver>` attribute names (git's default for diff/log/show).
+      Textconv       : Boolean := True;
    end record;
    --  Name_Only lists just the changed paths; Name_Status prefixes each with
    --  git's status letter (A/D/M/R) and a tab. Both suppress the patch body.
@@ -105,12 +169,26 @@ package Version.Diff is
       Options : Diff_Options := (others => <>))
       return String;
 
+   function Diff_Tree_Vs_Working
+     (Repo      : Version.Repository.Repository_Handle;
+      Tree_Id   : Version.Objects.Hex_Object_Id;
+      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
+      Options   : Diff_Options := (others => <>))
+      return String;
+
    --  Unified diff between an arbitrary tree and the index
    --  (git diff-index -p --cached <tree>).
    function Diff_Tree_Vs_Index
      (Repo    : Version.Repository.Repository_Handle;
       Tree_Id : Version.Objects.Hex_Object_Id;
       Options : Diff_Options := (others => <>))
+      return String;
+
+   function Diff_Tree_Vs_Index
+     (Repo      : Version.Repository.Repository_Handle;
+      Tree_Id   : Version.Objects.Hex_Object_Id;
+      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
+      Options   : Diff_Options := (others => <>))
       return String;
 
    function Diff_Commits

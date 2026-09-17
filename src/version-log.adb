@@ -861,7 +861,9 @@ package body Version.Log is
       Date_Mode      : String := "";
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
-      Stat_Count      : Natural := 0) return String
+      Stat_Count      : Natural := 0;
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      return String
    is
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
@@ -926,8 +928,11 @@ package body Version.Log is
                   Detect : constant Version.Diff.Rename_Detection :=
                     (if Rename_Score > 0 then Version.Diff.Renames_On
                      else Version.Diff.Renames_Default);
+                  --  Diff_Base carries the caller's diff switches (-w, --color,
+                  --  --diff-algorithm, ...); the log-level fields go on top.
                   Summary_Opts : constant Version.Diff.Diff_Options :=
-                    (Stat           => Stat,
+                    (Diff_Base with delta
+                     Stat           => Stat,
                      Name_Only      => Name_Only,
                      Name_Status    => Name_Status,
                      Numstat        => Numstat,
@@ -938,12 +943,12 @@ package body Version.Log is
                      Context_Lines  => Context,
                      Stat_Width      => Stat_Width,
                      Stat_Name_Width => Stat_Name_Width,
-                     Stat_Count      => Stat_Count,
-                     others         => <>);
+                     Stat_Count      => Stat_Count);
                   Patch_Opts : constant Version.Diff.Diff_Options :=
-                    (Detect_Renames => Detect,
+                    (Diff_Base with delta
+                     Detect_Renames => Detect,
                      Rename_Score   => Rename_Score,
-                     Context_Lines  => Context, others => <>);
+                     Context_Lines  => Context);
 
                   --  Use the pathspec overload only when a limit is present;
                   --  the plain overload is the exact unlimited rendering.
@@ -962,12 +967,21 @@ package body Version.Log is
                               Current_Id, Paths, Opts)
                       else Version.Diff.Diff_Root_Commit
                              (Repo, Current_Id, Paths, Opts));
+                  Summary_Text : constant String :=
+                    (if Has_Summary then Diff_Of (Summary_Opts) else "");
+                  Patch_Text   : constant String :=
+                    (if Patch and then not (Name_Only or else Name_Status)
+                     then Diff_Of (Patch_Opts) else "");
                begin
                   --  The full header ends with the message, so a separator
                   --  precedes the file changes; the oneline header runs
                   --  straight into them. git leads a diffstat that is followed
-                  --  by a patch with "---" rather than a blank line.
-                  if not Oneline then
+                  --  by a patch with "---" rather than a blank line -- and
+                  --  prints no separator at all when there is nothing to
+                  --  show (a --relative or whitespace-folded empty diff).
+                  if not Oneline
+                    and then (Summary_Text'Length > 0 or else Patch_Text'Length > 0)
+                  then
                      if Stat and then Patch then
                         Append_Line (Result, "---");
                      else
@@ -975,18 +989,16 @@ package body Version.Log is
                      end if;
                   end if;
 
-                  if Has_Summary then
-                     Append (Result, Diff_Of (Summary_Opts));
-                  end if;
+                  Append (Result, Summary_Text);
 
                   --  git shows the patch after the summary, blank-separated --
                   --  but the name-only/name-status formats replace the patch
                   --  entirely, so -p adds nothing there.
-                  if Patch and then not (Name_Only or else Name_Status) then
+                  if Patch_Text'Length > 0 then
                      if Has_Summary then
                         Append_Line (Result, "");
                      end if;
-                     Append (Result, Diff_Of (Patch_Opts));
+                     Append (Result, Patch_Text);
                   end if;
                end;
             end if;
@@ -1340,7 +1352,9 @@ package body Version.Log is
       Date_Mode      : String := "";
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
-      Stat_Count      : Natural := 0) return String
+      Stat_Count      : Natural := 0;
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      return String
    is
       Objects : Version.Object_Cache.Object_Cache;
       In_Set  : Id_Sets.Set;
@@ -1395,7 +1409,8 @@ package body Version.Log is
                   Date_Mode      => Date_Mode,
                   Stat_Width      => Stat_Width,
                   Stat_Name_Width => Stat_Name_Width,
-                  Stat_Count      => Stat_Count));
+                  Stat_Count      => Stat_Count,
+                  Diff_Base       => Diff_Base));
 
             Version.Log_Graph.Update (G, C, Parents);
 
@@ -1475,7 +1490,9 @@ package body Version.Log is
       Date_Mode      : String := "";
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
-      Stat_Count      : Natural := 0) return String
+      Stat_Count      : Natural := 0;
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      return String
    is
       Objects  : Version.Object_Cache.Object_Cache;
       Has_Diff : constant Boolean :=
@@ -1652,7 +1669,8 @@ package body Version.Log is
                   Date_Mode      => Date_Mode,
                   Stat_Width      => Stat_Width,
                   Stat_Name_Width => Stat_Name_Width,
-                  Stat_Count      => Stat_Count));
+                  Stat_Count      => Stat_Count,
+                  Diff_Base       => Diff_Base));
          end;
       end loop;
 

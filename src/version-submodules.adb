@@ -39,10 +39,6 @@ package body Version.Submodules is
 
    function Is_Windows_Drive_Path (Text : String) return Boolean;
 
-   function Resolved_Submodule_Git_Dir
-     (Repo : Version.Repository.Repository_Handle; Path : String)
-      return String;
-
    procedure Validate_Committed_Gitmodules
      (Repo : Version.Repository.Repository_Handle);
 

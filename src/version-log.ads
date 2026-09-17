@@ -1,6 +1,7 @@
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Strings.Hash;
 
+with Version.Diff;
 with Version.History;
 with Version.Objects;
 with Version.Pathspec;
@@ -47,7 +48,9 @@ package Version.Log is
       Date_Mode      : String := "";
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
-      Stat_Count      : Natural := 0) return String;
+      Stat_Count      : Natural := 0;
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      return String;
    --  Stat_Width/Stat_Name_Width/Stat_Count are git's `--stat=<w>,<n>,<c>` (and
    --  `--stat-width`/`--stat-name-width`/`--stat-count`) sizing for the diffstat
    --  block; 0 leaves each at git's default.
@@ -129,7 +132,9 @@ package Version.Log is
       Date_Mode      : String := "";
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
-      Stat_Count      : Natural := 0) return String;
+      Stat_Count      : Natural := 0;
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      return String;
    --  git's `log --follow <path>`: walk first-parent history from Start
    --  showing the commits that changed the single file Path, following it back
    --  across renames (rename-detected diff against each first parent; at a
@@ -158,7 +163,9 @@ package Version.Log is
       Date_Mode      : String := "";
       Stat_Width      : Natural := 0;
       Stat_Name_Width : Natural := 0;
-      Stat_Count      : Natural := 0) return String;
+      Stat_Count      : Natural := 0;
+      Diff_Base       : Version.Diff.Diff_Options := (others => <>))
+      return String;
    --  git's `log --graph` in the default (multi-line) format: each commit's
    --  full Log_List_Text block with the ASCII commit graph drawn down its left
    --  edge -- the commit line, then a graph column line prefixing every

@@ -173,18 +173,29 @@ package body Version.Show is
          return To_String (Result);
       end if;
 
-      if Parent'Length = 0 then
-         Append
-           (Result, Version.Diff.Diff_Root_Commit (Repo, Commit_Id, Options));
-      else
-         Append
-           (Result,
-            Version.Diff.Diff_Commits
-              (Repo    => Repo,
-               Old_Id  => Version.Objects.To_Object_Id (Parent),
-               New_Id  => Commit_Id,
-               Options => Options));
-      end if;
+      declare
+         Patch : constant String :=
+           (if Parent'Length = 0
+            then Version.Diff.Diff_Root_Commit (Repo, Commit_Id, Options)
+            else Version.Diff.Diff_Commits
+                   (Repo    => Repo,
+                    Old_Id  => Version.Objects.To_Object_Id (Parent),
+                    New_Id  => Commit_Id,
+                    Options => Options));
+      begin
+         --  Nothing to show (a --relative or whitespace-folded empty diff):
+         --  git prints no separator either, so drop the blank line the
+         --  header block ended with.
+         if Patch'Length = 0 and then not Oneline
+           and then Length (Result) > 0
+           and then Element (Result, Length (Result)) = Character'Val (10)
+           and then Length (Result) > 1
+           and then Element (Result, Length (Result) - 1) = Character'Val (10)
+         then
+            Head (Result, Length (Result) - 1);
+         end if;
+         Append (Result, Patch);
+      end;
 
       return To_String (Result);
    end Show_Commit;
