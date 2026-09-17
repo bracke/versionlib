@@ -14,7 +14,47 @@ package Version.Rebase is
 
    type Replay_Result_Kind is
      (Replay_Clean,
-      Replay_Conflict);
+      Replay_Conflict,
+      --  The commit became (or started) empty and the replay options say
+      --  to drop it: nothing was written, the replay head is unchanged.
+      Replay_Dropped,
+      --  It became empty and --empty=stop asks the user what to do.
+      Replay_Empty_Stop);
+
+   --  The options every replayed commit obeys (git's --signoff, date and
+   --  -X flags, --empty). Set from the command line at the start of a
+   --  rebase and read back from the state on --continue/--skip.
+   Current_Options : Version.Rebase_State.Replay_Options;
+
+   --  A cherry-pick already upstream (same patch-id) is normally dropped
+   --  before the replay; --reapply-cherry-picks keeps it.
+   Reapply_Cherry_Picks : Boolean := False;
+
+   --  An `--exec <cmd>` list: each command runs after every pick.
+   Exec_After_Each : Version.Rebase_State.String_Vectors.Vector;
+
+   --  The refs --update-refs moved when the rebase finished, for git's
+   --  "Updated the following refs with --update-refs:" report.
+   Updated_Refs : Version.Rebase_State.String_Vectors.Vector;
+
+   --  A failed `exec` has already been reported in git's words; the caller
+   --  only sets the exit status (1).
+   Exec_Failed : exception;
+
+   --  --empty=stop: the commit became empty and the user decides (git's
+   --  message is the caller's).
+   Empty_Stop : exception;
+
+   --  --continue with unmerged paths: git's "<path>: needs merge" refusal
+   --  has been printed; the caller only sets the exit status (1).
+   Unresolved_Continue : exception;
+
+   --  --update-refs: the branches whose tips lie among the replayed commits
+   --  are moved to the rewritten commits when the rebase finishes.
+   procedure Plan_Update_Refs
+     (Repo       : Version.Repository.Repository_Handle;
+      Branch_Ref : String;
+      Commits    : Version.Rebase_State.Commit_Vectors.Vector);
 
    type Replay_Result is record
       Kind      : Replay_Result_Kind;
@@ -39,6 +79,8 @@ package Version.Rebase is
    --  the replayed commit's message (git rebase -i "reword").
 
    procedure Start (Target : String);
+   --  Start_Onto/Start/Start_Interactive/Start_Rebase_Merges all honour
+   --  Current_Options, Reapply_Cherry_Picks and Exec_After_Each.
 
    procedure Start_Onto (Onto : String; Upstream : String);
    --  rebase --onto <Onto> <Upstream>: replay Upstream..HEAD (the current
@@ -46,7 +88,13 @@ package Version.Rebase is
    --  rather than onto Upstream itself as plain Start does.
 
    procedure Start_Interactive
-     (Upstream : String; Autosquash : Boolean := False);
+     (Upstream   : String;
+      Autosquash : Boolean := False;
+      Onto       : String := "";
+      Edit_Todo  : Boolean := True);
+   --  Onto replays Upstream..HEAD onto Onto instead of Upstream. With
+   --  Edit_Todo => False the generated todo is run as is (git's
+   --  non-interactive --exec/--autosquash).
    --  Interactive rebase onto Upstream: write a "pick <sha> <subject>" todo,
    --  open it in the sequence editor (GIT_SEQUENCE_EDITOR / GIT_EDITOR /
    --  EDITOR), and replay the edited list. Supports pick, drop (removing a

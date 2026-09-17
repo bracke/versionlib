@@ -18,6 +18,7 @@ with Version.Revert_State;
 with Version.Compression;
 with Version.Patch_Id;
 with Version.Config;
+with Version.Console;
 with Version.Files;
 with Version.Hooks;
 with Version.History;
@@ -33,14 +34,25 @@ with Version.Ref_Transaction;
 with Version.Restore;
 with Version.Revisions;
 with Version.Diff;
+with Version.Editor;
 with Version.Staging;
 with Version.Status;
+with Version.Timestamps;
 with Version.Trailers;
 with Version.Tree_Cache;
 with Version.Write;
-with Version.Timestamps;
 
 package body Version.Rebase is
+
+   --  The original -> rewritten pairs of the linear replay in progress,
+   --  loaded from the state on --continue/--skip.
+   Linear_Map : Version.Rebase_State.Map_Vectors.Vector;
+
+   function Replay_Subject
+     (Repo : Version.Repository.Repository_Handle;
+      Id   : Version.Objects.Hex_Object_Id) return String is
+     (Version.Objects.Commit_Message_First_Line
+        (Version.Objects.Read_Object (Repo, Id)));
 
    Zero_Id : constant Version.Objects.Hex_Object_Id :=
      Version.Objects.Zero_Object_Id;
@@ -92,12 +104,15 @@ package body Version.Rebase is
       --  git's rebase requires the index and tracked working tree to match
       --  HEAD, but tolerates untracked files (they only fail a replay if a
       --  commit would actually overwrite one).
-      if not Result.Changes.Is_Empty
-        or else not Result.Staged.Is_Empty
-        or else not Result.Conflicted.Is_Empty
-      then
+      --  git names the unstaged case first, then the index.
+      if not Result.Changes.Is_Empty or else not Result.Conflicted.Is_Empty then
          raise Ada.IO_Exceptions.Data_Error with
-           "rebase requires clean working tree";
+           "cannot rebase: You have unstaged changes." & Character'Val (10)
+           & "error: Please commit or stash them.";
+      elsif not Result.Staged.Is_Empty then
+         raise Ada.IO_Exceptions.Data_Error with
+           "cannot rebase: Your index contains uncommitted changes."
+           & Character'Val (10) & "error: Please commit or stash them.";
       end if;
    end Require_Clean_Working_Tree;
 
@@ -151,9 +166,9 @@ package body Version.Rebase is
         Ada.Containers.Indefinite_Ordered_Sets (String);
 
       Base : Version.Objects.Hex_Object_Id := Zero_Id;
-      Walk : Version.Objects.Hex_Object_Id := Current_Head;
       Reverse_Order : Version.Rebase_State.Commit_Vectors.Vector;
       Result : Version.Rebase_State.Commit_Vectors.Vector;
+      Skipped_Any : Boolean := False;
 
       --  git's rebase drops a commit whose change is already upstream, keyed
       --  by patch-id, so a branch that duplicates an upstream commit does not
@@ -199,31 +214,79 @@ package body Version.Rebase is
          end loop;
       end;
 
-      while Walk /= Base loop
+      --  git's range: every non-merge commit reachable from HEAD but not
+      --  from the upstream, oldest first in topological order. A merge in
+      --  that history is flattened away (its side branch's commits are
+      --  replayed in line), as `rebase` without --rebase-merges does.
+      declare
+         Include, Exclude : Version.History.Commit_Id_Vectors.Vector;
+      begin
+         Include.Append (Current_Head);
+         Exclude.Append (Base);
          declare
-            Obj     : constant Version.Objects.Git_Object := Version.Objects.Read_Object (Repo, Walk);
-            Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
-              Version.Objects.Commit_Parent_Ids (Obj);
+            Selected : constant Version.History.Commit_Id_Vectors.Vector :=
+              Version.History.Topological_Order
+                (Repo,
+                 Version.History.Rev_List
+                   (Repo, Include, Exclude,
+                    Version.History.Rev_List_Options'
+                      (No_Merges => True, others => <>)));
          begin
-            if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
-               raise Ada.IO_Exceptions.Data_Error with "invalid replay commit graph";
-            elsif Parents.Is_Empty then
-               raise Ada.IO_Exceptions.Data_Error with Root_Rebase_Not_Supported;
-            elsif Parents.Length > 1 then
-               raise Ada.IO_Exceptions.Data_Error with Merge_Commit_Rebase_Not_Supported;
-            end if;
+            for C of Selected loop
+               declare
+                  Obj : constant Version.Objects.Git_Object :=
+                    Version.Objects.Read_Object (Repo, C);
+               begin
+                  if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object
+                  then
+                     raise Ada.IO_Exceptions.Data_Error
+                       with "invalid replay commit graph";
+                  elsif Version.Objects.Commit_Parent_Ids (Obj).Is_Empty then
+                     raise Ada.IO_Exceptions.Data_Error
+                       with Root_Rebase_Not_Supported;
+                  end if;
+               end;
 
-            --  Skip a commit whose change is already upstream (same patch-id).
-            declare
-               PID : constant String := Patch_Id_Of (Walk);
-            begin
-               if PID = "" or else not Upstream.Contains (PID) then
-                  Reverse_Order.Append (Walk);
-               end if;
-            end;
-            Walk := Parents.First_Element;
+               --  Skip a commit whose change is already upstream (same
+               --  patch-id), unless --reapply-cherry-picks; git warns about
+               --  each one (advice.skippedCherryPicks).
+               declare
+                  PID : constant String := Patch_Id_Of (C);
+               begin
+                  if Reapply_Cherry_Picks
+                    or else PID = "" or else not Upstream.Contains (PID)
+                  then
+                     Reverse_Order.Append (C);
+                  else
+                     declare
+                        Hex : constant String := To_String (C);
+                     begin
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           "warning: skipped previously applied commit "
+                           & Hex (Hex'First .. Hex'First + 6));
+                        Skipped_Any := True;
+                     end;
+                  end if;
+               end;
+            end loop;
          end;
-      end loop;
+      end;
+
+      if Skipped_Any
+        and then (not Version.Config.Has_Key (Repo, "advice.skippedCherryPicks")
+                  or else Version.Config.Trim
+                            (Version.Config.Get_Value
+                               (Repo, "advice.skippedCherryPicks")) /= "false")
+      then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "hint: use --reapply-cherry-picks to include skipped commits");
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "hint: Disable this message with ""git config set "
+            & "advice.skippedCherryPicks false""");
+      end if;
 
       if not Reverse_Order.Is_Empty then
          for I in reverse Reverse_Order.First_Index .. Reverse_Order.Last_Index loop
@@ -284,16 +347,6 @@ package body Version.Rebase is
 
       raise Ada.IO_Exceptions.Data_Error with "invalid replay commit graph";
    end Author_Line;
-
-   function Unix_Time_Image return String is
-   begin
-      return Natural_Image (Natural (Version.Timestamps.Unix_Now));
-   end Unix_Time_Image;
-
-   function Timestamp_Line return String is
-   begin
-      return Unix_Time_Image & " +0000";
-   end Timestamp_Line;
 
    function Object_Id_For
      (Repo : Version.Repository.Repository_Handle;
@@ -464,15 +517,73 @@ package body Version.Rebase is
       return Version.Objects.Hex_Object_Id
    is
       Original_Obj : constant Version.Objects.Git_Object := Version.Objects.Read_Object (Repo, Original);
-      User : constant Version.Config.Identity := Version.Config.User_Identity (Repo);
       --  A reword supplies the final, user-edited message directly; a pick runs
       --  the original message through the prepare-commit-msg hook path.
-      Message : constant String :=
+      Raw_Message : constant String :=
         (if Message_Override /= "" then Message_Override
          else Version.Hooks.Prepare_Commit_Message
                 (Repo      => Repo,
                  Message   => Commit_Message (Original_Obj),
                  Run_Hooks => True));
+      Committer : constant String := Version.Config.Committer_Signature (Repo);
+
+      --  --signoff adds the committer's Signed-off-by unless it is already
+      --  the last trailer (git's append_signoff).
+      function Signed_Off (Text : String) return String is
+         GT : Natural := Committer'Last;
+         T  : Version.Trailers.String_Vectors.Vector;
+      begin
+         if not Current_Options.Signoff then
+            return Text;
+         end if;
+         for K in reverse Committer'Range loop
+            if Committer (K) = '>' then
+               GT := K;
+               exit;
+            end if;
+         end loop;
+         T.Append ("Signed-off-by: " & Committer (Committer'First .. GT));
+         return Version.Trailers.Interpret
+           (Text, T,
+            If_Exists => Version.Trailers.IE_Add_If_Different_Neighbor);
+      end Signed_Off;
+
+      Message : constant String := Signed_Off (Raw_Message);
+
+      --  The "<secs> <tz>" tail of an ident line, and the ident before it.
+      function Stamp_Of (Line : String) return String is
+      begin
+         for K in reverse Line'Range loop
+            if Line (K) = '>' and then K + 2 <= Line'Last then
+               return Line (K + 2 .. Line'Last);
+            end if;
+         end loop;
+         return "";
+      end Stamp_Of;
+
+      function Ident_Of (Line : String) return String is
+      begin
+         for K in reverse Line'Range loop
+            if Line (K) = '>' then
+               return Line (Line'First .. K);
+            end if;
+         end loop;
+         return Line;
+      end Ident_Of;
+
+      Original_Author : constant String := Author_Line (Original_Obj);
+      --  --ignore-date stamps the author with the committer's clock;
+      --  --committer-date-is-author-date the committer with the author's.
+      Author : constant String :=
+        (if Current_Options.Ignore_Date
+         then Ident_Of (Original_Author) & " "
+              & Natural_Image (Natural (Version.Timestamps.Unix_Now)) & " "
+              & Version.Timestamps.Local_Zone
+         else Original_Author);
+      Committer_Final : constant String :=
+        (if Current_Options.Cdate_Is_Adate
+         then Ident_Of (Committer) & " " & Stamp_Of (Original_Author)
+         else Committer);
       Content : Unbounded_String;
    begin
       Append (Content, "tree " & To_String (Tree_Id) & Character'Val (10));
@@ -481,11 +592,8 @@ package body Version.Rebase is
       if Parent_Id /= Zero_Id then
          Append (Content, "parent " & To_String (Parent_Id) & Character'Val (10));
       end if;
-      Append (Content, Author_Line (Original_Obj) & Character'Val (10));
-      Append
-        (Content,
-         "committer " & Version.Config.Committer_Signature (Repo)
-         & Character'Val (10));
+      Append (Content, Author & Character'Val (10));
+      Append (Content, "committer " & Committer_Final & Character'Val (10));
       Append (Content, Character'Val (10));
       Append (Content, Message);
       declare
@@ -591,16 +699,28 @@ package body Version.Rebase is
    --  the same as resolving it, and continuing anyway would commit whatever
    --  the index still had rather than the edit the user made.
    procedure Require_Index_Fully_Merged
-     (Repo : Version.Repository.Repository_Handle) is
+     (Repo : Version.Repository.Repository_Handle)
+   is
+      Listed : Boolean := False;
    begin
       for E of Version.Staging.Load (Repo) loop
          if E.Stage /= 0 then
-            raise Ada.IO_Exceptions.Data_Error with
-              "cannot continue rebase: unresolved conflict in "
-              & To_String (E.Path)
-              & " -- resolve it and mark it resolved with `add`";
+            declare
+               P : constant String := To_String (E.Path);
+            begin
+               if not Listed or else E.Stage = 1 then
+                  Ada.Text_IO.Put_Line (P & ": needs merge");
+               end if;
+            end;
+            Listed := True;
          end if;
       end loop;
+      if Listed then
+         Ada.Text_IO.Put_Line
+           ("You must edit all merge conflicts and then");
+         Ada.Text_IO.Put_Line ("mark them as resolved using git add");
+         raise Unresolved_Continue;
+      end if;
    end Require_Index_Fully_Merged;
 
    function Conflict_Paths_Have_Markers
@@ -643,6 +763,72 @@ package body Version.Rebase is
    begin
       Result := Version.Staging.Load (Repo);
    end Load_Staged_Index;
+
+   --  git's -X options, as rebase passes them to the merge.
+   function Replay_Behavior
+     (Repo    : Version.Repository.Repository_Handle;
+      Base_Id : Version.Objects.Hex_Object_Id)
+      return Version.Merge.Merge_Behavior
+   is
+      B : Version.Merge.Merge_Behavior :=
+        (Base_Label => To_Unbounded_String
+                         (Version.Merge.Base_Label_For (Repo, Base_Id)),
+         others     => <>);
+
+      function Number_After (Text : String; Prefix : String) return Natural is
+         Rest : constant String := Text (Text'First + Prefix'Length .. Text'Last);
+      begin
+         return Natural'Value (Rest);
+      exception
+         when others =>
+            return 0;
+      end Number_After;
+   begin
+      for O of Current_Options.Strategy_Opts loop
+         if O = "ours" then
+            B.Favor := Version.Merge.Favor_Current;
+         elsif O = "theirs" then
+            B.Favor := Version.Merge.Favor_Target;
+         elsif O = "ignore-space-change" or else O = "ignore-space-at-eol"
+           or else O = "ignore-cr-at-eol"
+         then
+            B.Whitespace :=
+              (if O = "ignore-space-change"
+               then Version.Merge.Whitespace_Ignore_Space_Change
+               elsif O = "ignore-space-at-eol"
+               then Version.Merge.Whitespace_Ignore_Space_At_EOL
+               else Version.Merge.Whitespace_Ignore_CR_At_EOL);
+         elsif O = "ignore-all-space" then
+            B.Whitespace := Version.Merge.Whitespace_Ignore_All_Space;
+         elsif O = "renormalize" then
+            B.Renormalize := True;
+         elsif O = "no-renormalize" then
+            B.Renormalize := False;
+         elsif O = "no-renames" then
+            B.Detect_Renames := False;
+         elsif O = "find-renames" or else O = "renames" then
+            B.Detect_Renames := True;
+         elsif O'Length > 13 and then O (O'First .. O'First + 12) = "find-renames="
+         then
+            B.Detect_Renames := True;
+            B.Rename_Threshold := Number_After (O, "find-renames=");
+         elsif O'Length > 13 and then O (O'First .. O'First + 12) = "rename-limit="
+         then
+            B.Rename_Limit := Number_After (O, "rename-limit=");
+         elsif O = "diff-algorithm=patience" then
+            B.Algorithm := Version.Merge.Diff_Algorithm_Patience;
+         elsif O = "diff-algorithm=minimal" then
+            B.Algorithm := Version.Merge.Diff_Algorithm_Minimal;
+         elsif O = "diff-algorithm=myers" then
+            B.Algorithm := Version.Merge.Diff_Algorithm_Myers;
+         elsif O = "diff-algorithm=histogram" then
+            B.Algorithm := Version.Merge.Diff_Algorithm_Histogram;
+         elsif O = "patience" then
+            B.Algorithm := Version.Merge.Diff_Algorithm_Patience;
+         end if;
+      end loop;
+      return B;
+   end Replay_Behavior;
 
    function Replay_Commit
      (Repo          : Version.Repository.Repository_Handle;
@@ -694,10 +880,7 @@ package body Version.Rebase is
          Target_Items  => Target_Items,
          Merged_Index  => Merged_Index,
          Conflicts     => Conflicts,
-         Behavior      => Version.Merge.Merge_Behavior'
-           (Base_Label => Ada.Strings.Unbounded.To_Unbounded_String
-              (Version.Merge.Base_Label_For (Repo, Base_Id)),
-            others     => <>));
+         Behavior      => Replay_Behavior (Repo, Base_Id));
 
       if not Conflicts.Is_Empty then
          Version.Merge_State.Clear_State (Repo);
@@ -718,6 +901,41 @@ package body Version.Rebase is
       end if;
 
       Version.Staging.Write (Repo => Repo, Entries => Merged_Index);
+      declare
+         use type Version.Rebase_State.Empty_Policy;
+         Tree_Id : constant Version.Objects.Hex_Object_Id :=
+           Version.Write.Write_Tree_From_Index (Repo => Repo, Entries => Merged_Index);
+         --  A commit that started empty (its tree equals its parent's) is
+         --  kept unless --no-keep-empty; one that became empty here (the
+         --  merged tree equals the replay head's) follows --empty.
+         Started_Empty : constant Boolean :=
+           not Is_Root
+           and then Target_Tree_Id = Tree_Id_For_Commit (Repo, Objects, Base_Id);
+         Became_Empty : constant Boolean :=
+           not Started_Empty and then Tree_Id = Current_Tree_Id;
+      begin
+         if Started_Empty and then not Current_Options.Keep_Empty then
+            Version.Restore.Restore_Working_Tree_For_Commit
+              (Repo => Repo, Commit_Id => Replay_Parent);
+            Version.Restore.Write_Index_For_Commit
+              (Repo => Repo, Commit_Id => Replay_Parent);
+            return Replay_Result'(Kind => Replay_Dropped, Commit_Id => Zero_Id);
+         elsif Became_Empty
+           and then Current_Options.Empty = Version.Rebase_State.Empty_Drop
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "dropping " & To_String (Commit_Id) & " "
+               & Replay_Subject (Repo, Commit_Id)
+               & " -- patch contents already upstream");
+            return Replay_Result'(Kind => Replay_Dropped, Commit_Id => Zero_Id);
+         elsif Became_Empty
+           and then Current_Options.Empty = Version.Rebase_State.Empty_Stop
+         then
+            return Replay_Result'
+              (Kind => Replay_Empty_Stop, Commit_Id => Zero_Id);
+         end if;
+      end;
       declare
          Tree_Id : constant Version.Objects.Hex_Object_Id :=
            Version.Write.Write_Tree_From_Index (Repo => Repo, Entries => Merged_Index);
@@ -792,12 +1010,6 @@ package body Version.Rebase is
          Message => Message);
    end Move_Detached_Head;
 
-   function Replay_Subject
-     (Repo : Version.Repository.Repository_Handle;
-      Id   : Version.Objects.Hex_Object_Id) return String is
-     (Version.Objects.Commit_Message_First_Line
-        (Version.Objects.Read_Object (Repo, Id)));
-
    procedure Finish_Rebase
      (Repo          : Version.Repository.Repository_Handle;
       Branch_Ref    : String;
@@ -819,17 +1031,112 @@ package body Version.Rebase is
          Old_Id  => To_String (Original_Head),
          New_Id  => To_String (Final_Head),
          Message => "rebase (finish): returning to " & Branch_Ref);
-      Version.Reflog.Append
-        (Repo    => Repo,
-         Ref     => Branch_Ref,
-         Old_Id  => To_String (Original_Head),
-         New_Id  => To_String (Final_Head),
-         Message => "rebase (finish): " & Branch_Ref & " onto "
-                    & To_String (Target_Head));
+      --  git's ref backend logs no entry for an update that leaves the
+      --  value as it was (a forced rebase that recreated identical
+      --  commits), so the branch reflog only grows when the tip moved.
+      if Final_Head /= Original_Head then
+         Version.Reflog.Append
+           (Repo    => Repo,
+            Ref     => Branch_Ref,
+            Old_Id  => To_String (Original_Head),
+            New_Id  => To_String (Final_Head),
+            Message => "rebase (finish): " & Branch_Ref & " onto "
+                       & To_String (Target_Head));
+      end if;
+
+      --  --update-refs: every other branch that pointed at a replayed
+      --  commit now points at its rewritten one.
+      declare
+      begin
+         for U of Version.Rebase_State.Read_Update_Refs (Repo) loop
+            for M of Linear_Map loop
+               if M.Original = U.Old_Tip then
+                  declare
+                     Ref : constant String := To_String (U.Ref_Name);
+                     Tx  : Version.Ref_Transaction.Transaction;
+                  begin
+                     Version.Ref_Transaction.Start (Tx, Repo);
+                     Version.Ref_Transaction.Add_Update
+                       (Item         => Tx,
+                        Ref_Name     => Ref,
+                        New_Id       => M.Rebased,
+                        Expected_Old => To_String (U.Old_Tip));
+                     Version.Ref_Transaction.Commit (Tx);
+                     Version.Reflog.Append
+                       (Repo    => Repo,
+                        Ref     => Ref,
+                        Old_Id  => To_String (U.Old_Tip),
+                        New_Id  => To_String (M.Rebased),
+                        Message => "rebase (update-ref): " & Ref);
+                     Updated_Refs.Append (Ref);
+                  exception
+                     when others =>
+                        null;   --  the ref moved meanwhile: git leaves it too
+                  end;
+                  exit;
+               end if;
+            end loop;
+         end loop;
+      exception
+         when others =>
+            null;
+      end;
       Version.Rebase_State.Clear_State (Repo);
       Version.Merge_State.Clear_State (Repo);
       Version.Hooks.Run_Post_Commit (Repo => Repo, Run_Hooks => True);
    end Finish_Rebase;
+
+   procedure Plan_Update_Refs
+     (Repo       : Version.Repository.Repository_Handle;
+      Branch_Ref : String;
+      Commits    : Version.Rebase_State.Commit_Vectors.Vector)
+   is
+      Refs : Version.Rebase_State.Ref_Update_Vectors.Vector;
+   begin
+      if not Current_Options.Update_Refs then
+         return;
+      end if;
+      for Name of Version.Refs.List_Branches (Repo) loop
+         declare
+            Ref : constant String := "refs/heads/" & To_String (Name);
+         begin
+            if Ref /= Branch_Ref then
+               declare
+                  Tip : constant Version.Objects.Hex_Object_Id :=
+                    Version.Refs.Resolve_Ref (Repo, Ref);
+               begin
+                  if (for some C of Commits => C = Tip) then
+                     Refs.Append
+                       (Version.Rebase_State.Ref_Update'
+                          (Ref_Name => To_Unbounded_String (Ref),
+                           Old_Tip  => Tip));
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      Version.Rebase_State.Write_Update_Refs (Repo, Refs);
+   end Plan_Update_Refs;
+
+   --  What every start does once the state directory exists: record the
+   --  replay options for --continue (and for git), and the refs
+   --  --update-refs will move.
+   procedure Record_Start
+     (Repo       : Version.Repository.Repository_Handle;
+      Branch_Ref : String;
+      Commits    : Version.Rebase_State.Commit_Vectors.Vector) is
+   begin
+      Linear_Map.Clear;
+      Version.Rebase_State.Write_Options (Repo, Current_Options);
+      Plan_Update_Refs (Repo, Branch_Ref, Commits);
+   end Record_Start;
+
+   --  On --continue/--skip the options come back from the state.
+   procedure Resume_From (State : Version.Rebase_State.Rebase_State) is
+   begin
+      Current_Options := Version.Rebase_State.Options (State);
+      Linear_Map := Version.Rebase_State.Rebased_Map (State);
+   end Resume_From;
 
    procedure Replay_Remaining
      (Repo                : Version.Repository.Repository_Handle;
@@ -851,6 +1158,25 @@ package body Version.Rebase is
       Replay_Head : Version.Objects.Hex_Object_Id := Current_Replay_Head;
       Index       : Natural := Next_Index;
       Exec_Cursor : Natural := Next_Exec;
+      --  Original -> rewritten, carried in the state for --update-refs.
+      Map         : Version.Rebase_State.Map_Vectors.Vector := Linear_Map;
+
+      --  git's "Rebasing (n/N)" on stderr, n counting picks and execs.
+      Total_Steps : constant Natural :=
+        Natural (Commits.Length) + Natural (Execs.Length);
+
+      procedure Progress is
+         Step : constant Natural := Index + Exec_Cursor + 1;
+      begin
+         if not Current_Options.Quiet then
+            Ada.Text_IO.Put
+              (Ada.Text_IO.Standard_Error,
+               "Rebasing (" & Natural_Image (Step) & "/"
+               & Natural_Image (Total_Steps) & ")"
+               & (if Current_Options.Verbose then Character'Val (10)
+                  else Character'Val (13)));
+         end if;
+      end Progress;
 
       function Is_Reword (I : Natural) return Boolean is
         (not Actions.Is_Empty
@@ -881,7 +1207,9 @@ package body Version.Rebase is
             Actions             => Actions,
             Execs               => Execs,
             Next_Exec           => Exec_Cursor,
-            Pause_Reason        => Reason);
+            Pause_Reason        => Reason,
+            Rebased_Map         => Map);
+         Linear_Map := Map;
       end Persist;
 
       --  Run every exec now due (After <= the number of commits applied so far)
@@ -901,7 +1229,9 @@ package body Version.Rebase is
                  [1 => new String'("-c"), 2 => new String'(Command)];
                Status  : Integer;
             begin
-               Ada.Text_IO.Put_Line ("Executing: " & Command);
+               Progress;
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error, "Executing: " & Command);
                Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
                GNAT.OS_Lib.Free (Args (1));
                GNAT.OS_Lib.Free (Args (2));
@@ -909,8 +1239,19 @@ package body Version.Rebase is
                   Persist
                     (Paused => True,
                      Reason => Version.Rebase_State.Pause_Exec);
-                  raise Ada.IO_Exceptions.Data_Error with
-                    "rebase stopped: exec failed: " & Command;
+                  --  git's report, verbatim; the caller adds nothing.
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "warning: execution failed: " & Command);
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "You can fix the problem, and then run");
+                  Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error, "  git rebase --continue");
+                  Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+                  Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+                  raise Exec_Failed;
                end if;
             end;
             Exec_Cursor := Exec_Cursor + 1;
@@ -937,22 +1278,81 @@ package body Version.Rebase is
          exit when Index >= Natural (Commits.Length);
          declare
             Commit_Id : constant Version.Objects.Hex_Object_Id := Commits.Element (Commits.First_Index + Index);
-            Result : constant Replay_Result :=
-              Replay_Commit (Repo => Repo, Replay_Parent => Replay_Head,
-                             Commit_Id => Commit_Id, Allow_Root => Allow_Root,
-                             Reword => Is_Reword (Index));
+
+            --  git's fast-forward: a plain pick whose parent is the replay
+            --  head is kept as it is rather than recreated (and gets no
+            --  progress line).
+            function Compute_Fast_Forwardable return Boolean is
+               Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+                 Version.Objects.Commit_Parent_Ids
+                   (Version.Objects.Read_Object (Repo, Commit_Id));
+            begin
+               return Current_Options.Allow_FF
+                 and then not Is_Reword (Index)
+                 and then Natural (Parents.Length) = 1
+                 and then Parents.First_Element = Replay_Head;
+            end Compute_Fast_Forwardable;
+
+            Fast_Forwardable : constant Boolean := Compute_Fast_Forwardable;
+
+            function Replayed return Replay_Result is
+            begin
+               if Fast_Forwardable then
+                  return Replay_Result'(Kind => Replay_Clean, Commit_Id => Commit_Id);
+               end if;
+               Progress;
+               return Replay_Commit
+                 (Repo => Repo, Replay_Parent => Replay_Head,
+                  Commit_Id => Commit_Id, Allow_Root => Allow_Root,
+                  Reword => Is_Reword (Index));
+            end Replayed;
+
+            Result : constant Replay_Result := Replayed;
          begin
+            if Fast_Forwardable then
+               Version.Restore.Restore_Working_Tree_For_Commit
+                 (Repo => Repo, Commit_Id => Commit_Id);
+               Version.Restore.Write_Index_For_Commit
+                 (Repo => Repo, Commit_Id => Commit_Id);
+            end if;
             if Result.Kind = Replay_Conflict then
                Persist (Paused => True, Cur_Commit => To_String (Commit_Id),
                         Reason => Version.Rebase_State.Pause_Conflict);
                Write_Resume_For (Repo, Commit_Id);
                raise Ada.IO_Exceptions.Data_Error with "rebase paused: conflicts recorded";
+            elsif Result.Kind = Replay_Dropped then
+               --  Nothing to keep: the replay head stays, the commit is
+               --  simply not part of the result.
+               Index := Index + 1;
+               Persist;
+               goto Next_Commit;
+            elsif Result.Kind = Replay_Empty_Stop then
+               Persist (Paused => True, Cur_Commit => To_String (Commit_Id),
+                        Reason => Version.Rebase_State.Pause_Conflict);
+               Write_Resume_For (Repo, Commit_Id);
+               Ada.Text_IO.Put_Line
+                 ("The previous cherry-pick is now empty, possibly due to "
+                  & "conflict resolution.");
+               Ada.Text_IO.Put_Line ("If you wish to commit it anyway, use:");
+               Ada.Text_IO.New_Line;
+               Ada.Text_IO.Put_Line ("    git commit --allow-empty");
+               Ada.Text_IO.New_Line;
+               Ada.Text_IO.Put_Line
+                 ("Otherwise, please use 'git rebase --skip'");
+               raise Empty_Stop;
             end if;
 
             Replay_Head := Result.Commit_Id;
+            Map.Append
+              (Version.Rebase_State.Map_Pair'
+                 (Original => Commit_Id, Rebased => Replay_Head));
             Move_Detached_Head
               (Repo, Replay_Head,
-               "rebase (pick): " & Replay_Subject (Repo, Replay_Head));
+               (if Fast_Forwardable then "rebase: fast-forward"
+                else "rebase (" & (if Is_Edit (Index) then "edit"
+                                   elsif Is_Reword (Index) then "reword"
+                                   else "pick")
+                     & "): " & Replay_Subject (Repo, Replay_Head)));
 
             if Is_Edit (Index) then
                --  Stop for edit: HEAD is already on the applied commit, so the
@@ -971,6 +1371,7 @@ package body Version.Rebase is
             Index := Index + 1;
             Persist;
          end;
+         <<Next_Commit>>
       end loop;
 
       Finish_Rebase
@@ -1028,6 +1429,7 @@ package body Version.Rebase is
             Current_Replay_Head => Target_Head,
             Next_Index          => 0,
             Commits             => Commits);
+         Record_Start (Repo, Branch_Ref, Commits);
 
          begin
             Replay_Remaining
@@ -1118,6 +1520,7 @@ package body Version.Rebase is
             Current_Replay_Head => Onto_Head,
             Next_Index          => 0,
             Commits             => Commits);
+         Record_Start (Repo, Branch_Ref, Commits);
 
          begin
             Replay_Remaining
@@ -1276,23 +1679,25 @@ package body Version.Rebase is
    end Write_Resume_For;
 
    procedure Start_Interactive
-     (Upstream : String; Autosquash : Boolean := False)
+     (Upstream   : String;
+      Autosquash : Boolean := False;
+      Onto       : String := "";
+      Edit_Todo  : Boolean := True)
    is
       Repo : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
 
+      --  git's precedence: GIT_SEQUENCE_EDITOR, sequence.editor, then the
+      --  ordinary message editor.
       function Sequence_Editor return String is
       begin
          if Ada.Environment_Variables.Exists ("GIT_SEQUENCE_EDITOR") then
             return Ada.Environment_Variables.Value ("GIT_SEQUENCE_EDITOR");
-         elsif Ada.Environment_Variables.Exists ("GIT_EDITOR") then
-            return Ada.Environment_Variables.Value ("GIT_EDITOR");
-         elsif Ada.Environment_Variables.Exists ("EDITOR") then
-            return Ada.Environment_Variables.Value ("EDITOR");
+         elsif Version.Config.Has_Key (Repo, "sequence.editor") then
+            return Version.Config.Trim
+              (Version.Config.Get_Value (Repo, "sequence.editor"));
          else
-            raise Ada.IO_Exceptions.Data_Error with
-              "interactive rebase requires a sequence editor "
-              & "(set GIT_SEQUENCE_EDITOR)";
+            return Version.Editor.Configured (Repo);
          end if;
       end Sequence_Editor;
    begin
@@ -1323,10 +1728,13 @@ package body Version.Rebase is
          Branch_Ref  : constant String := "refs/heads/" & Branch_Name;
          Original_Head : constant Version.Objects.Hex_Object_Id :=
            Version.Objects.To_Object_Id (Version.Refs.Current_Commit_Id (Repo));
-         Target_Head : constant Version.Objects.Hex_Object_Id :=
+         Upstream_Head : constant Version.Objects.Hex_Object_Id :=
            Version.Revisions.Resolve_Commit (Repo, Upstream);
+         Target_Head : constant Version.Objects.Hex_Object_Id :=
+           (if Onto = "" then Upstream_Head
+            else Version.Revisions.Resolve_Commit (Repo, Onto));
          All_Commits : constant Version.Rebase_State.Commit_Vectors.Vector :=
-           Commits_To_Replay (Repo, Original_Head, Target_Head);
+           Commits_To_Replay (Repo, Original_Head, Upstream_Head);
          Todo_Path : constant String :=
            Version.Files.Join
              (Version.Repository.Git_Dir (Repo), "version-rebase-todo");
@@ -1373,6 +1781,13 @@ package body Version.Rebase is
                  (Todo,
                   Action & " " & Hex (Hex'First .. Hex'First + 6) & " "
                   & Subject_Of (C) & Character'Val (10));
+               --  --exec: each command runs after every pick (git appends
+               --  the exec lines to the pick, not to a fixup/squash).
+               if Action = "pick" then
+                  for X of Exec_After_Each loop
+                     Append (Todo, "exec " & X & Character'Val (10));
+                  end loop;
+               end if;
             end Emit;
 
             --  The commit a "fixup! <subj>"/"squash! <subj>" line folds into
@@ -1444,22 +1859,25 @@ package body Version.Rebase is
             Version.Files.Write_Binary_File (Todo_Path, To_String (Todo));
          end;
 
-         --  Edit it.
-         declare
-            Args : GNAT.OS_Lib.Argument_List :=
-              [1 => new String'("-c"),
-               2 => new String'(Sequence_Editor & " '" & Todo_Path & "'")];
-            Status : Integer;
-         begin
-            Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
-            GNAT.OS_Lib.Free (Args (1));
-            GNAT.OS_Lib.Free (Args (2));
-            if Status /= 0 then
-               Version.Files.Delete_File_If_Exists (Todo_Path);
-               raise Ada.IO_Exceptions.Data_Error with
-                 "interactive rebase: sequence editor failed";
-            end if;
-         end;
+         --  Edit it (git's non-interactive --exec/--autosquash run the
+         --  generated todo untouched).
+         if Edit_Todo then
+            declare
+               Args : GNAT.OS_Lib.Argument_List :=
+                 [1 => new String'("-c"),
+                  2 => new String'(Sequence_Editor & " '" & Todo_Path & "'")];
+               Status : Integer;
+            begin
+               Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+               GNAT.OS_Lib.Free (Args (1));
+               GNAT.OS_Lib.Free (Args (2));
+               if Status /= 0 then
+                  Version.Files.Delete_File_If_Exists (Todo_Path);
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "interactive rebase: sequence editor failed";
+               end if;
+            end;
+         end if;
 
          --  Parse the edited todo into the picked commit list.
          declare
@@ -1622,6 +2040,7 @@ package body Version.Rebase is
                Commits             => Picked,
                Actions             => Pick_Actions,
                Execs               => Parsed_Execs);
+            Record_Start (Repo, Branch_Ref, Picked);
 
             begin
                Replay_Remaining
@@ -1633,7 +2052,8 @@ package body Version.Rebase is
                   Next_Index          => 0,
                   Commits             => Picked,
                   Actions             => Pick_Actions,
-                  Execs               => Parsed_Execs);
+                  Execs               => Parsed_Execs,
+                  Onto_Name           => (if Onto /= "" then Onto else Upstream));
             exception
                when others =>
                   declare
@@ -1678,67 +2098,110 @@ package body Version.Rebase is
                end Abort_Interactive;
             begin
                for E of Entries loop
-                  case E.Kind is
-                     when Cmd_Pick =>
-                        declare
-                           R : constant Replay_Result :=
-                             Replay_Commit (Repo, Replay_Head, E.Id);
-                        begin
-                           if R.Kind = Replay_Conflict then
-                              Abort_Interactive;
-                           end if;
-                           Prev_Parent := Replay_Head;
-                           Replay_Head := R.Commit_Id;
-                           Prev_Author := To_Unbounded_String
-                             (IR_Author_Line (Repo, R.Commit_Id));
-                           Prev_Msg := To_Unbounded_String
-                             (IR_Full_Message (Repo, R.Commit_Id));
-                           Have_Prev := True;
-                        end;
+                  declare
+                     --  A plain pick on its own parent fast-forwards, as in
+                     --  the linear replay, without a progress line.
+                     FF : constant Boolean :=
+                       E.Kind = Cmd_Pick
+                       and then Current_Options.Allow_FF
+                       and then Version.Objects.Commit_Parent_Ids
+                                  (Version.Objects.Read_Object (Repo, E.Id))
+                                  .Length = 1
+                       and then Version.Objects.Commit_Parent_Ids
+                                  (Version.Objects.Read_Object (Repo, E.Id))
+                                  .First_Element = Replay_Head;
+                  begin
+                     if not Current_Options.Quiet and then not FF then
+                        Ada.Text_IO.Put
+                          (Ada.Text_IO.Standard_Error,
+                           "Rebasing (" & Natural_Image (Entry_Vectors.To_Index
+                                                           (Entries.Find (E)))
+                           & "/" & Natural_Image (Natural (Entries.Length)) & ")"
+                           & (if Current_Options.Verbose then Character'Val (10)
+                              else Character'Val (13)));
+                     end if;
+                     case E.Kind is
+                        when Cmd_Pick =>
+                           declare
+                              R : constant Replay_Result :=
+                                (if FF
+                                 then Replay_Result'(Kind => Replay_Clean,
+                                                     Commit_Id => E.Id)
+                                 else Replay_Commit (Repo, Replay_Head, E.Id));
+                           begin
+                              if R.Kind = Replay_Conflict then
+                                 Abort_Interactive;
+                              end if;
+                              if FF then
+                                 Version.Restore.Restore_Working_Tree_For_Commit
+                                   (Repo => Repo, Commit_Id => E.Id);
+                                 Version.Restore.Write_Index_For_Commit
+                                   (Repo => Repo, Commit_Id => E.Id);
+                              end if;
+                              Prev_Parent := Replay_Head;
+                              Replay_Head := R.Commit_Id;
+                              Move_Detached_Head
+                                (Repo, Replay_Head,
+                                 (if FF then "rebase: fast-forward"
+                                  else "rebase (pick): "
+                                       & Replay_Subject (Repo, Replay_Head)));
+                              Prev_Author := To_Unbounded_String
+                                (IR_Author_Line (Repo, R.Commit_Id));
+                              Prev_Msg := To_Unbounded_String
+                                (IR_Full_Message (Repo, R.Commit_Id));
+                              Have_Prev := True;
+                           end;
 
-                     when Cmd_Reword | Cmd_Edit =>
-                        --  Rejected up front (guard before this branch); kept
-                        --  for case coverage.
-                        raise Ada.IO_Exceptions.Data_Error with
-                          "interactive rebase: reword/edit combined with "
-                          & "squash/fixup is not supported";
-
-                     when Cmd_Squash | Cmd_Fixup =>
-                        if not Have_Prev then
+                        when Cmd_Reword | Cmd_Edit =>
+                           --  Rejected up front (guard before this branch); kept
+                           --  for case coverage.
                            raise Ada.IO_Exceptions.Data_Error with
-                             "interactive rebase: squash without a preceding "
-                             & "pick";
-                        end if;
-                        declare
-                           S : constant Replay_Result :=
-                             Replay_Commit (Repo, Replay_Head, E.Id);
-                        begin
-                           if S.Kind = Replay_Conflict then
-                              Abort_Interactive;
+                             "interactive rebase: reword/edit combined with "
+                             & "squash/fixup is not supported";
+
+                        when Cmd_Squash | Cmd_Fixup =>
+                           if not Have_Prev then
+                              raise Ada.IO_Exceptions.Data_Error with
+                                "interactive rebase: squash without a preceding "
+                                & "pick";
                            end if;
                            declare
-                              Tree : constant Version.Objects.Hex_Object_Id :=
-                                Version.Objects.Commit_Tree_Id
-                                  (Version.Objects.Read_Object
-                                     (Repo, S.Commit_Id));
-                              New_Msg : constant String :=
-                                (if E.Kind = Cmd_Squash
-                                 then To_String (Prev_Msg)
-                                      & Character'Val (10) & Character'Val (10)
-                                      & IR_Full_Message (Repo, E.Id)
-                                 else To_String (Prev_Msg));
-                              Parents :
-                                Version.Objects.Object_Id_Vectors.Vector;
+                              S : constant Replay_Result :=
+                                Replay_Commit (Repo, Replay_Head, E.Id);
                            begin
-                              Parents.Append (Prev_Parent);
-                              Replay_Head :=
-                                Version.Write.Write_Commit_With_Author
-                                  (Repo, Tree, Parents,
-                                   To_String (Prev_Author), New_Msg);
-                              Prev_Msg := To_Unbounded_String (New_Msg);
+                              if S.Kind = Replay_Conflict then
+                                 Abort_Interactive;
+                              end if;
+                              declare
+                                 Tree : constant Version.Objects.Hex_Object_Id :=
+                                   Version.Objects.Commit_Tree_Id
+                                     (Version.Objects.Read_Object
+                                        (Repo, S.Commit_Id));
+                                 New_Msg : constant String :=
+                                   (if E.Kind = Cmd_Squash
+                                    then To_String (Prev_Msg)
+                                         & Character'Val (10) & Character'Val (10)
+                                         & IR_Full_Message (Repo, E.Id)
+                                    else To_String (Prev_Msg));
+                                 Parents :
+                                   Version.Objects.Object_Id_Vectors.Vector;
+                              begin
+                                 Parents.Append (Prev_Parent);
+                                 Replay_Head :=
+                                   Version.Write.Write_Commit_With_Author
+                                     (Repo, Tree, Parents,
+                                      To_String (Prev_Author), New_Msg);
+                                 Move_Detached_Head
+                                   (Repo, Replay_Head,
+                                    "rebase ("
+                                    & (if E.Kind = Cmd_Squash then "squash"
+                                       else "fixup")
+                                    & "): " & Replay_Subject (Repo, Replay_Head));
+                                 Prev_Msg := To_Unbounded_String (New_Msg);
+                              end;
                            end;
-                        end;
-                  end case;
+                     end case;
+                  end;
                end loop;
 
                Finish_Rebase
@@ -1863,6 +2326,7 @@ package body Version.Rebase is
             Current_Replay_Head => Target_Head,
             Next_Index          => 0,
             Commits             => Chain);
+         Record_Start (Repo, Branch_Ref, Chain);
 
          begin
             Replay_Remaining
@@ -1981,6 +2445,7 @@ package body Version.Rebase is
                Current_Replay_Head => New_Root,
                Next_Index          => 1,
                Commits             => Chain);
+            Record_Start (Repo, Branch_Ref, Chain);
 
             begin
                Replay_Remaining
@@ -2363,6 +2828,14 @@ package body Version.Rebase is
          declare
             C : constant Todo_Command := Todo.Element (Index);
          begin
+            if not Current_Options.Quiet then
+               Ada.Text_IO.Put
+                 (Ada.Text_IO.Standard_Error,
+                  "Rebasing (" & Natural_Image (Index + 1) & "/"
+                  & Natural_Image (Natural (Todo.Length)) & ")"
+                  & (if Current_Options.Verbose then Character'Val (10)
+                     else Character'Val (13)));
+            end if;
             case C.Kind is
                when Cmd_Label =>
                   Put_Label (To_String (C.Label), Head_Id);
@@ -2538,6 +3011,9 @@ package body Version.Rebase is
                Target_Head   => Upstream_Head,
                Todo          => Merges_Todo,
                Done_Count    => 0);
+            Record_Start
+              (Repo, Branch_Ref,
+               Version.Rebase_State.Commit_Vectors.Empty_Vector);
 
             Replay_Merges_Remaining
               (Repo          => Repo,
@@ -2579,9 +3055,12 @@ package body Version.Rebase is
       State : constant Version.Rebase_State.Rebase_State := Version.Rebase_State.Read_State (Repo);
       Index_Items : Version.Staging.Index_Entry_Vectors.Vector;
       Conflicts   : Version.Merge.Conflict_Vectors.Vector;
+      --  An exec pause after the last pick sits past the commit list.
       Paused_Action : constant Version.Rebase_State.Rebase_Action :=
         (if Version.Rebase_State.Actions (State).Is_Empty
             or else not Version.Rebase_State.Paused (State)
+            or else Version.Rebase_State.Next_Index (State)
+                    >= Natural (Version.Rebase_State.Actions (State).Length)
          then Version.Rebase_State.Pick
          else Version.Rebase_State.Actions (State).Element
                 (Version.Rebase_State.Actions (State).First_Index
@@ -2590,6 +3069,7 @@ package body Version.Rebase is
       Require_Current_Rebase_Branch
         (Repo       => Repo,
          Branch_Ref => Version.Rebase_State.Branch_Ref (State));
+      Resume_From (State);
 
       if not Version.Rebase_State.Paused (State) then
          raise Ada.IO_Exceptions.Data_Error with "continue without paused conflict";
@@ -2769,10 +3249,6 @@ package body Version.Rebase is
          State     => State,
          Conflicts => Conflicts);
 
-      if Conflict_Paths_Have_Markers (Repo => Repo, Conflicts => Conflicts) then
-         raise Ada.IO_Exceptions.Data_Error with "cannot continue rebase: conflict markers remain";
-      end if;
-
       Require_Index_Fully_Merged (Repo);
 
       Version.Merge.Record_Rerere_Resolutions
@@ -2812,6 +3288,23 @@ package body Version.Rebase is
            (Repo => Repo, Commit_Id => New_Commit);
          Version.Restore.Write_Index_For_Commit
            (Repo => Repo, Commit_Id => New_Commit);
+
+         --  git commits the resolution through its commit machinery and
+         --  prints that commit's summary ("[detached HEAD <id>] <subject>"
+         --  plus the shortstat) on stdout before going on.
+         declare
+            Hex : constant String := To_String (New_Commit);
+         begin
+            Version.Console.Put
+              ("[detached HEAD " & Hex (Hex'First .. Hex'First + 6) & "] "
+               & Replay_Subject (Repo, New_Commit) & Character'Val (10)
+               & Version.Diff.Diff_Commits
+                   (Repo,
+                    Version.Rebase_State.Current_Replay_Head (State),
+                    New_Commit,
+                    Version.Diff.Diff_Options'
+                      (Shortstat => True, Summary => True, others => <>)));
+         end;
 
          --  Note: a conflicting `edit` does not stop a second time -- the
          --  conflict stop already gave the amend opportunity, so continue
@@ -2857,6 +3350,7 @@ package body Version.Rebase is
       Require_Current_Rebase_Branch
         (Repo       => Repo,
          Branch_Ref => Version.Rebase_State.Branch_Ref (State));
+      Resume_From (State);
 
       Version.Restore.Restore_Working_Tree_For_Commit
         (Repo => Repo, Commit_Id => Replay_Head);
@@ -2917,18 +3411,14 @@ package body Version.Rebase is
       Version.Restore.Write_Index_For_Commit
         (Repo      => Repo,
          Commit_Id => Version.Rebase_State.Original_Head (State));
+      --  git logs the abort on HEAD alone: the branch never moved.
       Version.Reflog.Append
         (Repo    => Repo,
          Ref     => "HEAD",
          Old_Id  => (if Old_Id'Length = 0 then To_String (Zero_Id) else Old_Id),
          New_Id  => To_String (Version.Rebase_State.Original_Head (State)),
-         Message => "rebase: abort");
-      Version.Reflog.Append
-        (Repo    => Repo,
-         Ref     => Version.Rebase_State.Branch_Ref (State),
-         Old_Id  => (if Old_Id'Length = 0 then To_String (Zero_Id) else Old_Id),
-         New_Id  => To_String (Version.Rebase_State.Original_Head (State)),
-         Message => "rebase: abort");
+         Message => "rebase (abort): returning to "
+                    & Version.Rebase_State.Branch_Ref (State));
       Version.Rebase_State.Clear_State (Repo);
       Version.Merge_State.Clear_State (Repo);
    end Abort_Rebase;

@@ -1,3 +1,4 @@
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
@@ -156,6 +157,66 @@ package Version.Rebase_State is
    function Mode (State : Rebase_State) return Rebase_Mode;
    function Rebased_Map (State : Rebase_State) return Map_Vectors.Vector;
 
+   --  What git rebase's option files say about how each commit is replayed:
+   --  --signoff, --committer-date-is-author-date, --ignore-date, the -X
+   --  strategy options, what to do with a commit that becomes empty
+   --  (--empty), whether a commit that starts empty is kept (--keep-empty,
+   --  the default), -q, and --update-refs. Written once at the start under
+   --  git's own file names (`signoff`, `cdate_is_adate`, `ignore_date`,
+   --  `strategy`/`strategy_opts`, `keep_redundant_commits`/
+   --  `drop_redundant_commits`, `quiet`, `update-refs`) so git can finish
+   --  what this tool started, and read back on --continue.
+   type Empty_Policy is (Empty_Drop, Empty_Keep, Empty_Stop);
+
+   package String_Vectors is new Ada.Containers.Indefinite_Vectors
+     (Index_Type => Natural, Element_Type => String);
+
+   type Replay_Options is record
+      Signoff        : Boolean := False;
+      Cdate_Is_Adate : Boolean := False;
+      Ignore_Date    : Boolean := False;
+      Keep_Empty     : Boolean := True;
+      Empty          : Empty_Policy := Empty_Drop;
+      Quiet          : Boolean := False;
+      Verbose        : Boolean := False;
+      Update_Refs    : Boolean := False;
+      --  A pick whose parent is already the replay head is taken as it is
+      --  (git's fast-forward) unless the rebase was forced (-f, --signoff,
+      --  the date options).
+      Allow_FF       : Boolean := True;
+      --  -X options as typed ("theirs", "ignore-space-change", ...).
+      Strategy_Opts  : String_Vectors.Vector;
+   end record;
+
+   procedure Write_Options
+     (Repo : Version.Repository.Repository_Handle; Options : Replay_Options);
+
+   function Options (State : Rebase_State) return Replay_Options;
+
+   --  --update-refs bookkeeping (git's `update-refs` file: refname, the
+   --  tip it had, the tip it gets -- zero until written). The refs are the
+   --  branches other than the one being rebased whose tips lie among the
+   --  replayed commits; Finish moves each to its rewritten commit.
+   type Ref_Update is record
+      Ref_Name : Ada.Strings.Unbounded.Unbounded_String;
+      Old_Tip  : Version.Objects.Object_Id_Storage;
+   end record;
+
+   package Ref_Update_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Natural, Element_Type => Ref_Update);
+
+   procedure Write_Update_Refs
+     (Repo : Version.Repository.Repository_Handle;
+      Refs : Ref_Update_Vectors.Vector);
+
+   function Update_Refs (State : Rebase_State) return Ref_Update_Vectors.Vector;
+
+   --  The same list straight from the state directory (for the finish,
+   --  when the rest of the state is already being torn down).
+   function Read_Update_Refs
+     (Repo : Version.Repository.Repository_Handle)
+      return Ref_Update_Vectors.Vector;
+
 private
    type Rebase_State is record
       Branch_Ref_Value          : Ada.Strings.Unbounded.Unbounded_String;
@@ -174,5 +235,7 @@ private
       Rebased_Map_Value         : Map_Vectors.Vector;
       Todo_Value                : Todo_Command_Vectors.Vector;
       Done_Count_Value          : Natural := 0;
+      Options_Value             : Replay_Options;
+      Update_Refs_Value         : Ref_Update_Vectors.Vector;
    end record;
 end Version.Rebase_State;

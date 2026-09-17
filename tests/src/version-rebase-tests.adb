@@ -981,7 +981,6 @@ package body Version.Rebase.Tests is
       Root : constant String :=
         Version.Temp_Fixture.Root (Version.Temp_Fixture.Test_Case (T));
       Old_Dir : constant String := Ada.Directories.Current_Directory;
-      Raised  : Boolean := False;
    begin
       Version.Init.Init (Root);
       Configure_User (Root);
@@ -1011,40 +1010,47 @@ package body Version.Rebase.Tests is
       declare
          Repo : constant Version.Repository.Repository_Handle :=
            Version.Repository.Open;
-         Before_Feature : constant String := Version.Refs.Current_Commit_Id (Repo);
       begin
-         begin
-            Version.Rebase.Start ("main");
-         exception
-            when E : Ada.IO_Exceptions.Data_Error =>
-               Raised := True;
-               Assert
-                 (Ada.Exceptions.Exception_Message (E)
-                  = Version.Rebase.Merge_Commit_Rebase_Not_Supported,
-                  "merge rebase diagnostic must remain stable");
-         end;
+         --  git flattens a merge in the rebased history: only the
+         --  non-merge commits are replayed, in line, onto the upstream.
+         Version.Rebase.Start ("main");
 
-         Assert (Raised, "rebase must reject replaying merge commits");
-         Assert
-           (Version.Refs.Current_Commit_Id (Repo) = Before_Feature,
-            "merge commit rejection must not move branch head");
          Assert
            (not Version.Rebase_State.State_Exists (Repo),
-            "merge commit rejection must not leave rebase state");
+            "flattening rebase must finish without leaving rebase state");
          Assert
            (not Version.Merge_State.State_Exists (Repo),
-            "merge commit rejection must not leave merge state");
+            "flattening rebase must leave no merge state");
+         declare
+            Head : constant Version.Objects.Git_Object :=
+              Version.Objects.Read_Object
+                (Repo,
+                 Version.Objects.To_Object_Id
+                   (Version.Refs.Current_Commit_Id (Repo)));
+            Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+              Version.Objects.Commit_Parent_Ids (Head);
+         begin
+            Assert
+              (Version.Objects.Commit_Message_First_Line (Head) = "feature one",
+               "the feature commit must be the replayed tip");
+            Assert
+              (Natural (Parents.Length) = 1
+               and then Version.Objects.To_String (Parents.First_Element)
+                        = Version.Objects.To_String
+                            (Version.Branch.Resolve_Branch ("main")),
+               "the replayed commit must sit directly on main (merge dropped)");
+         end;
       end;
 
       Assert
         (File_Text (Root, "base.txt") = "base",
-         "merge commit rejection must preserve base file content");
+         "flattening rebase must preserve base file content");
       Assert
         (File_Text (Root, "feature.txt") = "feature",
-         "merge commit rejection must preserve feature file content");
+         "flattening rebase must preserve feature file content");
       Assert
         (File_Text (Root, "main.txt") = "main",
-         "merge commit rejection must preserve merged file content");
+         "flattening rebase must preserve merged file content");
       Version.Git_Fixtures.Run (Root, "test -z ""$(git status --porcelain)""");
 
       Ada.Directories.Set_Directory (Old_Dir);
@@ -1167,7 +1173,8 @@ package body Version.Rebase.Tests is
          begin
             Version.Rebase.Continue_Rebase;
          exception
-            when Ada.IO_Exceptions.Data_Error =>
+            --  git's refusal: "<path>: needs merge", exit 1.
+            when Version.Rebase.Unresolved_Continue =>
                Raised := True;
          end;
 
@@ -2054,7 +2061,7 @@ package body Version.Rebase.Tests is
       Register_Routine
         (T,
          Rebase_Rejects_Merge_Commit_Replay'Access,
-         "Rebase: merge commit replay rejected");
+         "Rebase: a merge in the history is flattened (git parity)");
       Register_Routine
         (T,
          Rebase_Conflict_Pauses_And_Abort_Restores'Access,

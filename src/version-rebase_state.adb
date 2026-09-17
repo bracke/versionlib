@@ -584,14 +584,14 @@ package body Version.Rebase_State is
          Version.Files.Delete_File_If_Exists (State_Path (Repo, "amend"));
       end if;
 
-      --  `--rebase-merges` topology has no representation in git's todo until
-      --  the label/reset/merge commands are ported; until then it rides in a
-      --  file of our own beside git's, which git ignores.
+      --  The original -> rewritten map rides in a file of our own beside
+      --  git's, which git ignores; its first line says which mode wrote it
+      --  (a linear rebase keeps the map for --update-refs).
       if Mode = Mode_Merges or else not Rebased_Map.Is_Empty then
          declare
             Text : Unbounded_String;
          begin
-            Append (Text, "merges" & LF);
+            Append (Text, (if Mode = Mode_Merges then "merges" else "linear") & LF);
             for I in Rebased_Map.First_Index .. Rebased_Map.Last_Index loop
                Append
                  (Text,
@@ -926,7 +926,6 @@ package body Version.Rebase_State is
       end if;
 
       if Has_File (Repo, "version-merges") then
-         State.Mode_Value := Mode_Merges;
          declare
             Text  : constant String := Get_File (Repo, "version-merges");
             First : Natural := Text'First;
@@ -946,7 +945,11 @@ package body Version.Rebase_State is
                      Sp   : constant Natural :=
                        Ada.Strings.Fixed.Index (Line, " ");
                   begin
-                     if Line_No > 0 and then Line'Length > 0 then
+                     if Line_No = 0 then
+                        if Line = "merges" then
+                           State.Mode_Value := Mode_Merges;
+                        end if;
+                     elsif Line'Length > 0 then
                         if Sp = 0 then
                            raise Ada.IO_Exceptions.Data_Error with
                              "malformed rebase state: map pair";
@@ -967,6 +970,42 @@ package body Version.Rebase_State is
          end;
       end if;
 
+      --  The replay options, from git's flag files.
+      State.Options_Value.Signoff := Has_File (Repo, "signoff");
+      State.Options_Value.Cdate_Is_Adate := Has_File (Repo, "cdate_is_adate");
+      State.Options_Value.Ignore_Date := Has_File (Repo, "ignore_date");
+      State.Options_Value.Quiet := Has_File (Repo, "quiet");
+      State.Options_Value.Verbose := Has_File (Repo, "verbose");
+      State.Options_Value.Allow_FF := not Has_File (Repo, "no-ff");
+      State.Options_Value.Keep_Empty := not Has_File (Repo, "no-keep-empty");
+      State.Options_Value.Empty :=
+        (if Has_File (Repo, "keep_redundant_commits") then Empty_Keep
+         elsif Has_File (Repo, "drop_redundant_commits") then Empty_Drop
+         else Empty_Stop);
+      if Has_File (Repo, "strategy_opts") then
+         --  `"theirs" "ignore-space-change"`: git's sq-quoted list.
+         declare
+            Text  : constant String := Get_Line (Repo, "strategy_opts");
+            Start : Natural := 0;
+         begin
+            for K in Text'Range loop
+               if Text (K) = '"' then
+                  if Start = 0 then
+                     Start := K + 1;
+                  else
+                     if K > Start then
+                        State.Options_Value.Strategy_Opts.Append
+                          (Text (Start .. K - 1));
+                     end if;
+                     Start := 0;
+                  end if;
+               end if;
+            end loop;
+         end;
+      end if;
+      State.Update_Refs_Value := Read_Update_Refs (Repo);
+      State.Options_Value.Update_Refs := not State.Update_Refs_Value.Is_Empty;
+
       --  Linear mode alone can assert that the cursor lands on the stopped
       --  commit: a merges todo interleaves label/reset commands, so its
       --  commit cursor and its command cursor advance at different rates.
@@ -985,6 +1024,111 @@ package body Version.Rebase_State is
 
       return State;
    end Read_State;
+
+   procedure Write_Options
+     (Repo : Version.Repository.Repository_Handle; Options : Replay_Options)
+   is
+      procedure Flag (Name : String; On : Boolean; Content : String := "") is
+      begin
+         if On then
+            Put_File (Repo, Name, Content);
+         else
+            Version.Files.Delete_File_If_Exists (State_Path (Repo, Name));
+         end if;
+      end Flag;
+
+      Opts : Unbounded_String;
+   begin
+      Flag ("signoff", Options.Signoff, "--signoff" & LF);
+      Flag ("cdate_is_adate", Options.Cdate_Is_Adate);
+      Flag ("ignore_date", Options.Ignore_Date);
+      Flag ("quiet", Options.Quiet);
+      Flag ("verbose", Options.Verbose);
+      Flag ("no-ff", not Options.Allow_FF);
+      Flag ("keep_redundant_commits", Options.Empty = Empty_Keep);
+      Flag ("drop_redundant_commits", Options.Empty = Empty_Drop);
+      Flag ("no-keep-empty", not Options.Keep_Empty);
+      Put_File (Repo, "strategy", "ort" & LF);
+      for O of Options.Strategy_Opts loop
+         if Length (Opts) > 0 then
+            Append (Opts, " ");
+         end if;
+         Append (Opts, '"' & O & '"');
+      end loop;
+      Flag ("strategy_opts", not Options.Strategy_Opts.Is_Empty,
+            To_String (Opts) & LF);
+   end Write_Options;
+
+   function Options (State : Rebase_State) return Replay_Options is
+   begin
+      return State.Options_Value;
+   end Options;
+
+   procedure Write_Update_Refs
+     (Repo : Version.Repository.Repository_Handle;
+      Refs : Ref_Update_Vectors.Vector)
+   is
+      Text : Unbounded_String;
+   begin
+      if Refs.Is_Empty then
+         Version.Files.Delete_File_If_Exists (State_Path (Repo, "update-refs"));
+         return;
+      end if;
+      for R of Refs loop
+         Append (Text, To_String (R.Ref_Name) & LF);
+         Append (Text, To_String (R.Old_Tip) & LF);
+         Append (Text, To_String (Zero_Id) & LF);
+      end loop;
+      Put_File (Repo, "update-refs", To_String (Text));
+   end Write_Update_Refs;
+
+   function Update_Refs (State : Rebase_State) return Ref_Update_Vectors.Vector
+   is
+   begin
+      return State.Update_Refs_Value;
+   end Update_Refs;
+
+   function Read_Update_Refs
+     (Repo : Version.Repository.Repository_Handle)
+      return Ref_Update_Vectors.Vector
+   is
+      Result : Ref_Update_Vectors.Vector;
+   begin
+      if not Has_File (Repo, "update-refs") then
+         return Result;
+      end if;
+      declare
+         Text  : constant String := Get_File (Repo, "update-refs");
+         First : Natural := Text'First;
+         Field : Natural := 0;
+         Item  : Ref_Update;
+      begin
+         while First <= Text'Last loop
+            declare
+               Last : Natural := First;
+            begin
+               while Last <= Text'Last and then Text (Last) /= LF loop
+                  Last := Last + 1;
+               end loop;
+               declare
+                  Line : constant String := Text (First .. Last - 1);
+               begin
+                  case Field is
+                     when 0 => Item.Ref_Name := To_Unbounded_String (Line);
+                     when 1 =>
+                        Require_Id (Line, "update-refs tip");
+                        Item.Old_Tip := Version.Objects.To_Object_Id (Line);
+                     when others =>
+                        Result.Append (Item);
+                  end case;
+               end;
+               Field := (Field + 1) mod 3;
+               First := Last + 1;
+            end;
+         end loop;
+      end;
+      return Result;
+   end Read_Update_Refs;
 
    procedure Clear_State
      (Repo : Version.Repository.Repository_Handle) is
