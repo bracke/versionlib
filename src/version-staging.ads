@@ -20,6 +20,11 @@ package Version.Staging is
       --  trusts the working file to match without stat'ing it. Preserved so a
       --  rewrite for an unrelated reason does not clear a user's setting.
       Assume_Valid  : Boolean := False;
+      --  git's intent-to-add bit (extended flag 0x2000, `add -N`): the path
+      --  is recorded with an empty blob so diffs show it, but it is left
+      --  out of any tree written from the index and status reports it as
+      --  an unstaged addition.
+      Intent_To_Add : Boolean := False;
    end record;
 
    package Index_Entry_Vectors is new Ada.Containers.Vectors

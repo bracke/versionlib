@@ -1160,7 +1160,7 @@ package body Version.Rebase.Tests is
                              ("conflicted.txt"),
                   Id    => Version.Write.Write_Blob (Repo, "conflicted"),
                   Mode  => Ada.Strings.Unbounded.To_Unbounded_String ("100644"),
-                  Stage => 2, Skip_Worktree => False, Assume_Valid => False));
+                  Stage => 2, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
             Version.Staging.Write (Repo => Repo, Entries => Entries);
          end;
 

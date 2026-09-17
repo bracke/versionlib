@@ -235,7 +235,7 @@ package body Version.Staging is
                                       (Full_Path)),
                                  Id    => Tree_Item.Id,
                                  Mode  => Tree_Item.Mode,
-                                 Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+                                 Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
                         end;
                      end loop;
                   end if;
@@ -338,6 +338,7 @@ package body Version.Staging is
                        Pos + 42 + RL + Extra_Flags_Length;
                      Name_End    : Stream_Element_Offset;
                      Skip_Worktree : Boolean := False;
+                     Intent_To_Add : Boolean := False;
                      Assume_Valid  : constant Boolean :=
                        (Flags / 16#8000#) mod 2 = 1;
                   begin
@@ -352,6 +353,12 @@ package body Version.Staging is
                          ((Natural (Data (Pos + 42 + RL)) * 16#100#
                            + Natural (Data (Pos + 43 + RL)))
                           / 16#4000#) mod 2 = 1;
+                     Intent_To_Add :=
+                       Extended
+                       and then
+                         ((Natural (Data (Pos + 42 + RL)) * 16#100#
+                           + Natural (Data (Pos + 43 + RL)))
+                          / 16#2000#) mod 2 = 1;
 
                      if Name_Len = 16#FFF# then
                         Name_End := Name_Start;
@@ -394,7 +401,8 @@ package body Version.Staging is
                                         Mode  => To_Unbounded_String (Mode_Image (Mode)),
                                         Stage => Stage,
                                         Skip_Worktree => Skip_Worktree,
-                                        Assume_Valid  => Assume_Valid));
+                                        Assume_Valid  => Assume_Valid,
+                                        Intent_To_Add => Intent_To_Add));
                      end;
 
                      Pos := E_Start + 42 + RL + Extra_Flags_Length
@@ -571,7 +579,9 @@ package body Version.Staging is
       begin
          if not Items.Is_Empty then
             for I in Items.First_Index .. Items.Last_Index loop
-               if Items.Element (I).Skip_Worktree then
+               if Items.Element (I).Skip_Worktree
+                 or else Items.Element (I).Intent_To_Add
+               then
                   Any_Extended := True;
                   exit;
                end if;
@@ -635,7 +645,8 @@ package body Version.Staging is
                   Stage : constant Natural :=
                     (if Index_Item.Stage > 3 then 3 else Index_Item.Stage);
                   Ext_Bit : constant Natural :=
-                    (if Index_Item.Skip_Worktree then 16#4000# else 0);
+                    (if Index_Item.Skip_Worktree or else Index_Item.Intent_To_Add
+                     then 16#4000# else 0);
                   --  Bit 15 of the base flags word is "assume valid"; unlike
                   --  skip-worktree it needs no extended-flags word.
                   Assume_Bit : constant Natural :=
@@ -650,9 +661,15 @@ package body Version.Staging is
                     (Buffer,
                      Character'Val (Flags mod 256));
 
-                  --  Extended-flags word: skip-worktree is bit 14 (0x4000).
-                  if Index_Item.Skip_Worktree then
-                     Append (Buffer, Character'Val (16#40#));
+                  --  Extended-flags word: skip-worktree is bit 14 (0x4000),
+                  --  intent-to-add bit 13 (0x2000).
+                  if Index_Item.Skip_Worktree or else Index_Item.Intent_To_Add
+                  then
+                     Append
+                       (Buffer,
+                        Character'Val
+                          ((if Index_Item.Skip_Worktree then 16#40# else 0)
+                           + (if Index_Item.Intent_To_Add then 16#20# else 0)));
                      Append (Buffer, Character'Val (16#00#));
                   end if;
                end;
@@ -850,7 +867,7 @@ package body Version.Staging is
                        (Path  => Ada.Strings.Unbounded.To_Unbounded_String (Safe_Path),
                         Id    => Tree_Item.Id,
                         Mode  => Tree_Item.Mode,
-                        Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+                        Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
                end;
             end;
          end loop;

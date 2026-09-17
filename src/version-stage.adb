@@ -63,7 +63,11 @@ package body Version.Stage is
       end if;
    end File_Index_Mode;
 
-   procedure Stage_Path (Path : String) is
+   procedure Stage_Path
+     (Path          : String;
+      Chmod         : Character := ' ';
+      Intent_To_Add : Boolean := False)
+   is
       use Ada.Strings.Unbounded;
 
       Safe_Path : constant String :=
@@ -82,6 +86,28 @@ package body Version.Stage is
    begin
       Version.Path_Safety.Require_Safe_Relative_Path (Safe_Path);
 
+      if Intent_To_Add then
+         if Version.Staging.Find_Path (Entries, Safe_Path) = Natural'Last then
+            if not Ada.Directories.Exists (Full_Path) then
+               raise Ada.IO_Exceptions.Data_Error with
+                 "path does not exist: " & Safe_Path;
+            end if;
+            Version.Staging.Replace_Entry
+              (Entries,
+               (Path  => To_Unbounded_String (Safe_Path),
+                Id    => Version.Write.Write_Blob (Repo => Repo, Content => ""),
+                Mode  => To_Unbounded_String
+                           ((if Chmod = '+' then "100755"
+                             elsif Chmod = '-' then "100644"
+                             else File_Index_Mode (Full_Path))),
+                Stage => 0, Skip_Worktree => False, Assume_Valid => False,
+                Intent_To_Add => True));
+            Version.Staging.Sort_By_Path (Entries);
+            Version.Staging.Write (Repo => Repo, Entries => Entries);
+         end if;
+         return;
+      end if;
+
       if GNAT.OS_Lib.Is_Symbolic_Link
            (Version.Files.To_Native_Path (Full_Path))
       then
@@ -94,7 +120,7 @@ package body Version.Stage is
             (Path  => To_Unbounded_String (Safe_Path),
              Id    => Blob_Id,
              Mode  => To_Unbounded_String ("120000"),
-             Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+             Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
 
       else
          if not Ada.Directories.Exists (Full_Path) then
@@ -132,8 +158,12 @@ package body Version.Stage is
            (Entries,
             (Path  => To_Unbounded_String (Safe_Path),
              Id    => Blob_Id,
-             Mode  => To_Unbounded_String (File_Index_Mode (Full_Path)),
-             Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+             Mode  => To_Unbounded_String
+                        ((if Chmod = '+' then "100755"
+                          elsif Chmod = '-' then "100644"
+                          else File_Index_Mode (Full_Path))),
+             Stage => 0, Skip_Worktree => False, Assume_Valid => False,
+             Intent_To_Add => False));
       end if;
 
       Version.Staging.Sort_By_Path (Entries);

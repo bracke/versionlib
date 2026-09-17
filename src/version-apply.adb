@@ -920,7 +920,7 @@ package body Version.Apply is
                            (Path  => To_Unbounded_String (Rel),
                             Id    => Blob,
                             Mode  => To_Unbounded_String (Mode),
-                            Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+                            Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
                      end;
                   end if;
                end;

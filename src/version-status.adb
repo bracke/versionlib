@@ -1113,6 +1113,44 @@ package body Version.Status is
          end;
       end if;
 
+      --  An intent-to-add entry (`add -N`) is an unstaged addition to git:
+      --  the index-vs-HEAD side ignores its placeholder blob, and the
+      --  working file counts as "new file" among the unstaged changes
+      --  (or a deletion when it has gone). It is never untracked.
+      for E of Index_Entries loop
+         if E.Intent_To_Add and then E.Stage = 0 then
+            declare
+               Path : constant String := To_String (E.Path);
+               Kept : File_Change_Vectors.Vector;
+            begin
+               for C of Result.Staged loop
+                  if To_String (C.Path) /= Path then
+                     Kept.Append (C);
+                  end if;
+               end loop;
+               Result.Staged := Kept;
+               Kept.Clear;
+               for C of Result.Changes loop
+                  if To_String (C.Path) /= Path then
+                     Kept.Append (C);
+                  end if;
+               end loop;
+               Result.Changes := Kept;
+               Kept.Clear;
+               for C of Result.Untracked loop
+                  if To_String (C.Path) /= Path then
+                     Kept.Append (C);
+                  end if;
+               end loop;
+               Result.Untracked := Kept;
+               Add_Change
+                 (Result.Changes, Path,
+                  (if Working_Pos.Contains (Path) then New_File
+                   else Deleted_File));
+            end;
+         end if;
+      end loop;
+
       return Result;
    end Build_Status;
 

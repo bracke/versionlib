@@ -396,24 +396,21 @@ package body Version.Write is
    function Write_Tree_From_Index
      (Repo    : Version.Repository.Repository_Handle;
       Entries : Version.Staging.Index_Entry_Vectors.Vector)
-      return Version.Objects.Hex_Object_Id is
+      return Version.Objects.Hex_Object_Id
+   is
+      --  An intent-to-add entry (`add -N`) is a placeholder, not content:
+      --  git leaves it out of the tree.
+      Committed : Version.Staging.Index_Entry_Vectors.Vector;
    begin
-      if not Entries.Is_Empty then
-         for I in Entries.First_Index .. Entries.Last_Index loop
-            declare
-               Safe_Path : constant String :=
-                 Version.Path_Safety.Normalize_Relative_Path
-                   (To_String (Entries.Element (I).Path));
-               pragma Unreferenced (Safe_Path);
-            begin
-               null;
-            end;
-         end loop;
-      end if;
+      for E of Entries loop
+         if not E.Intent_To_Add then
+            Committed.Append (E);
+         end if;
+      end loop;
 
       return
         Write_Tree_For_Prefix
-          (Repo => Repo, Entries => Entries, Prefix => Null_Unbounded_String);
+          (Repo => Repo, Entries => Committed, Prefix => Null_Unbounded_String);
    end Write_Tree_From_Index;
 
    function Write_Object

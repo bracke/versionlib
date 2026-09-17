@@ -308,7 +308,7 @@ package body Version.Stash is
                     (Path => Item.Path,
                      Id   => Item.Id,
                      Mode => Item.Mode,
-                     Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+                     Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
             end;
          end loop;
       end if;
@@ -477,7 +477,7 @@ package body Version.Stash is
                                      (Repo    => Repo,
                                       Content => Version.Files.Read_Binary_File (Full)),
                            Mode => To_Unbounded_String ("100644"),
-                           Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+                           Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
                   end if;
                end if;
             end;
@@ -610,7 +610,7 @@ package body Version.Stash is
                        (Path => To_Unbounded_String (Path),
                         Id   => Blob_Id,
                         Mode => To_Unbounded_String ("100644"),
-                        Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+                        Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
                end if;
             end;
          end loop;

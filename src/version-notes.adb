@@ -50,7 +50,7 @@ package body Version.Notes is
                        (Path  => E.Path,
                         Id    => E.Id,
                         Mode  => E.Mode,
-                        Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+                        Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
                end if;
             end loop;
          end;
@@ -128,7 +128,7 @@ package body Version.Notes is
          (Path  => To_Unbounded_String (To_String (Commit)),
           Id    => Blob,
           Mode  => To_Unbounded_String ("100644"),
-          Stage => 0, Skip_Worktree => False, Assume_Valid => False));
+          Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
       Version.Staging.Sort_By_Path (Entries);
 
       Commit_Notes_Tree
