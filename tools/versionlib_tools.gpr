@@ -31,7 +31,7 @@ project Versionlib_Tools is
    end Compiler;
 
    package Linker is
-      for Default_Switches ("Ada") use ("-lssl", "-lcrypto");
+      for Default_Switches ("Ada") use ();
    end Linker;
 
    --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the

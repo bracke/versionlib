@@ -33,8 +33,8 @@ against the system `git` command.
 
 Dependencies are pinned to sibling directories: `httpclient` (`../httpclient`),
 `zlib` (`../zlib`), `i18n` (`../i18n`), and `ssh_lib` (`../sshlib`); `ssh_lib`
-brings `cryptolib` transitively. The CLI/test executables link `-lssl -lcrypto`,
-so OpenSSL dev libraries are required.
+brings `cryptolib` transitively. TLS and SSH are pure Ada (`ssllib`/`cryptolib`);
+nothing links OpenSSL, so no system crypto libraries are needed.
 
 ## Build, test, style
 

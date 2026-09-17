@@ -17,7 +17,7 @@ Status: `0.1.0-dev`, pre-1.0.
 
 `versionlib` pins sibling crates: `httpclient` (`../httpclient`), `zlib` (`../zlib`),
 `i18n` (`../i18n`), and `ssh_lib` (`../sshlib`). They must be present locally to build.
-TLS transport links `-lssl -lcrypto`, so OpenSSL development libraries are required.
+TLS and SSH are pure Ada (`ssllib`/`cryptolib`); no OpenSSL or other system crypto library is needed.
 
 ## Toolchain
 
