@@ -15,6 +15,7 @@ with Version.Notes;
 with Version.Log_Graph;
 with Version.Ignore;
 with Version.Mailmap;
+with Version.Combine_Diff;
 
 package body Version.Log is
 
@@ -1300,7 +1301,11 @@ package body Version.Log is
       Diff_Base       : Version.Diff.Diff_Options := (others => <>);
       Header          : Header_Options := (others => <>);
       Separate_Merges : Boolean := False;
-      Combined_Merges : Boolean := False)
+      Combined_Merges : Boolean := False;
+      Dense_Combined  : Boolean := False;
+      Format          : String := "";
+      Terminate_Records : Boolean := True;
+      Always_Show_Header : Boolean := False)
       return String
    is
       Result  : Unbounded_String;
@@ -1316,6 +1321,8 @@ package body Version.Log is
         (if Header.Children
          then Children_Map (Repo, Objects, Commits, Header, not Header.Abbrev_Commit)
          else Decor_Maps.Empty_Map);
+      --  A custom --format/--pretty layout for the header.
+      Custom   : constant Boolean := Format'Length > 0;
    begin
       for Index in Commits.First_Index .. Commits.Last_Index loop
          declare
@@ -1334,7 +1341,31 @@ package body Version.Log is
             procedure Emit_Entry
               (Parent : String; From_Label : String; Show_Diff : Boolean) is
             begin
-               if Oneline then
+               if Custom then
+                  --  The expanded format, terminated for tformat/--format
+                  --  (git's use_terminator), bare for `format:`; --log-size
+                  --  names the record's length first.
+                  declare
+                     Text : constant String :=
+                       Version.Pretty_Format.Expand
+                         (Repo, Current_Id, Format, Date_Mode,
+                          Reflog => (Selector => Note.Reflog_Selector,
+                                     Ident    => Note.Reflog_Ident,
+                                     Message  => Note.Reflog_Message));
+                     Img : constant String := Natural'Image (Text'Length);
+                  begin
+                     if Header.Log_Size then
+                        Append_Line
+                          (Result, "log size " & Img (Img'First + 1 .. Img'Last));
+                     end if;
+                     Append (Result, Text);
+                     if Terminate_Records then
+                        Append
+                          (Result,
+                           (if Header.Nul_Separated then ASCII.NUL else ASCII.LF));
+                     end if;
+                  end;
+               elsif Oneline then
                   Append
                     (Result,
                      Format_Commit_Oneline_With_Cache
@@ -1489,7 +1520,9 @@ package body Version.Log is
          begin
             --  --diff-filter prunes a commit whose diff has nothing left to
             --  show (git shows the header only when the diff did).
-            if Any_Diff and then Length (Diff_Base.Diff_Filter) > 0 then
+            if Any_Diff and then Length (Diff_Base.Diff_Filter) > 0
+              and then not Always_Show_Header
+            then
                declare
                   Detect : constant Version.Diff.Rename_Detection :=
                     (if Rename_Score > 0 then Version.Diff.Renames_On
@@ -1542,11 +1575,16 @@ package body Version.Log is
                Append_Line (Result, To_String (Header.Linear_Break));
             end if;
             --  The full-header format blank-separates entries; the oneline
-            --  form runs them together, as git does.  -z puts a NUL where
-            --  the separator (or the oneline newline) would go.
+            --  form (and a terminated custom format) runs them together, as
+            --  git does; an unterminated `format:` gets one newline between
+            --  records.  -z puts a NUL where the separator would go.
             if not First then
                if Header.Nul_Separated then
                   Append (Result, ASCII.NUL);
+               elsif Custom then
+                  if not Terminate_Records then
+                     Append (Result, ASCII.LF);
+                  end if;
                elsif not Oneline then
                   Append_Line (Result, "");
                end if;
@@ -1573,33 +1611,93 @@ package body Version.Log is
             elsif Is_Merge and then Any_Diff and then Combined_Merges
               and then not First_Parent
             then
-               --  -c/--cc: the combined diff itself is not rendered; git
-               --  still prints the separator when the merge touched
-               --  anything relative to a parent.
+               --  -c/--cc (git's diff_tree_combined): the header, a newline
+               --  in every layout (oneline included), the summary formats
+               --  against the FIRST parent, then the combined patch.
+               if not Diff_Base.Ignore_Regexes.Is_Empty then
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "combined diff and '--ignore-matching-lines' cannot be used together";
+               end if;
+               if Header.Output_To_File then
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "combined diff and '--output' cannot be used together";
+               end if;
                Emit_Entry
                  (Version.Objects.Commit_Parent_Id (Obj), "", Show_Diff => False);
+               Append (Result, (if Header.Nul_Separated then ASCII.NUL else ASCII.LF));
                declare
                   Detect : constant Version.Diff.Rename_Detection :=
                     (if Rename_Score > 0 then Version.Diff.Renames_On
                      else Version.Diff.Renames_Default);
-                  Probe  : constant Version.Diff.Diff_Options :=
-                    Probe_Opts (Diff_Base, Detect, Rename_Score);
+                  Has_Summary : constant Boolean :=
+                    Stat or else Name_Only or else Name_Status
+                    or else Numstat or else Shortstat or else Raw
+                    or else Diff_Base.Summary;
+                  Summary_Opts : constant Version.Diff.Diff_Options :=
+                    (Diff_Base with delta
+                     Stat           => Stat,
+                     Name_Only      => Name_Only,
+                     Name_Status    => Name_Status,
+                     Numstat        => Numstat,
+                     Shortstat      => Shortstat,
+                     Raw            => Raw,
+                     Detect_Renames => Detect,
+                     Rename_Score   => Rename_Score,
+                     Context_Lines  => Context,
+                     Stat_Width      => Stat_Width,
+                     Stat_Name_Width => Stat_Name_Width,
+                     Stat_Count      => Stat_Count);
+                  First_P : constant Version.Objects.Hex_Object_Id :=
+                    Parents.First_Element;
+                  --  The list formats are combined (show_raw_diff); the
+                  --  stat ones diff against the first parent.
+                  Listed : constant Boolean :=
+                    Raw or else Name_Only or else Name_Status;
+                  Summary_Text : constant String :=
+                    (if Listed
+                     then Version.Combine_Diff.Combined_Listing
+                            (Repo, Current_Id, Parents, Paths,
+                             (Diff_Base with delta Detect_Renames => Detect),
+                             (if Raw then Version.Combine_Diff.Raw_Listing
+                              elsif Name_Status
+                              then Version.Combine_Diff.Name_Status_Listing
+                              else Version.Combine_Diff.Name_Only_Listing),
+                             Header.Pickaxe)
+                     elsif not Has_Summary then ""
+                     elsif Paths.Is_Empty
+                     then Version.Diff.Diff_Commits
+                            (Repo, First_P, Current_Id, Summary_Opts)
+                     else Version.Diff.Diff_Commits
+                            (Repo, First_P, Current_Id, Paths, Summary_Opts));
+                  --  git's needsep: a summary format was shown and the
+                  --  combined path set is non-empty -- whatever the
+                  --  first-parent stat itself printed.
+                  Has_Paths : constant Boolean :=
+                    Has_Summary
+                    and then Version.Combine_Diff.Combined_Listing
+                               (Repo, Current_Id, Parents, Paths,
+                                Diff_Base, Pick => Header.Pickaxe)'Length > 0;
+                  --  --check has no combined form: nothing is printed.
+                  Combined_Text : constant String :=
+                    (if Patch and then not (Name_Only or else Name_Status)
+                       and then not Diff_Base.Check_Whitespace
+                     then Version.Combine_Diff.Combined_Patch
+                            (Repo, Current_Id, Parents, Paths,
+                             (Diff_Base with delta
+                              Context_Lines => Context,
+                              Detect_Renames => Detect,
+                              Rename_Score => Rename_Score),
+                             Dense => Dense_Combined,
+                             Pick  => Header.Pickaxe)
+                     else "");
                begin
-                  for K in Parents.First_Index .. Parents.Last_Index loop
-                     if String'(if Paths.Is_Empty
-                                then Version.Diff.Diff_Commits
-                                       (Repo, Parents.Element (K), Current_Id,
-                                        Probe)
-                                else Version.Diff.Diff_Commits
-                                       (Repo, Parents.Element (K), Current_Id,
-                                        Paths, Probe))'Length > 0
-                     then
-                        --  diff_tree_combined prints this newline after the
-                        --  header in every layout, oneline included.
+                  Append (Result, Summary_Text);
+                  if Patch and then not (Name_Only or else Name_Status) then
+                     if Has_Paths then
                         Append_Line (Result, "");
-                        exit;
                      end if;
-                  end loop;
+                     Append (Result, Combined_Text);
+                  end if;
                end;
             else
                Emit_Entry
@@ -1905,6 +2003,7 @@ package body Version.Log is
       Shortstat      : Boolean := False;
       Raw            : Boolean := False;
       Context        : Natural := 3;
+      Oneline        : Boolean := False;
       First_Parent   : Boolean := False;
       Kind           : Pretty_Kind := Pretty_Medium;
       Show_Notes     : Boolean := True;
@@ -1919,6 +2018,10 @@ package body Version.Log is
       Header          : Header_Options := (others => <>);
       Separate_Merges : Boolean := False;
       Combined_Merges : Boolean := False;
+      Dense_Combined  : Boolean := False;
+      Format          : String := "";
+      Terminate_Records : Boolean := True;
+      Always_Show_Header : Boolean := False;
       Known           : Version.History.Commit_Id_Vectors.Vector :=
         Version.History.Commit_Id_Vectors.Empty_Vector)
       return String
@@ -1971,6 +2074,7 @@ package body Version.Log is
                   Shortstat      => Shortstat,
                   Raw            => Raw,
                   Context        => Context,
+                  Oneline        => Oneline,
                   First_Parent   => First_Parent,
                   Kind           => Kind,
                   Show_Notes     => Show_Notes,
@@ -1984,13 +2088,20 @@ package body Version.Log is
                   Header          => (Header with delta
                                         Annotations => Note_Of (Header, I)),
                   Separate_Merges => Separate_Merges,
-                  Combined_Merges => Combined_Merges));
+                  Combined_Merges => Combined_Merges,
+                  Dense_Combined  => Dense_Combined,
+                  Format          => Format,
+                  Terminate_Records => Terminate_Records,
+                  Always_Show_Header => Always_Show_Header));
 
             Version.Log_Graph.Update (G, C, Parents);
 
             --  git separates commits with a graph-prefixed blank line, drawn
-            --  from the freshly updated (post-Update) lane state.
-            if not First then
+            --  from the freshly updated (post-Update) lane state -- never
+            --  for the oneline layout or a terminated custom format.
+            if not First and then not Oneline
+              and then not (Format'Length > 0 and then Terminate_Records)
+            then
                Append (Result, Version.Log_Graph.Separator_Line (G) & ASCII.LF);
             end if;
             First := False;
@@ -2068,7 +2179,11 @@ package body Version.Log is
       Diff_Base       : Version.Diff.Diff_Options := (others => <>);
       Header          : Header_Options := (others => <>);
       Separate_Merges : Boolean := False;
-      Combined_Merges : Boolean := False)
+      Combined_Merges : Boolean := False;
+      Dense_Combined  : Boolean := False;
+      Format          : String := "";
+      Terminate_Records : Boolean := True;
+      Always_Show_Header : Boolean := False)
       return String
    is
       Objects  : Version.Object_Cache.Object_Cache;
@@ -2250,7 +2365,11 @@ package body Version.Log is
                   Diff_Base       => Diff_Base,
                   Header          => Header,
                   Separate_Merges => Separate_Merges,
-                  Combined_Merges => Combined_Merges));
+                  Combined_Merges => Combined_Merges,
+                  Dense_Combined  => Dense_Combined,
+                  Format          => Format,
+                  Terminate_Records => Terminate_Records,
+                  Always_Show_Header => Always_Show_Header));
          end;
       end loop;
 

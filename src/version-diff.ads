@@ -70,6 +70,9 @@ package Version.Diff is
       --  Abbrev, which the raw format reads and which diff-tree sets to the
       --  full length while its patches keep the short index line.
       Index_Abbrev   : Natural := 0;
+      --  --full-index proper (a combined diff's index line abbreviates
+      --  regardless of --abbrev, but not of this).
+      Full_Index     : Boolean := False;
       --  --output-indicator-new/old/context=<char>: the hunk line markers.
       Indicator_New     : Character := '+';
       Indicator_Old     : Character := '-';

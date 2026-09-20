@@ -1,3 +1,4 @@
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
@@ -153,6 +154,15 @@ package Version.Merge is
 
    --  Indent_Heuristic is git's diff.indentHeuristic, which `git diff` turns on
    --  by default and the merge machinery leaves off.
+   --  Lines of a text, each with its newline kept (an incomplete last line
+   --  without one), and a line folded for comparison under a whitespace
+   --  mode (git's xdl_recmatch as a normalisation).
+   package Line_Vectors is new Ada.Containers.Indefinite_Vectors
+     (Index_Type => Natural, Element_Type => String);
+   function Split_Lines (Text : String) return Line_Vectors.Vector;
+   function Normalize_Line
+     (Line : String; Mode : Whitespace_Mode) return String;
+
    --  Whitespace folds lines for comparison the way git's -w/-b/--ignore-*
    --  flags do; the indent heuristic still measures the unfolded lines.
    function Text_Changes

@@ -1,6 +1,5 @@
 with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Indefinite_Ordered_Sets;
-with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories; use Ada.Directories;
 with Ada.Exceptions;
 with Ada.Environment_Variables;
@@ -53,9 +52,6 @@ package body Version.Merge is
    package Path_Sets is new Ada.Containers.Indefinite_Ordered_Sets
      (Element_Type => String);
 
-   package Line_Vectors is new Ada.Containers.Indefinite_Vectors
-     (Index_Type   => Natural,
-      Element_Type => String);
 
    --  Line -> equivalence class, git's minimal-perfect-hash of a record.
    package Class_Maps is new Ada.Containers.Indefinite_Ordered_Maps

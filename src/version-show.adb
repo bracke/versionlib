@@ -200,26 +200,16 @@ package body Version.Show is
       return To_String (Result);
    end Show_Commit;
 
-   function Show_Object
-     (Repo         : Version.Repository.Repository_Handle;
-      Spec         : String;
-      Options      : Version.Diff.Diff_Options := (others => <>);
-      No_Patch     : Boolean := False;
-      Oneline      : Boolean := False;
-      Format       : String := "";
-      Format_Oneline : Boolean := False;
-      Date_Mode    : String := "";
-      First_Parent : Boolean := False;
-      Combined_M   : Boolean := False;
-      Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
-      Show_Notes   : Boolean := True;
-      Layout       : Version.Log.Header_Options := (others => <>))
+   function Tag_Text
+     (Repo    : Version.Repository.Repository_Handle;
+      Tag_Id  : Version.Objects.Hex_Object_Id;
+      Kind    : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
+      Oneline : Boolean := False)
       return String
    is
-      Raw : constant Version.Objects.Hex_Object_Id :=
-        Version.Revisions.Resolve (Repo, Spec);
-      Obj : constant Version.Objects.Git_Object :=
-        Version.Objects.Read_Object (Repo, Raw);
+      Obj     : constant Version.Objects.Git_Object :=
+        Version.Objects.Read_Object (Repo, Tag_Id);
+      Content : constant String := Version.Objects.Content (Obj);
 
       --  The value of a header line ("tag v2", "tagger X <y> 1 +0000"), or "".
       function Header (Text, Key : String) return String is
@@ -248,6 +238,91 @@ package body Version.Show is
          end loop;
          return "";
       end Header;
+
+      Name    : constant String := Header (Content, "tag ");
+      Tagger  : constant String := Header (Content, "tagger ");
+      Gt      : constant Natural :=
+        Ada.Strings.Fixed.Index (Tagger, ">");
+      Ident   : constant String :=
+        (if Gt = 0 then Tagger else Tagger (Tagger'First .. Gt));
+      Ts      : constant String :=
+        (if Gt = 0 or else Gt + 2 > Tagger'Last then ""
+         else Tagger (Gt + 2 .. Tagger'Last));
+      Blank   : constant Natural :=
+        Ada.Strings.Fixed.Index (Content, LF & LF);
+      Message : constant String :=
+        (if Blank = 0 then "" else Content (Blank + 2 .. Content'Last));
+      Result  : Unbounded_String;
+   begin
+      Append (Result, "tag " & Name & LF);
+      --  The tagger line mirrors the commit header per format: medium
+      --  shows "Tagger:" then a "Date:" line, fuller aligns to 12 and
+      --  labels the date "TaggerDate:", and short/full/raw show the
+      --  tagger alone.
+      if Oneline then
+         null;
+      elsif Kind = Version.Log.Pretty_Fuller then
+         Append (Result, "Tagger:     " & Ident & LF);
+         Append
+           (Result,
+            "TaggerDate: " & Version.Ref_Format.Git_Date (Ts) & LF);
+      elsif Kind = Version.Log.Pretty_Medium then
+         Append (Result, "Tagger: " & Ident & LF);
+         Append
+           (Result, "Date:   " & Version.Ref_Format.Git_Date (Ts) & LF);
+      else
+         Append (Result, "Tagger: " & Ident & LF);
+      end if;
+      Append (Result, LF);
+      Append (Result, Message);
+      if Message'Length = 0
+        or else Message (Message'Last) /= LF
+      then
+         Append (Result, LF);
+      end if;
+      return To_String (Result);
+   end Tag_Text;
+
+   function Tree_Listing
+     (Repo    : Version.Repository.Repository_Handle;
+      Spec    : String;
+      Tree_Id : Version.Objects.Hex_Object_Id) return String
+   is
+      Result : Unbounded_String;
+   begin
+      Append (Result, "tree " & Spec & LF & LF);
+      for E of Version.Objects.Tree_Entries (Repo, Tree_Id) loop
+         Append
+           (Result,
+            To_String (E.Path)
+            & (if E.Kind = Version.Objects.Tree_Directory
+               then "/" else "")
+            & LF);
+      end loop;
+      return To_String (Result);
+   end Tree_Listing;
+
+   function Show_Object
+     (Repo         : Version.Repository.Repository_Handle;
+      Spec         : String;
+      Options      : Version.Diff.Diff_Options := (others => <>);
+      No_Patch     : Boolean := False;
+      Oneline      : Boolean := False;
+      Format       : String := "";
+      Format_Oneline : Boolean := False;
+      Date_Mode    : String := "";
+      First_Parent : Boolean := False;
+      Combined_M   : Boolean := False;
+      Kind         : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
+      Show_Notes   : Boolean := True;
+      Layout       : Version.Log.Header_Options := (others => <>))
+      return String
+   is
+      Raw : constant Version.Objects.Hex_Object_Id :=
+        Version.Revisions.Resolve (Repo, Spec);
+      Obj : constant Version.Objects.Git_Object :=
+        Version.Objects.Read_Object (Repo, Raw);
+
    begin
       case Version.Objects.Kind (Obj) is
          when Version.Objects.Commit_Object =>
@@ -256,75 +331,17 @@ package body Version.Show is
                Date_Mode, First_Parent, Combined_M, Kind, Show_Notes, Layout);
 
          when Version.Objects.Tag_Object =>
-            declare
-               Content : constant String := Version.Objects.Content (Obj);
-               Name    : constant String := Header (Content, "tag ");
-               Tagger  : constant String := Header (Content, "tagger ");
-               Gt      : constant Natural :=
-                 Ada.Strings.Fixed.Index (Tagger, ">");
-               Ident   : constant String :=
-                 (if Gt = 0 then Tagger else Tagger (Tagger'First .. Gt));
-               Ts      : constant String :=
-                 (if Gt = 0 or else Gt + 2 > Tagger'Last then ""
-                  else Tagger (Gt + 2 .. Tagger'Last));
-               Blank   : constant Natural :=
-                 Ada.Strings.Fixed.Index (Content, LF & LF);
-               Message : constant String :=
-                 (if Blank = 0 then "" else Content (Blank + 2 .. Content'Last));
-               Result  : Unbounded_String;
-            begin
-               Append (Result, "tag " & Name & LF);
-               --  The tagger line mirrors the commit header per format: medium
-               --  shows "Tagger:" then a "Date:" line, fuller aligns to 12 and
-               --  labels the date "TaggerDate:", and short/full/raw show the
-               --  tagger alone.
-               if Kind = Version.Log.Pretty_Fuller then
-                  Append (Result, "Tagger:     " & Ident & LF);
-                  Append
-                    (Result,
-                     "TaggerDate: " & Version.Ref_Format.Git_Date (Ts) & LF);
-               elsif Kind = Version.Log.Pretty_Medium then
-                  Append (Result, "Tagger: " & Ident & LF);
-                  Append
-                    (Result, "Date:   " & Version.Ref_Format.Git_Date (Ts) & LF);
-               else
-                  Append (Result, "Tagger: " & Ident & LF);
-               end if;
-               Append (Result, LF);
-               Append (Result, Message);
-               if Message'Length = 0
-                 or else Message (Message'Last) /= LF
-               then
-                  Append (Result, LF);
-               end if;
-               Append (Result, LF);   --  blank line before the tagged object
-               --  git recurses into whatever the tag points at.
-               Append
-                 (Result,
-                  Show_Object
-                    (Repo,
-                     Version.Objects.To_String
-                       (Version.Objects.Tag_Target_Id (Obj)),
-                     Options, No_Patch, Oneline, Format, Format_Oneline,
-                     Date_Mode, First_Parent, Combined_M, Kind, Show_Notes));
-               return To_String (Result);
-            end;
+            --  git recurses into whatever the tag points at, blank-separated.
+            return Tag_Text (Repo, Raw, Kind) & LF
+              & Show_Object
+                  (Repo,
+                   Version.Objects.To_String
+                     (Version.Objects.Tag_Target_Id (Obj)),
+                   Options, No_Patch, Oneline, Format, Format_Oneline,
+                   Date_Mode, First_Parent, Combined_M, Kind, Show_Notes);
 
          when Version.Objects.Tree_Object =>
-            declare
-               Result : Unbounded_String;
-            begin
-               Append (Result, "tree " & Spec & LF & LF);
-               for E of Version.Objects.Tree_Entries (Repo, Raw) loop
-                  Append
-                    (Result,
-                     To_String (E.Path)
-                     & (if E.Kind = Version.Objects.Tree_Directory
-                        then "/" else "")
-                     & LF);
-               end loop;
-               return To_String (Result);
-            end;
+            return Tree_Listing (Repo, Spec, Raw);
 
          when others =>
             return Version.Objects.Content (Obj);   --  a blob, verbatim

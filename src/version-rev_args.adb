@@ -2,7 +2,6 @@ with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 
-with Version.Files;
 with Version.Objects;
 with Version.Ref_Format;
 with Version.Revisions;
@@ -42,6 +41,7 @@ package body Version.Rev_Args is
       Text : String)
       return Boolean
    is
+      pragma Unreferenced (Repo);
    begin
       --  git accepts an operand as a path when it names something on disk,
       --  resolved from the directory the command ran in -- not from the
@@ -99,24 +99,49 @@ package body Version.Rev_Args is
                  (Repo, Arg (Arg'First + 1 .. Arg'Last)));
             Result.Saw_Revision := True;
 
-         elsif Ada.Strings.Fixed.Index (Arg, "...") > 0 then
+         elsif Arg'Length > 2
+           and then Arg (Arg'Last - 1 .. Arg'Last) in "^!" | "^@"
+         then
+            --  git's `r^!`: r and none of its parents; `r^@`: every parent
+            --  of r, not r itself.
             declare
-               Sep : constant Natural := Ada.Strings.Fixed.Index (Arg, "...");
+               Id : constant Version.Objects.Hex_Object_Id :=
+                 Version.Revisions.Resolve_Commit
+                   (Repo, Arg (Arg'First .. Arg'Last - 2));
+               Parents : constant Version.Objects.Object_Id_Vectors.Vector :=
+                 Version.Objects.Commit_Parent_Ids
+                   (Version.Objects.Read_Object (Repo, Id));
             begin
-               Add_Range
-                 (Arg (Arg'First .. Sep - 1),
-                  Arg (Sep + 3 .. Arg'Last),
-                  Symmetric => True);
+               if Arg (Arg'Last) = '!' then
+                  Result.Include.Append (Id);
+                  for P of Parents loop
+                     Result.Exclude.Append (P);
+                  end loop;
+               else
+                  for P of Parents loop
+                     Result.Include.Append (P);
+                  end loop;
+               end if;
+               Result.Saw_Revision := True;
             end;
 
          elsif Ada.Strings.Fixed.Index (Arg, "..") > 0 then
+            --  A range with an unknown side is git's "ambiguous argument".
             declare
-               Sep : constant Natural := Ada.Strings.Fixed.Index (Arg, "..");
+               Sym : constant Boolean := Ada.Strings.Fixed.Index (Arg, "...") > 0;
+               Sep : constant Natural :=
+                 Ada.Strings.Fixed.Index (Arg, (if Sym then "..." else ".."));
             begin
                Add_Range
                  (Arg (Arg'First .. Sep - 1),
-                  Arg (Sep + 2 .. Arg'Last),
-                  Symmetric => False);
+                  Arg (Sep + (if Sym then 3 else 2) .. Arg'Last),
+                  Symmetric => Sym);
+            exception
+               when Ada.IO_Exceptions.Data_Error | Constraint_Error =>
+                  raise Ada.IO_Exceptions.Data_Error
+                    with "ambiguous argument '" & Arg
+                         & "': unknown revision or path not in the "
+                         & "working tree.";
             end;
 
          else

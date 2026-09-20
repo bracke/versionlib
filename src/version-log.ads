@@ -8,6 +8,7 @@ with Version.Diff;
 with Version.History;
 with Version.Objects;
 with Version.Pathspec;
+with Version.Pickaxe;
 with Version.Repository;
 
 package Version.Log is
@@ -76,6 +77,11 @@ package Version.Log is
       --  --show-linear-break[=<barrier>]: the barrier printed between two
       --  commits that are not parent and child.
       Linear_Break   : Ada.Strings.Unbounded.Unbounded_String;
+      --  --output=<file> is in effect (a combined diff refuses it).
+      Output_To_File : Boolean := False;
+      --  The pickaxe (-S/-G): a combined diff lists only the paths whose
+      --  change against every parent matches it.
+      Pickaxe        : Version.Pickaxe.Spec;
       Annotations    : Annotation_Vectors.Vector;
    end record;
 
@@ -116,8 +122,17 @@ package Version.Log is
       Diff_Base       : Version.Diff.Diff_Options := (others => <>);
       Header          : Header_Options := (others => <>);
       Separate_Merges : Boolean := False;
-      Combined_Merges : Boolean := False)
+      Combined_Merges : Boolean := False;
+      Dense_Combined  : Boolean := False;
+      Format          : String := "";
+      Terminate_Records : Boolean := True;
+      Always_Show_Header : Boolean := False)
       return String;
+   --  Format is a custom --pretty/--format layout expanded per commit in
+   --  place of the header (Terminate_Records: git's tformat vs format:);
+   --  Separate_Merges is -m, Combined_Merges -c/--cc (Dense_Combined the
+   --  latter); Always_Show_Header keeps a commit --diff-filter emptied
+   --  (git show's always_show_header).
    --  Stat_Width/Stat_Name_Width/Stat_Count are git's `--stat=<w>,<n>,<c>` (and
    --  `--stat-width`/`--stat-name-width`/`--stat-count`) sizing for the diffstat
    --  block; 0 leaves each at git's default.
@@ -205,7 +220,11 @@ package Version.Log is
       Diff_Base       : Version.Diff.Diff_Options := (others => <>);
       Header          : Header_Options := (others => <>);
       Separate_Merges : Boolean := False;
-      Combined_Merges : Boolean := False)
+      Combined_Merges : Boolean := False;
+      Dense_Combined  : Boolean := False;
+      Format          : String := "";
+      Terminate_Records : Boolean := True;
+      Always_Show_Header : Boolean := False)
       return String;
    --  git's `log --follow <path>`: walk first-parent history from Start
    --  showing the commits that changed the single file Path, following it back
@@ -226,6 +245,7 @@ package Version.Log is
       Shortstat      : Boolean := False;
       Raw            : Boolean := False;
       Context        : Natural := 3;
+      Oneline        : Boolean := False;
       First_Parent   : Boolean := False;
       Kind           : Pretty_Kind := Pretty_Medium;
       Show_Notes     : Boolean := True;
@@ -240,6 +260,10 @@ package Version.Log is
       Header          : Header_Options := (others => <>);
       Separate_Merges : Boolean := False;
       Combined_Merges : Boolean := False;
+      Dense_Combined  : Boolean := False;
+      Format          : String := "";
+      Terminate_Records : Boolean := True;
+      Always_Show_Header : Boolean := False;
       Known           : Version.History.Commit_Id_Vectors.Vector :=
         Version.History.Commit_Id_Vectors.Empty_Vector)
       return String;

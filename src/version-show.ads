@@ -56,4 +56,21 @@ package Version.Show is
    --  and a blob as its raw content. Spec is the user's revision string, echoed
    --  in the tree header as git does.
 
+   --  The `tag <name>` block `git show` prints for an annotated tag (the
+   --  tagger line per layout, a blank, the message), newline-terminated,
+   --  without the tagged object.
+   function Tag_Text
+     (Repo    : Version.Repository.Repository_Handle;
+      Tag_Id  : Version.Objects.Hex_Object_Id;
+      Kind    : Version.Log.Pretty_Kind := Version.Log.Pretty_Medium;
+      Oneline : Boolean := False)
+      return String;
+   --  Oneline (git's --oneline) leaves the tagger line out.
+
+   --  git's `tree <spec>` listing of a tree object's top-level entries.
+   function Tree_Listing
+     (Repo    : Version.Repository.Repository_Handle;
+      Spec    : String;
+      Tree_Id : Version.Objects.Hex_Object_Id) return String;
+
 end Version.Show;
