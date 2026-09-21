@@ -1,4 +1,5 @@
 with Version.Objects;
+with Version.Ref_Format;
 with Version.Repository;
 
 --  git's `name-rev`: the nearest ref-based name for a commit.
@@ -16,8 +17,16 @@ package Version.Name_Rev is
       Target    : Version.Objects.Hex_Object_Id;
       Tags_Only : Boolean := False;
       Refs_Pattern : String := "";
-      Exclude_Pattern : String := "")
+      Exclude_Pattern : String := "";
+      Refs_Patterns    : Version.Ref_Format.String_Vectors.Vector :=
+        Version.Ref_Format.String_Vectors.Empty_Vector;
+      Exclude_Patterns : Version.Ref_Format.String_Vectors.Vector :=
+        Version.Ref_Format.String_Vectors.Empty_Vector)
       return String;
+   --  Refs_Patterns/Exclude_Patterns are the
+   --  repeatable --refs/--exclude globs (a ref counts when it matches any
+   --  --refs glob, or no glob is given, and matches no --exclude glob);
+   --  Refs_Pattern/Exclude_Pattern are the single-glob spellings.
    --  The name git's `name-rev` prints for Target: a ref name, optionally
    --  followed by `^<parent>` for each merge parent descended through and
    --  `~<n>` for first-parent steps. Returns Undefined when no ref reaches

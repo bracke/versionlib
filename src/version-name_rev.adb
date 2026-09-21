@@ -6,7 +6,6 @@ with Ada.Strings.Unbounded;
 with Version.Objects; use type Version.Objects.Object_Id_Storage;
 use type Version.Objects.Object_Kind;
 with Version.Object_Cache;
-with Version.Ref_Format;
 with Version.Refs;
 with Version.Revisions;
 
@@ -171,7 +170,11 @@ package body Version.Name_Rev is
       Target    : Version.Objects.Hex_Object_Id;
       Tags_Only : Boolean := False;
       Refs_Pattern : String := "";
-      Exclude_Pattern : String := "")
+      Exclude_Pattern : String := "";
+      Refs_Patterns    : Version.Ref_Format.String_Vectors.Vector :=
+        Version.Ref_Format.String_Vectors.Empty_Vector;
+      Exclude_Patterns : Version.Ref_Format.String_Vectors.Vector :=
+        Version.Ref_Format.String_Vectors.Empty_Vector)
       return String
    is
       Objects : Version.Object_Cache.Object_Cache;
@@ -195,10 +198,31 @@ package body Version.Name_Rev is
       --  git's --refs / --exclude: a ref is used only when it matches the
       --  --refs glob (or none given) and matches no --exclude glob.
       function Ref_Matches (Name : String) return Boolean is
-        ((Refs_Pattern'Length = 0 or else Wildmatch (Refs_Pattern, Name))
-         and then
-           (Exclude_Pattern'Length = 0
-            or else not Wildmatch (Exclude_Pattern, Name)));
+         Wanted : Boolean :=
+           Refs_Pattern'Length = 0 and then Refs_Patterns.Is_Empty;
+      begin
+         if Refs_Pattern'Length > 0 and then Wildmatch (Refs_Pattern, Name) then
+            Wanted := True;
+         end if;
+         for P of Refs_Patterns loop
+            if Wildmatch (P, Name) then
+               Wanted := True;
+            end if;
+         end loop;
+         if not Wanted then
+            return False;
+         end if;
+         if Exclude_Pattern'Length > 0 and then Wildmatch (Exclude_Pattern, Name)
+         then
+            return False;
+         end if;
+         for X of Exclude_Patterns loop
+            if Wildmatch (X, Name) then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Ref_Matches;
 
       --  Record a name for Id when it beats whatever is there, reporting
       --  whether the walk should continue through it (git's
@@ -317,16 +341,19 @@ package body Version.Name_Rev is
       type Tip_Entry is record
          Commit_Id  : Version.Objects.Object_Id_Storage;
          Tip_Name   : Unbounded_String;
+         Refname    : Unbounded_String;   --  the full ref, for the tie
          Taggerdate : Long_Long_Integer := 0;
          From_Tag   : Boolean := False;
       end record;
 
-      --  git offers refs in alphabetical order and keeps the first name on a
-      --  tie, so among equally-good tips the alphabetically-first ref wins.
+      --  git offers refs in alphabetical order (by full refname) and keeps
+      --  the first name on a tie, so among equally-good tips the
+      --  alphabetically-first ref wins -- "v2.0" before "v2.0-again", which
+      --  the rendered "v2.0^0" would get wrong.
       function Tip_Less (L, R : Tip_Entry) return Boolean is
         (if L.From_Tag /= R.From_Tag then L.From_Tag
          elsif L.Taggerdate /= R.Taggerdate then L.Taggerdate < R.Taggerdate
-         else L.Tip_Name < R.Tip_Name);
+         else L.Refname < R.Refname);
 
       package Tip_Vectors is new Ada.Containers.Vectors
         (Index_Type => Natural, Element_Type => Tip_Entry);
@@ -388,6 +415,7 @@ package body Version.Name_Rev is
                         Tip_Name   =>
                           To_Unbounded_String
                             (if Deref then Short & "^0" else Short),
+                        Refname    => To_Unbounded_String (Refname),
                         Taggerdate => Stamp,
                         From_Tag   => Is_Tag_Ref));
                end;
