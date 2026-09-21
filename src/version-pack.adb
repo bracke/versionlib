@@ -940,7 +940,55 @@ package body Version.Pack is
          return (others => <>);
    end Read_Delta_Base;
 
+   --  Objects already resolved at a pack offset (git's delta_base_cache):
+   --  a delta chain re-inflates and re-applies every base below it, so
+   --  reading the successive versions of one file -- blame, log -p --
+   --  would otherwise cost the chain depth per object.  Bounded by the
+   --  content held; over the limit the cache simply starts again.
+   package Resolved_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+     (Key_Type => String, Element_Type => Version.Objects.Git_Object,
+      "="      => Version.Objects."=");
+   Resolved       : Resolved_Maps.Map;
+   Resolved_Bytes : Natural := 0;
+   Resolved_Limit : constant Natural := 96 * 1024 * 1024;
+
+   function Resolve_At_Location
+     (Repo : Version.Repository.Repository_Handle; Location : Pack_Location)
+      return Version.Objects.Git_Object;
+
    function Read_Object_At_Location
+     (Repo : Version.Repository.Repository_Handle; Location : Pack_Location)
+      return Version.Objects.Git_Object
+   is
+      --  The file's size is part of the key: a temporary pack rewritten
+      --  under the same name within one process must not serve stale
+      --  objects (Cached_File reloads on a size change for the same reason).
+      Key : constant String :=
+        To_String (Location.Pack_Path) & ":"
+        & Stream_Element_Offset'Image
+            (Cached_File (To_String (Location.Pack_Path))'Length)
+        & ":" & U64'Image (Location.Offset);
+      C   : constant Resolved_Maps.Cursor := Resolved.Find (Key);
+   begin
+      if Resolved_Maps.Has_Element (C) then
+         return Resolved_Maps.Element (C);
+      end if;
+      declare
+         Obj  : constant Version.Objects.Git_Object :=
+           Resolve_At_Location (Repo, Location);
+         Size : constant Natural := Version.Objects.Content (Obj)'Length;
+      begin
+         if Resolved_Bytes + Size > Resolved_Limit then
+            Resolved.Clear;
+            Resolved_Bytes := 0;
+         end if;
+         Resolved.Insert (Key, Obj);
+         Resolved_Bytes := Resolved_Bytes + Size;
+         return Obj;
+      end;
+   end Read_Object_At_Location;
+
+   function Resolve_At_Location
      (Repo : Version.Repository.Repository_Handle; Location : Pack_Location)
       return Version.Objects.Git_Object
    is
@@ -1082,7 +1130,7 @@ package body Version.Pack is
                  with "unsupported packed object type";
          end case;
       end;
-   end Read_Object_At_Location;
+   end Resolve_At_Location;
    function Read_Object
      (Repo : Version.Repository.Repository_Handle;
       Id   : Version.Objects.Hex_Object_Id) return Version.Objects.Git_Object

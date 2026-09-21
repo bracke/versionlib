@@ -526,23 +526,6 @@ package body Version.History is
 
       Path_Limited : constant Boolean := not Options.Paths.Is_Empty;
 
-      function Under_Limit (Path : String) return Boolean is
-      begin
-         --  A limit names a file, or a directory whose subtree it covers.
-         for Limit of Options.Paths loop
-            if Path = Limit
-              or else (Path'Length > Limit'Length
-                       and then Path (Path'First
-                                      .. Path'First + Limit'Length - 1) = Limit
-                       and then Path (Path'First + Limit'Length) = '/')
-            then
-               return True;
-            end if;
-         end loop;
-
-         return False;
-      end Under_Limit;
-
       function Signature
         (Id : Version.Objects.Hex_Object_Id) return Unbounded_String
       is
@@ -559,10 +542,12 @@ package body Version.History is
             Commit : constant Version.Objects.Git_Object :=
               Version.Object_Cache.Read_Object (Repo, Objects, Id);
          begin
-            for E of Version.Tree_Cache.Flatten_Tree
-              (Repo, Trees, Version.Objects.Commit_Tree_Id (Commit))
-            loop
-               if Under_Limit (To_String (E.Path)) then
+            --  Only the levels along each limit are read; overlapping
+            --  limits list an entry twice, which every commit does alike.
+            for Limit of Options.Paths loop
+               for E of Version.Tree_Cache.Entries_Under
+                 (Repo, Trees, Version.Objects.Commit_Tree_Id (Commit), Limit)
+               loop
                   Append (Text, E.Path);
                   Append (Text, Character'Val (0));
                   Append (Text, Version.Objects.To_String (E.Id));
@@ -571,7 +556,7 @@ package body Version.History is
                   --  so the entry's mode is part of its signature too.
                   Append (Text, E.Mode);
                   Append (Text, Character'Val (10));
-               end if;
+               end loop;
             end loop;
          exception
             when Ada.IO_Exceptions.Data_Error | Ada.IO_Exceptions.Name_Error =>

@@ -21,6 +21,18 @@ package Version.Tree_Cache is
       Tree_Id : Version.Objects.Hex_Object_Id)
       return Version.Objects.Tree_Entry_Vectors.Vector;
 
+   function Entries_Under
+     (Repo    : Version.Repository.Repository_Handle;
+      Cache   : in out Tree_Cache;
+      Tree_Id : Version.Objects.Hex_Object_Id;
+      Limit   : String)
+      return Version.Objects.Tree_Entry_Vectors.Vector;
+   --  The blobs and gitlinks of Tree_Id at Limit (a file) or under it (a
+   --  directory), with their full paths -- what a path-limited history walk
+   --  compares between commits.  Only the tree levels along Limit and the
+   --  limited subtree are read (each level cached by its id), so a walk
+   --  over thousands of commits does not flatten every commit's whole tree.
+
 private
 
    package Tree_Maps is new Ada.Containers.Ordered_Maps
@@ -29,7 +41,8 @@ private
       "="          => Version.Objects.Tree_Entry_Vectors."=");
 
    type Tree_Cache is limited record
-      Trees : Tree_Maps.Map;
+      Trees  : Tree_Maps.Map;
+      Levels : Tree_Maps.Map;   --  single levels, entry names only
    end record;
 
 end Version.Tree_Cache;

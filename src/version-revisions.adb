@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Directories;
@@ -58,6 +59,11 @@ package body Version.Revisions is
         and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix;
    end Has_Prefix;
 
+   --  Unique_Abbrev_Length's pack indexes, kept for the process.
+   Abbrev_Packs       : Version.Pack_Index_Cache.Cache;
+   Abbrev_Packs_Valid : Boolean := False;
+   Abbrev_Packs_Stamp : Ada.Calendar.Time := Ada.Calendar.Time_Of (1970, 1, 1);
+
    function Unique_Abbrev_Length
      (Repo    : Version.Repository.Repository_Handle;
       Id      : Version.Objects.Hex_Object_Id;
@@ -74,11 +80,28 @@ package body Version.Revisions is
 
       package Id_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
       Loose : Id_Sets.Set;
-      Packs : Version.Pack_Index_Cache.Cache;
 
       use type Ada.Directories.File_Kind;
+      use type Ada.Calendar.Time;
    begin
-      Version.Pack_Index_Cache.Load (Repo => Repo, Item => Packs);
+      --  The pack indexes are loaded once per process: a command that
+      --  abbreviates many ids (blame, log) would otherwise rebuild the
+      --  whole location map for each.  A new or repacked pack changes the
+      --  directory's timestamp, which reloads them.
+      declare
+         Pack_Dir : constant String := Join (Objects_Dir, "pack");
+         Stamp    : Ada.Calendar.Time := Abbrev_Packs_Stamp;
+      begin
+         if Ada.Directories.Exists (Pack_Dir) then
+            Stamp := Ada.Directories.Modification_Time (Pack_Dir);
+         end if;
+         if not Abbrev_Packs_Valid or else Stamp /= Abbrev_Packs_Stamp then
+            Version.Pack_Index_Cache.Clear (Abbrev_Packs);
+            Version.Pack_Index_Cache.Load (Repo => Repo, Item => Abbrev_Packs);
+            Abbrev_Packs_Stamp := Stamp;
+            Abbrev_Packs_Valid := True;
+         end if;
+      end;
 
       --  Collect loose object ids sharing the two-char fanout directory; only
       --  those can collide with Full on a prefix of length >= 2. Skip a loose
@@ -104,7 +127,7 @@ package body Version.Revisions is
                   if Name'Length = Full'Length - 2
                     and then Is_Hex_Text (Name)
                     and then not Version.Pack_Index_Cache.Contains
-                                   (Packs,
+                                   (Abbrev_Packs,
                                     Version.Objects.To_Object_Id
                                       (Fanout & Name))
                   then
@@ -130,7 +153,8 @@ package body Version.Revisions is
                end if;
             end loop;
             Version.Pack_Index_Cache.Match_Prefix
-              (Item => Packs, Prefix => Prefix, Count => Count, Match => Match);
+              (Item => Abbrev_Packs, Prefix => Prefix, Count => Count,
+               Match => Match);
             if Count <= 1 then
                return L;
             end if;
