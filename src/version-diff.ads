@@ -323,6 +323,14 @@ package Version.Diff is
    --  A plain unified diff of two texts: only `--- a/<path>`, `+++ b/<path>`
    --  and the hunks, with no `diff --git`/`index` header.  This is the shape
    --  `git rerere diff` prints.
+   --  The `diff.<driver>.textconv` command for Path (from its `diff=`
+   --  attribute), "" when none; and running one on a blob's content the
+   --  way git does, the content in a temporary file named as the command's
+   --  argument.  blame reads blobs through the same filter.
+   function Textconv_Command
+     (Repo : Version.Repository.Repository_Handle; Path : String) return String;
+   function Run_Textconv (Command : String; Content : String) return String;
+
    function Unified_Text_Diff
      (Path     : String;
       Old_Text : String;

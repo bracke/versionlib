@@ -1,3 +1,4 @@
+with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.IO_Exceptions;
@@ -90,6 +91,46 @@ package body Version.Pack is
 
          raise;
    end Read_File;
+
+   --  Pack and index files read once per process: a pack is immutable
+   --  under its checksum name, and every object lookup wants the whole
+   --  file, so re-reading it per object (as blame or log -p would) costs
+   --  the pack size times the object count.  A file that changed size
+   --  (an index being rewritten) is read again.
+   type Stream_Array_Access is access Stream_Element_Array;
+
+   package Data_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+     (Key_Type => String, Element_Type => Stream_Array_Access);
+
+   Data_Cache : Data_Maps.Map;
+
+   function Cached_File (Path : String) return Stream_Array_Access is
+      C : constant Data_Maps.Cursor := Data_Cache.Find (Path);
+   begin
+      if Data_Maps.Has_Element (C) then
+         declare
+            Held : constant Stream_Array_Access := Data_Maps.Element (C);
+            Size : Ada.Directories.File_Size := 0;
+         begin
+            begin
+               Size := Ada.Directories.Size (Version.Files.To_Native_Path (Path));
+            exception
+               when others => Size := 0;
+            end;
+            if Ada.Directories."=" (Size, Ada.Directories.File_Size (Held'Length)) then
+               return Held;
+            end if;
+            Data_Cache.Delete (Path);
+         end;
+      end if;
+      declare
+         Fresh : constant Stream_Array_Access :=
+           new Stream_Element_Array'(Read_File (Path));
+      begin
+         Data_Cache.Insert (Path, Fresh);
+         return Fresh;
+      end;
+   end Cached_File;
 
    function U32_BE
      (Data : Stream_Element_Array; Pos : Stream_Element_Offset) return U32 is
@@ -218,41 +259,104 @@ package body Version.Pack is
       end;
    end Offset_For_Index;
 
+   --  The offsets of an index's objects, sorted, computed once per index
+   --  file so that "where does the entry at Offset end" is a binary search
+   --  rather than a scan of every object (git's pack-revindex).
+   package Offset_Vectors is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => U64);
+   package Offset_Sorting is new Offset_Vectors.Generic_Sorting;
+   package Offset_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+     (Key_Type => String, Element_Type => Offset_Vectors.Vector,
+      "="      => Offset_Vectors."=");
+   Sorted_Offsets : Offset_Maps.Map;
+
    function Next_Offset_After
-     (Data         : Stream_Element_Array;
+     (Index_Path   : String;
+      Data         : Stream_Element_Array;
       Object_Count : Natural;
       Names_Start  : Stream_Element_Offset;
       Offset       : U64;
       Pack_Size    : U64;
       Raw_Length   : Natural) return U64
    is
-      Best : U64 := Pack_Size - U64 (Raw_Length); -- exclude pack checksum
+      Best : constant U64 := Pack_Size - U64 (Raw_Length); -- exclude pack checksum
+      C    : Offset_Maps.Cursor := Sorted_Offsets.Find (Index_Path);
    begin
-      for I in 0 .. Object_Count - 1 loop
+      if not Offset_Maps.Has_Element (C) then
          declare
-            Candidate : constant U64 :=
-              Offset_For_Index
-                (Data         => Data,
-                 Object_Count => Object_Count,
-                 Object_Index => I,
-                 Names_Start  => Names_Start,
-                 Raw_Length   => Raw_Length);
+            V : Offset_Vectors.Vector;
          begin
-            if Candidate > Offset and then Candidate < Best then
-               Best := Candidate;
-            end if;
+            for I in 0 .. Object_Count - 1 loop
+               V.Append
+                 (Offset_For_Index
+                    (Data         => Data,
+                     Object_Count => Object_Count,
+                     Object_Index => I,
+                     Names_Start  => Names_Start,
+                     Raw_Length   => Raw_Length));
+            end loop;
+            Offset_Sorting.Sort (V);
+            declare
+               Inserted : Boolean;
+            begin
+               Sorted_Offsets.Insert (Index_Path, V, C, Inserted);
+            end;
          end;
-      end loop;
-
-      return Best;
+      end if;
+      declare
+         V    : Offset_Vectors.Vector renames Sorted_Offsets (C);
+         Low  : Natural := V.First_Index;
+         High : Natural := V.Last_Index + 1;
+      begin
+         --  The first offset greater than Offset.
+         while Low < High loop
+            declare
+               Mid : constant Natural := (Low + High) / 2;
+            begin
+               if V (Mid) > Offset then
+                  High := Mid;
+               else
+                  Low := Mid + 1;
+               end if;
+            end;
+         end loop;
+         if Low <= V.Last_Index and then V (Low) < Best then
+            return V (Low);
+         end if;
+         return Best;
+      end;
    end Next_Offset_After;
+
+   --  Where the pack entry at Offset ends: the next entry's offset, or the
+   --  data before the trailing checksum.
+   function Entry_End_Offset
+     (Pack_Path : String; Offset : U64; Raw_Length : Natural) return U64
+   is
+      Index_Path : constant String :=
+        Pack_Path (Pack_Path'First .. Pack_Path'Last - 5) & ".idx";
+      Data : Stream_Element_Array renames Cached_File (Index_Path).all;
+      Fanout_Start : constant Stream_Element_Offset := Data'First + 8;
+      Object_Count : constant Natural :=
+        Natural (U32_BE (Data, Fanout_Start + Stream_Element_Offset (255 * 4)));
+      Names_Start  : constant Stream_Element_Offset :=
+        Fanout_Start + Stream_Element_Offset (256 * 4);
+   begin
+      return Next_Offset_After
+        (Index_Path   => Index_Path,
+         Data         => Data,
+         Object_Count => Object_Count,
+         Names_Start  => Names_Start,
+         Offset       => Offset,
+         Pack_Size    => U64 (Ada.Directories.Size (Pack_Path)),
+         Raw_Length   => Raw_Length);
+   end Entry_End_Offset;
    function Index_Find_Location
      (Index_Path : String;
       Pack_Path  : String;
       Id         : Version.Objects.Hex_Object_Id;
       Raw_Length : Natural) return Pack_Location
    is
-      Data : constant Stream_Element_Array := Read_File (Index_Path);
+      Data : Stream_Element_Array renames Cached_File (Index_Path).all;
 
       Magic : constant U32 := U32_BE (Data, Data'First);
       Ver   : constant U32 := U32_BE (Data, Data'First + 4);
@@ -344,7 +448,8 @@ package body Version.Pack is
 
                      End_Offset : constant U64 :=
                        Next_Offset_After
-                         (Data         => Data,
+                         (Index_Path   => Index_Path,
+                          Data         => Data,
                           Object_Count => Object_Count,
                           Names_Start  => Names_Start,
                           Offset       => Offset,
@@ -454,8 +559,8 @@ package body Version.Pack is
 
    function Read_Header (Location : Pack_Location) return Packed_Object_Header
    is
-      Data : constant Stream_Element_Array :=
-        Read_File (To_String (Location.Pack_Path));
+      Data : Stream_Element_Array renames
+        Cached_File (To_String (Location.Pack_Path)).all;
 
       Pos : U64 := Location.Offset;
 
@@ -798,8 +903,8 @@ package body Version.Pack is
    function Read_Delta_Base
      (Repo     : Version.Repository.Repository_Handle;
       Location : Pack_Location) return Delta_Base_Info is
-      Data   : constant Stream_Element_Array :=
-        Read_File (To_String (Location.Pack_Path));
+      Data   : Stream_Element_Array renames
+        Cached_File (To_String (Location.Pack_Path)).all;
       Header : constant Packed_Object_Header := Read_Header (Location);
       Pos    : U64 := Header.Data_Offset;
    begin
@@ -849,8 +954,8 @@ package body Version.Pack is
       declare
          Header : constant Packed_Object_Header := Read_Header (Location);
 
-         Data : constant Stream_Element_Array :=
-           Read_File (To_String (Location.Pack_Path));
+         Data : Stream_Element_Array renames
+           Cached_File (To_String (Location.Pack_Path)).all;
       begin
          case Header.Kind is
             when Packed_Commit | Packed_Tree | Packed_Blob =>
@@ -922,7 +1027,9 @@ package body Version.Pack is
                     (Found      => True,
                      Pack_Path  => Location.Pack_Path,
                      Offset     => Base_Offset,
-                     End_Offset => Location.Offset);
+                     End_Offset =>
+                       Entry_End_Offset
+                         (To_String (Location.Pack_Path), Base_Offset, Raw_Length));
 
                   D : constant String :=
                     Inflate_Pack_Data
