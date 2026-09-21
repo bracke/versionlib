@@ -147,7 +147,9 @@ package body Version.Tracking is
            Version.Availability.No_Upstream_Configured (Branch_Name);
       end if;
 
-      Version.Ref_Names.Require_Remote_Name (To_String (Result.Remote));
+      if To_String (Result.Remote) /= "." then
+         Version.Ref_Names.Require_Remote_Name (To_String (Result.Remote));
+      end if;
 
       if not Version.Ref_Names.Is_Valid_Ref_Name (To_String (Result.Merge))
         or else not Starts_With (To_String (Result.Merge), "refs/heads/")
@@ -232,14 +234,20 @@ package body Version.Tracking is
          raise Ada.IO_Exceptions.Data_Error with "upstream remote is empty";
       end if;
 
-      Version.Ref_Names.Require_Remote_Name (Remote_Text);
-
       if not Version.Ref_Names.Is_Valid_Ref_Name (Merge_Text)
         or else not Starts_With (Merge_Text, Prefix)
       then
          raise Ada.IO_Exceptions.Data_Error with
            "malformed upstream merge ref: " & Merge_Text;
       end if;
+
+      --  git's "." remote: the upstream is a local branch, tracked as the
+      --  merge ref itself.
+      if Remote_Text = "." then
+         return Merge_Text;
+      end if;
+
+      Version.Ref_Names.Require_Remote_Name (Remote_Text);
 
       return "refs/remotes/" & Remote_Text & "/"
         & Merge_Text (Merge_Text'First + Prefix'Length .. Merge_Text'Last);

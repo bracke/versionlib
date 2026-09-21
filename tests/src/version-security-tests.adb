@@ -215,17 +215,25 @@ package body Version.Security.Tests is
       Version.Init.Init (Root);
       Ada.Directories.Set_Directory (Root);
 
+      --  git accepts a newline in a value and stores it escaped ("\n"), so
+      --  the "[alias]" line never becomes a section: the value must round
+      --  trip verbatim and no alias section may appear.
+      Version.Remotes.Add_Remote
+        (Name => "origin",
+         Url  => "../repo" & Character'Val (10) & "[alias]");
+      declare
+         Repo : constant Version.Repository.Repository_Handle :=
+           Version.Repository.Open;
       begin
-         Version.Remotes.Add_Remote
-           (Name => "origin",
-            Url  => "../repo" & Character'Val (10) & "[alias]");
-      exception
-         when Ada.IO_Exceptions.Data_Error =>
-            Raised := True;
+         Assert
+           (Version.Config.Get_Value (Repo, "remote.origin.url")
+              = "../repo" & Character'Val (10) & "[alias]",
+            "remote URL with a newline must round-trip escaped");
+         Raised := not Version.Config.Has_Key (Repo, "alias.url");
       end;
 
       Ada.Directories.Set_Directory (Old_Dir);
-      Assert_Data_Error (Raised, "remote URL newline must be rejected");
+      Assert_Data_Error (Raised, "an escaped newline must not open a section");
    exception
       when others =>
          Ada.Directories.Set_Directory (Old_Dir);
@@ -238,9 +246,11 @@ package body Version.Security.Tests is
       pragma Unreferenced (T);
       Raised : Boolean := False;
    begin
+      --  A newline is escaped on write (git stores "\n"); a carriage
+      --  return or NUL still has no escape and is refused.
       begin
          Version.Config.Require_Config_Scalar
-           ("x" & Character'Val (10) & "[alias]",
+           ("x" & Character'Val (13) & "[alias]",
             "remote url");
       exception
          when Ada.IO_Exceptions.Data_Error =>

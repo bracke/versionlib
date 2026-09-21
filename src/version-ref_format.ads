@@ -51,7 +51,21 @@ package Version.Ref_Format is
       Under            : Ada.Strings.Unbounded.Unbounded_String;
       --  Only refs with this prefix take part ("refs/tags/" for `tag`);
       --  empty means every ref.
+      Under_Alt        : Ada.Strings.Unbounded.Unbounded_String;
+      --  A second prefix that also takes part (`branch -a`: refs/heads/
+      --  and refs/remotes/).
+      Include_Detached_Head : Boolean := False;
+      --  git's FILTER_REFS_DETACHED_HEAD: when HEAD is detached, a pseudo
+      --  ref named "HEAD" (sorted first) whose refname atoms render
+      --  Head_Description and whose %(HEAD) is "*".
    end record;
+
+   function Head_Description
+     (Repo : Version.Repository.Repository_Handle) return String;
+   --  git's get_head_description for a detached HEAD: "(HEAD detached at
+   --  <x>)" / "(HEAD detached from <x>)" from the last checkout in HEAD's
+   --  reflog, "(no branch, rebasing <b>)", "(no branch, bisect started on
+   --  <b>)", or "(no branch)".
 
    function For_Each_Ref
      (Repo      : Version.Repository.Repository_Handle;

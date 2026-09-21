@@ -14,6 +14,9 @@ with Version.Packed_Refs;
 with Version.History;
 with Version.Pathspec;
 with Version.Color;
+with Version.Worktrees;
+with Version.Reflog;
+with Version.Revisions;
 
 package body Version.Ref_Format is
 
@@ -303,8 +306,9 @@ package body Version.Ref_Format is
    ----------------------------------------------------------------------
 
    type Ref_Row is record
-      Name : Unbounded_String;
-      Id   : Unbounded_String;
+      Name     : Unbounded_String;
+      Id       : Unbounded_String;
+      Detached : Boolean := False;   --  the detached-HEAD pseudo ref
    end record;
 
    package Row_Vectors is new Ada.Containers.Vectors (Positive, Ref_Row);
@@ -358,7 +362,14 @@ package body Version.Ref_Format is
                              (Name => To_Unbounded_String (Full),
                               Id   => To_Unbounded_String
                                 (Version.Objects.To_String
-                                   (Version.Refs.Resolve_Ref (Repo, Full)))));
+                                   (Version.Refs.Resolve_Ref (Repo, Full))),
+                        Detached => False));
+                     exception
+                        when Ada.IO_Exceptions.Data_Error =>
+                           --  A dangling symref (refs/remotes/origin/HEAD
+                           --  after its target went) is skipped, as git's
+                           --  ref iteration skips broken refs.
+                           null;
                      end;
                   end if;
                end;
@@ -391,7 +402,8 @@ package body Version.Ref_Format is
                           ((if R.Kind = Version.Reftable.Ref_Symref
                             then Version.Objects.To_String
                                    (Version.Refs.Resolve_Ref (Repo, Name))
-                            else Version.Objects.To_String (R.Id)))));
+                            else Version.Objects.To_String (R.Id))),
+                        Detached => False));
                end if;
             end;
          end loop;
@@ -412,7 +424,8 @@ package body Version.Ref_Format is
                  (Ref_Row'
                     (Name => PR.Name,
                      Id   => To_Unbounded_String
-                       (Version.Objects.To_String (PR.Id))));
+                       (Version.Objects.To_String (PR.Id)),
+                        Detached => False));
             end if;
          end;
       end loop;
@@ -622,7 +635,8 @@ package body Version.Ref_Format is
       Id        : String;
       Head      : String;
       Quote     : String := "";
-      Use_Color : Boolean := False)
+      Use_Color : Boolean := False;
+      Detached_Desc : String := "")
       return String
    is
       Result : Unbounded_String;
@@ -782,6 +796,11 @@ package body Version.Ref_Format is
          end if;
 
          if Head_A = "refname" then
+            --  The detached-HEAD pseudo ref renders git's description
+            --  whatever the modifier (ref-filter's get_refname).
+            if Detached_Desc'Length > 0 then
+               return Detached_Desc;
+            end if;
             if Arg = "" then
                return Ref;
             elsif Arg = "short" then
@@ -830,7 +849,22 @@ package body Version.Ref_Format is
               (Integer'Image (Version.Objects.Content (Obj)'Length),
                Ada.Strings.Left);
          elsif Head_A = "HEAD" then
-            return (if Ref = Head then "*" else " ");
+            return (if Ref = Head or else Detached_Desc'Length > 0 then "*"
+                    else " ");
+         elsif Head_A = "worktreepath" then
+            --  The worktree that has this branch checked out, if any.
+            if Ref'Length > 11
+              and then Ref (Ref'First .. Ref'First + 10) = "refs/heads/"
+            then
+               for W of Version.Worktrees.List loop
+                  if not W.Detached
+                    and then To_String (W.Branch) = Ref (Ref'First + 11 .. Ref'Last)
+                  then
+                     return To_String (W.Path);
+                  end if;
+               end loop;
+            end if;
+            return "";
          elsif Head_A = "subject" or else Atom = "contents:subject" then
             return Subject_Of (Content);
          elsif Head_A = "authorname" then
@@ -866,48 +900,58 @@ package body Version.Ref_Format is
                     Version.Tracking.Remote_Tracking_Ref
                       (Version.Tracking.Upstream (Repo, Short_Name (Ref)));
                begin
-                  --  %(upstream:short) drops the "refs/remotes/" prefix.
-                  if Arg = "short"
-                    and then Full'Length > 13
-                    and then Full (Full'First .. Full'First + 12)
-                             = "refs/remotes/"
+                  --  %(upstream:short) drops the "refs/remotes/" prefix (or
+                  --  "refs/heads/" for a local upstream).
+                  if Arg = "short" then
+                     return Short_Name (Full);
+                  elsif Arg = "track" or else Arg = "trackshort"
+                    or else Arg = "track,nobracket" or else Arg = "nobracket"
                   then
-                     return Full (Full'First + 13 .. Full'Last);
-                  elsif Arg = "track" or else Arg = "trackshort" then
                      --  How this branch stands against its upstream, not the
                      --  upstream's name. Substituting the name for it was a
                      --  silently wrong answer in a field scripts read to
-                     --  decide whether to push.
+                     --  decide whether to push. A configured upstream whose
+                     --  ref is missing is git's "[gone]".
                      declare
-                        AB : constant Version.Tracking.Ahead_Behind :=
-                          Version.Tracking.Count_Ahead_Behind
-                            (Repo, Short_Name (Ref));
-                        A : constant String :=
-                          Ada.Strings.Fixed.Trim
-                            (Natural'Image (AB.Ahead), Ada.Strings.Left);
-                        B : constant String :=
-                          Ada.Strings.Fixed.Trim
-                            (Natural'Image (AB.Behind), Ada.Strings.Left);
+                        No_Bracket : constant Boolean :=
+                          Arg = "track,nobracket" or else Arg = "nobracket";
+                        function Wrap (T : String) return String is
+                          (if No_Bracket then T else "[" & T & "]");
                      begin
-                        if Arg = "trackshort" then
-                           if AB.Ahead > 0 and then AB.Behind > 0 then
-                              return "<>";
-                           elsif AB.Ahead > 0 then
-                              return ">";
-                           elsif AB.Behind > 0 then
-                              return "<";
-                           else
-                              return "=";
-                           end if;
-                        elsif AB.Ahead > 0 and then AB.Behind > 0 then
-                           return "[ahead " & A & ", behind " & B & "]";
-                        elsif AB.Ahead > 0 then
-                           return "[ahead " & A & "]";
-                        elsif AB.Behind > 0 then
-                           return "[behind " & B & "]";
-                        else
-                           return "";
+                        if not Version.Refs.Ref_Exists (Repo, Full) then
+                           return (if Arg = "trackshort" then "" else Wrap ("gone"));
                         end if;
+                        declare
+                           AB : constant Version.Tracking.Ahead_Behind :=
+                             Version.Tracking.Count_Ahead_Behind
+                               (Repo, Short_Name (Ref));
+                           A : constant String :=
+                             Ada.Strings.Fixed.Trim
+                               (Natural'Image (AB.Ahead), Ada.Strings.Left);
+                           B : constant String :=
+                             Ada.Strings.Fixed.Trim
+                               (Natural'Image (AB.Behind), Ada.Strings.Left);
+                        begin
+                           if Arg = "trackshort" then
+                              if AB.Ahead > 0 and then AB.Behind > 0 then
+                                 return "<>";
+                              elsif AB.Ahead > 0 then
+                                 return ">";
+                              elsif AB.Behind > 0 then
+                                 return "<";
+                              else
+                                 return "=";
+                              end if;
+                           elsif AB.Ahead > 0 and then AB.Behind > 0 then
+                              return Wrap ("ahead " & A & ", behind " & B);
+                           elsif AB.Ahead > 0 then
+                              return Wrap ("ahead " & A);
+                           elsif AB.Behind > 0 then
+                              return Wrap ("behind " & B);
+                           else
+                              return "";
+                           end if;
+                        end;
                      end;
                   else
                      return Full;
@@ -1268,7 +1312,7 @@ package body Version.Ref_Format is
                                          (Result,
                                           Pad_Align
                                             (Expand
-                                               (Repo, Body_Str, Ref, Id, Head),
+                                               (Repo, Body_Str, Ref, Id, Head, Quote, Use_Color, Detached_Desc),
                                              (if Colon = 0 then ""
                                               else Inner (Colon + 1
                                                           .. Inner'Last))));
@@ -1315,7 +1359,7 @@ package body Version.Ref_Format is
                                                    Cond_Val : constant String :=
                                                      Expand
                                                        (Repo, Cond, Ref, Id,
-                                                        Head);
+                                                        Head, Quote, Use_Color, Detached_Desc);
 
                                                    --  %(if:equals=X) /
                                                    --  notequals=X compare the
@@ -1359,7 +1403,7 @@ package body Version.Ref_Format is
                                                         (Result,
                                                          Expand
                                                            (Repo, Then_Part,
-                                                            Ref, Id, Head));
+                                                            Ref, Id, Head, Quote, Use_Color, Detached_Desc));
                                                    elsif Else_At /= 0 then
                                                       while Else_Close
                                                         <= Body_Str'Last
@@ -1377,7 +1421,8 @@ package body Version.Ref_Format is
                                                             Body_Str
                                                               (Else_Close + 1
                                                                .. Body_Str'Last),
-                                                            Ref, Id, Head));
+                                                            Ref, Id, Head, Quote,
+                                                            Use_Color, Detached_Desc));
                                                    end if;
                                                 end;
                                              end;
@@ -1537,6 +1582,144 @@ package body Version.Ref_Format is
    end Version_Less;
 
    ----------------------------------------------------------------------
+   --  Detached HEAD description
+   ----------------------------------------------------------------------
+
+   function Head_Description
+     (Repo : Version.Repository.Repository_Handle) return String
+   is
+      Git_Dir : constant String := Version.Repository.Git_Dir (Repo);
+
+      function State_Line (Name : String) return String is
+         Path : constant String := Version.Files.Join (Git_Dir, Name);
+      begin
+         if not Version.Files.Is_Ordinary_File (Path) then
+            return "";
+         end if;
+         declare
+            Raw  : constant String := Version.Files.Read_Binary_File (Path);
+            Last : Natural := Raw'Last;
+         begin
+            while Last >= Raw'First
+              and then Raw (Last) in Character'Val (10) | Character'Val (13)
+            loop
+               Last := Last - 1;
+            end loop;
+            return Raw (Raw'First .. Last);
+         end;
+      exception
+         when others =>
+            return "";
+      end State_Line;
+
+      function Short_Branch (Ref : String) return String is
+        (if Starts_With (Ref, "refs/heads/") then Ref (Ref'First + 11 .. Ref'Last)
+         else Ref);
+
+      function Abbrev (Id : String) return String is
+        (Id (Id'First .. Id'First
+             + Version.Revisions.Unique_Abbrev_Length
+                 (Repo, Version.Objects.To_Object_Id (Id), 7) - 1));
+   begin
+      --  A rebase or bisect in progress names the branch it works on.
+      if Ada.Directories.Exists (Version.Files.Join (Git_Dir, "rebase-merge"))
+        or else Ada.Directories.Exists (Version.Files.Join (Git_Dir, "rebase-apply"))
+      then
+         declare
+            Name : constant String :=
+              (if Ada.Directories.Exists (Version.Files.Join (Git_Dir, "rebase-merge"))
+               then State_Line ("rebase-merge/head-name")
+               else State_Line ("rebase-apply/head-name"));
+         begin
+            if Name'Length > 0 and then Name /= "detached HEAD" then
+               return "(no branch, rebasing " & Short_Branch (Name) & ")";
+            end if;
+            declare
+               Onto : constant String :=
+                 (if Ada.Directories.Exists
+                       (Version.Files.Join (Git_Dir, "rebase-merge"))
+                  then State_Line ("rebase-merge/onto")
+                  else State_Line ("rebase-apply/onto"));
+            begin
+               return "(no branch, rebasing detached HEAD "
+                 & (if Onto'Length >= 40 then Abbrev (Onto) else Onto) & ")";
+            end;
+         end;
+      end if;
+      declare
+         Bisect_Start : constant String := State_Line ("BISECT_START");
+      begin
+         if Bisect_Start'Length > 0 then
+            return "(no branch, bisect started on " & Bisect_Start & ")";
+         end if;
+      end;
+
+      --  git's wt_status_get_detached_from: the newest "checkout: moving
+      --  from X to Y" in HEAD's reflog says where HEAD was detached; "at"
+      --  while HEAD is still there, "from" once it moved on.
+      declare
+         Entries : constant Version.Reflog.Log_Entry_Vectors.Vector :=
+           Version.Reflog.Read_Entries (Repo, "HEAD");
+         Head_Id : constant String :=
+           Version.Refs.Commit_Id (Version.Refs.Read_Head (Repo));
+      begin
+         for I in reverse Entries.First_Index .. Entries.Last_Index loop
+            declare
+               Msg : constant String := To_String (Entries (I).Message);
+               Pre : constant String := "checkout: moving from ";
+            begin
+               if Starts_With (Msg, Pre) then
+                  declare
+                     Rest   : constant String := Msg (Msg'First + Pre'Length .. Msg'Last);
+                     Sep    : constant Natural := Ada.Strings.Fixed.Index (Rest, " to ");
+                     New_Id : constant String := To_String (Entries (I).New_Id);
+                  begin
+                     if Sep > 0 then
+                        declare
+                           Target : constant String := Rest (Sep + 4 .. Rest'Last);
+                           At_It  : constant Boolean := Head_Id = New_Id;
+                           From   : Unbounded_String :=
+                             To_Unbounded_String (Abbrev (New_Id));
+                        begin
+                           --  A ref name that still points at that commit
+                           --  is named (tags and remotes shortened).
+                           if Target /= "HEAD" then
+                              for Candidate of String_Vectors.Vector'
+                                [Target, "refs/" & Target, "refs/tags/" & Target,
+                                 "refs/heads/" & Target, "refs/remotes/" & Target]
+                              loop
+                                 if Version.Refs.Ref_Exists (Repo, Candidate)
+                                   and then Version.Objects.To_String
+                                              (Version.Refs.Resolve_Ref
+                                                 (Repo, Candidate)) = New_Id
+                                 then
+                                    From := To_Unbounded_String
+                                      (if Starts_With (Candidate, "refs/tags/")
+                                       then Candidate (Candidate'First + 10 .. Candidate'Last)
+                                       elsif Starts_With (Candidate, "refs/remotes/")
+                                       then Candidate (Candidate'First + 13 .. Candidate'Last)
+                                       else Candidate);
+                                    exit;
+                                 end if;
+                              end loop;
+                           end if;
+                           return "(HEAD detached "
+                             & (if At_It then "at " else "from ")
+                             & To_String (From) & ")";
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      exception
+         when others =>
+            null;
+      end;
+      return "(no branch)";
+   end Head_Description;
+
+   ----------------------------------------------------------------------
    --  Entry point
    ----------------------------------------------------------------------
 
@@ -1582,6 +1765,10 @@ package body Version.Ref_Format is
 
       function Less (L, R : Ref_Row) return Boolean is
       begin
+         --  git's REF_SORTING_DETACHED_HEAD_FIRST.
+         if L.Detached /= R.Detached then
+            return L.Detached;
+         end if;
          for Spec of Specs loop
             declare
                Key : constant String := To_String (Spec.Key);
@@ -1752,8 +1939,12 @@ package body Version.Ref_Format is
          Name : constant String := To_String (R.Name);
          Id   : constant String := To_String (R.Id);
       begin
-         if Length (Filter.Under) > 0
+         if R.Detached then
+            null;   --  the pseudo ref belongs to whatever kind asked for it
+         elsif Length (Filter.Under) > 0
            and then not Starts_With (Name, To_String (Filter.Under))
+           and then (Length (Filter.Under_Alt) = 0
+                     or else not Starts_With (Name, To_String (Filter.Under_Alt)))
          then
             return False;
          end if;
@@ -1848,6 +2039,20 @@ package body Version.Ref_Format is
            (Sort_Spec'(Key => To_Unbounded_String ("refname"), others => <>));
       end if;
 
+      if Filter.Include_Detached_Head and then Head = "" then
+         declare
+            H : constant Version.Refs.Head_Info := Version.Refs.Read_Head (Repo);
+         begin
+            if Version.Refs.Is_Detached (H) then
+               Rows.Append
+                 (Ref_Row'(Name     => To_Unbounded_String ("HEAD"),
+                           Id       => To_Unbounded_String
+                                         (Version.Refs.Commit_Id (H)),
+                           Detached => True));
+            end if;
+         end;
+      end if;
+
       for R of Rows loop
          if Keep (R) then
             Filtered.Append (R);
@@ -1865,7 +2070,9 @@ package body Version.Ref_Format is
             declare
                Line : constant String :=
                  Expand (Repo, Tmpl, To_String (R.Name), To_String (R.Id),
-                         Head, Quote, Filter.Use_Color);
+                         Head, Quote, Filter.Use_Color,
+                         Detached_Desc =>
+                           (if R.Detached then Head_Description (Repo) else ""));
             begin
                if not (Filter.Omit_Empty and then Line'Length = 0) then
                   Result.Append (Line);

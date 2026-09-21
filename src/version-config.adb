@@ -284,11 +284,13 @@ package body Version.Config is
 
    procedure Require_Config_Scalar (Value : String; Context : String) is
    begin
+      --  A newline is fine: git stores it as "\n" (branch descriptions are
+      --  multi-line), and Quote_Config_Value writes it that way.
       for C of Value loop
          if C = Character'Val (0)
-           or else C = Character'Val (10)
            or else C = Character'Val (13)
-           or else (Is_Control (C) and then C /= Character'Val (9))
+           or else (Is_Control (C) and then C not in Character'Val (9)
+                                                  | Character'Val (10))
          then
             raise Ada.IO_Exceptions.Data_Error
               with Context & " contains an unsafe control character";

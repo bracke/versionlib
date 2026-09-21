@@ -620,9 +620,17 @@ package body Version.Config.Tests is
            (Version.Config.Get_Value (Repo, "branch.main.remote") = "origin",
             "config set must create missing quoted-subsection entries");
 
+         --  A newline is stored escaped, as git does ("bad\nvalue"), and
+         --  read back verbatim; a NUL has no escape and is refused.
+         Version.Config.Set_Key
+           (Repo, "core.multi", "bad" & Character'Val (10) & "value");
+         Assert
+           (Version.Config.Get_Value (Repo, "core.multi")
+              = "bad" & Character'Val (10) & "value",
+            "a newline in a config value must round-trip");
          begin
             Version.Config.Set_Key
-              (Repo, "core.bad", "bad" & Character'Val (10) & "value");
+              (Repo, "core.bad", "bad" & Character'Val (0) & "value");
             Assert (False, "unsafe config values must be rejected");
          exception
             when Ada.IO_Exceptions.Data_Error =>
