@@ -1,3 +1,4 @@
+with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Version.Objects;
@@ -34,6 +35,16 @@ package Version.Pretty_Format is
    --  atoms render ("iso"/"iso8601", "iso-strict", "short", "raw", "unix",
    --  "relative", "human"); "" keeps git's default date. The explicit date
    --  atoms (%ai/%as/%at/...) are unaffected.
+
+   --  The trailers of a commit message (git's trailer block rules: the
+   --  last paragraph, "Key: value" lines with continuations), in order.
+   --  What %(trailers) renders; shortlog groups by them too.
+   type Trailer is record
+      Key   : Ada.Strings.Unbounded.Unbounded_String;
+      Value : Ada.Strings.Unbounded.Unbounded_String;   --  embedded LF: continuations
+   end record;
+   package Trailer_Vectors is new Ada.Containers.Vectors (Positive, Trailer);
+   function Parse_Trailers (Message : String) return Trailer_Vectors.Vector;
 
    --  The "<epoch> <tz>" tail of an ident line rendered under git's
    --  --date=<mode> ("" is the default layout; also "relative", "human",

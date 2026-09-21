@@ -4,7 +4,6 @@ with Ada.Calendar.Time_Zones;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
-with Ada.Containers.Vectors;
 
 with Version.Config;
 with Version.Files;
@@ -774,13 +773,6 @@ package body Version.Pretty_Format is
    --------------------------------------------------------------------------
    --  Trailers (%(trailers[:options]))
    --------------------------------------------------------------------------
-
-   type Trailer is record
-      Key   : Unbounded_String;
-      Value : Unbounded_String;   --  may contain embedded LF (continuations)
-   end record;
-
-   package Trailer_Vectors is new Ada.Containers.Vectors (Positive, Trailer);
 
    --  True if Line looks like "key: value" (token key, no internal spaces).
    function Is_Trailer_Line
