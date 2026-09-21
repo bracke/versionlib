@@ -698,8 +698,20 @@ package body Version.Log is
    begin
       --  The default ref reads "Notes:"; any other names itself
       --  ("Notes (<ref>):", the refs/notes/ prefix dropped).
+      --  git labels only refs/notes/commits itself "Notes:"; a configured
+      --  default elsewhere names itself like any other ref.
       if Header.Standard_Notes then
-         Show_Note (Version.Notes.Default_Ref, "Notes:");
+         declare
+            Ref : constant String := Version.Notes.Default_Notes_Ref (Repo);
+         begin
+            Show_Note
+              (Ref,
+               (if Ref = Version.Notes.Default_Ref then "Notes:"
+                elsif Ref'Length > 11
+                  and then Ref (Ref'First .. Ref'First + 10) = "refs/notes/"
+                then "Notes (" & Ref (Ref'First + 11 .. Ref'Last) & "):"
+                else "Notes (" & Ref & "):"));
+         end;
       end if;
       for R of Header.Notes_Refs loop
          declare

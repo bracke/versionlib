@@ -425,6 +425,58 @@ package body Version.Revisions is
          return Version.Objects.To_Object_Id (Lower (Name));
       end if;
 
+      --  git's root refs (ORIG_HEAD, MERGE_HEAD, FETCH_HEAD,
+      --  NOTES_MERGE_PARTIAL, ...): a one-level upper-case name is read
+      --  from the file of that name in the git directory, an id or a
+      --  "ref: " pointer to another ref.
+      if (for all C of Name => C in 'A' .. 'Z' | '0' .. '9' | '_') then
+         declare
+            Path : constant String :=
+              Join (Version.Repository.Git_Dir (Repo), Name);
+            use type Ada.Directories.File_Kind;
+         begin
+            if Ada.Directories.Exists (Path)
+              and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File
+            then
+               declare
+                  Text : constant String :=
+                    Ada.Strings.Fixed.Trim
+                      (Version.Files.Read_Binary_File (Path), Ada.Strings.Both);
+                  First_Line : constant String :=
+                    (if Ada.Strings.Fixed.Index (Text, "" & ASCII.LF) > 0
+                     then Text (Text'First
+                                .. Ada.Strings.Fixed.Index (Text, "" & ASCII.LF) - 1)
+                     else Text);
+               begin
+                  if Has_Prefix (First_Line, "ref: ") then
+                     return Resolve_Base
+                       (Repo, Refs, Packs,
+                        Ada.Strings.Fixed.Trim
+                          (First_Line (First_Line'First + 5 .. First_Line'Last),
+                           Ada.Strings.Both));
+                  end if;
+                  --  FETCH_HEAD lines carry more after the id; MERGE_HEAD
+                  --  may list several ids -- the first is the answer.
+                  declare
+                     Stop : Natural := First_Line'First;
+                  begin
+                     while Stop <= First_Line'Last
+                       and then First_Line (Stop) not in ' ' | ASCII.HT
+                     loop
+                        Stop := Stop + 1;
+                     end loop;
+                     if Stop - First_Line'First in 40 | 64
+                       and then Is_Hex_Text (First_Line (First_Line'First .. Stop - 1))
+                     then
+                        return Version.Objects.To_Object_Id
+                          (Lower (First_Line (First_Line'First .. Stop - 1)));
+                     end if;
+                  end;
+               end;
+            end if;
+         end;
+      end if;
+
       if not Has_Prefix (Name, "refs/") then
          if Resolve_Ref_Name (Repo, Refs, "refs/heads/" & Name, Id) then
             return Id;

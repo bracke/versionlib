@@ -8,6 +8,7 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Version.Config;
 with Version.Files;
 with Version.Mailmap;
+with Version.Notes;
 with Version.Object_Cache;
 with Version.Ref_Format;
 with Version.Refs;
@@ -1636,6 +1637,14 @@ package body Version.Pretty_Format is
                      I := I + 2;
                   when 'e' =>
                      Append (Result, Encoding);
+                     I := I + 2;
+                  when 'N' =>
+                     --  git's %N: the commit's note from the default notes
+                     --  ref, raw (no label or indentation).
+                     Append
+                       (Result,
+                        Version.Notes.Show
+                          (Repo, Commit_Id, Version.Notes.Default_Notes_Ref (Repo)));
                      I := I + 2;
                   when 'd' =>
                      Append
