@@ -732,7 +732,7 @@ package body Version.Status.Tests is
       Version.Test_Support.Make_Directory
         (Version.Test_Support.Join (Root, "docs"));
       --  docs/ must hold something tracked, or git (and now version) collapses
-      --  a wholly-untracked directory to `docs/`, which no `docs/**/*.md`
+      --  a wholly-untracked directory to `docs/`, which no `docs/*.md`
       --  pathspec can match -- verified against `git status --porcelain`.
       Version.Test_Support.Write_Text_File
         (Version.Test_Support.Join (Root, "docs/kept.txt"), "kept" & Character'Val (10));
@@ -745,7 +745,9 @@ package body Version.Status.Tests is
         (Version.Test_Support.Join (Root, "other.txt"), "other" & Character'Val (10));
 
       Ada.Directories.Set_Directory (Root);
-      Version.Pathspec.Append_Parse (Specs, "docs/**/*.md");
+      --  `docs/*.md`: a plain `**` would need a directory in between
+      --  (git's wildmatch), so it would not select docs/readme.md.
+      Version.Pathspec.Append_Parse (Specs, "docs/*.md");
 
       declare
          Result : constant Version.Status.Status_Result :=

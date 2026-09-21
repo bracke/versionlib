@@ -77,8 +77,12 @@ package body Version.Pathspec.Tests is
    is
       pragma Unreferenced (T);
    begin
-      Assert_Matches ("file?.txt", "dir/file1.txt", "question must match one basename char");
-      Assert_Not_Matches ("file?.txt", "dir/file10.txt", "question must not match two chars");
+      --  git matches a plain pathspec from the start of the path, not
+      --  against the basename: `file?.txt` does not select dir/file1.txt.
+      Assert_Matches ("file?.txt", "file1.txt", "question must match one char");
+      Assert_Not_Matches ("file?.txt", "dir/file1.txt", "a plain pathspec is not a basename glob");
+      Assert_Matches ("dir/file?.txt", "dir/file1.txt", "question must match one char in a path");
+      Assert_Not_Matches ("file?.txt", "file10.txt", "question must not match two chars");
    end Question_Glob;
 
    procedure Slash_Glob_One_Level
@@ -86,8 +90,12 @@ package body Version.Pathspec.Tests is
    is
       pragma Unreferenced (T);
    begin
+      --  git's default wildcards cross '/': `src/*.adb` reaches nested
+      --  files; only `:(glob)` stops at a directory boundary.
       Assert_Matches ("src/*.adb", "src/main.adb", "slash glob must match one level");
-      Assert_Not_Matches ("src/*.adb", "src/nested/main.adb", "single star must not cross slash");
+      Assert_Matches ("src/*.adb", "src/nested/main.adb", "a plain star crosses a slash");
+      Assert_Not_Matches (":(glob)src/*.adb", "src/nested/main.adb",
+                          ":(glob) star must not cross slash");
    end Slash_Glob_One_Level;
 
    procedure Recursive_Glob
@@ -95,8 +103,14 @@ package body Version.Pathspec.Tests is
    is
       pragma Unreferenced (T);
    begin
-      Assert_Matches ("src/**/*.adb", "src/main.adb", "recursive glob must allow zero directory levels");
-      Assert_Matches ("src/**/*.adb", "src/nested/main.adb", "recursive glob must cross slash");
+      --  `**` is only a recursive glob under `:(glob)`; in a plain pathspec
+      --  it is two stars, so `src/**/*.adb` needs a directory between.
+      Assert_Not_Matches ("src/**/*.adb", "src/main.adb", "plain ** does not match zero levels");
+      Assert_Matches ("src/**/*.adb", "src/nested/main.adb", "plain ** crosses a slash");
+      Assert_Matches (":(glob)src/**/*.adb", "src/main.adb",
+                      ":(glob) recursive glob must allow zero directory levels");
+      Assert_Matches (":(glob)src/**/*.adb", "src/nested/main.adb",
+                      ":(glob) recursive glob must cross slash");
    end Recursive_Glob;
 
    procedure Magic_Forms

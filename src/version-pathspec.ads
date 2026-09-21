@@ -38,6 +38,10 @@ package Version.Pathspec is
       Icase            : Boolean := False;
       Directory_Prefix : Boolean := False;
       Has_Slash        : Boolean := False;
+      --  `:(glob)` was given: `*` and `?` stop at '/' and `**` crosses it
+      --  (git's WM_PATHNAME).  A wildcard in a plain pathspec matches
+      --  across '/' -- `*.c` finds `sub/x.c` and `d*` does not.
+      Pathname_Glob    : Boolean := False;
       Attribute_Mode   : Attribute_Match_Mode := Attribute_Ignored;
       Attribute_Name   : Unbounded_String;
       Attribute_Value  : Unbounded_String;

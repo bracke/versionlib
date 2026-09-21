@@ -478,6 +478,7 @@ package body Version.Pathspec is
                Excluded         => Excluded,
                Top_Anchored     => Top_Anchored,
                Icase            => Icase,
+               Pathname_Glob    => False,
                Directory_Prefix => False,
                Has_Slash        => False,
                Attribute_Mode   => Attribute_Mode,
@@ -497,6 +498,7 @@ package body Version.Pathspec is
             Excluded         => Excluded,
             Top_Anchored     => Top_Anchored,
             Icase            => Icase,
+            Pathname_Glob    => Explicit_Mode and then Mode = Glob_Mode,
             Directory_Prefix => Directory_Prefix,
             Has_Slash        => Contains_Slash (Pattern),
             Attribute_Mode   => Attribute_Mode,
@@ -651,6 +653,102 @@ package body Version.Pathspec is
       end if;
       return Glob_Match_From (Pattern, Pattern'First, Text, Text'First);
    end Glob_Match;
+
+   --  git's wildmatch without WM_PATHNAME, which is what a plain pathspec
+   --  gets: `*` and `?` match '/' too, so `*.c` reaches into
+   --  subdirectories; bracket expressions and `\` escapes as usual.
+   function Wild_Match (Pattern, Text : String) return Boolean is
+      function M (P, T : Natural) return Boolean is
+      begin
+         if P > Pattern'Last then
+            return T > Text'Last;
+         end if;
+         case Pattern (P) is
+            when '*' =>
+               declare
+                  Q : Natural := P;
+               begin
+                  while Q <= Pattern'Last and then Pattern (Q) = '*' loop
+                     Q := Q + 1;
+                  end loop;
+                  if Q > Pattern'Last then
+                     return True;
+                  end if;
+                  for K in T .. Text'Last + 1 loop
+                     if M (Q, K) then
+                        return True;
+                     end if;
+                  end loop;
+                  return False;
+               end;
+            when '?' =>
+               return T <= Text'Last and then M (P + 1, T + 1);
+            when '[' =>
+               if T > Text'Last then
+                  return False;
+               end if;
+               declare
+                  Q       : Natural := P + 1;
+                  Negate  : Boolean := False;
+                  Matched : Boolean := False;
+                  C       : constant Character := Text (T);
+               begin
+                  if Q <= Pattern'Last
+                    and then (Pattern (Q) = '!' or else Pattern (Q) = '^')
+                  then
+                     Negate := True;
+                     Q := Q + 1;
+                  end if;
+                  if Q <= Pattern'Last and then Pattern (Q) = ']' then
+                     Matched := C = ']';
+                     Q := Q + 1;
+                  end if;
+                  while Q <= Pattern'Last and then Pattern (Q) /= ']' loop
+                     declare
+                        Lo : Character := Pattern (Q);
+                     begin
+                        if Lo = '\' and then Q < Pattern'Last then
+                           Q := Q + 1;
+                           Lo := Pattern (Q);
+                        end if;
+                        if Q + 2 <= Pattern'Last and then Pattern (Q + 1) = '-'
+                          and then Pattern (Q + 2) /= ']'
+                        then
+                           if C >= Lo and then C <= Pattern (Q + 2) then
+                              Matched := True;
+                           end if;
+                           Q := Q + 3;
+                        else
+                           if C = Lo then
+                              Matched := True;
+                           end if;
+                           Q := Q + 1;
+                        end if;
+                     end;
+                  end loop;
+                  if Q > Pattern'Last then
+                     return C = '[' and then M (P + 1, T + 1);
+                  end if;
+                  if Matched = Negate then
+                     return False;
+                  end if;
+                  return M (Q + 1, T + 1);
+               end;
+            when '\' =>
+               if P < Pattern'Last then
+                  return T <= Text'Last and then Text (T) = Pattern (P + 1)
+                    and then M (P + 2, T + 1);
+               end if;
+               return T <= Text'Last and then Text (T) = '\'
+                 and then M (P + 1, T + 1);
+            when others =>
+               return T <= Text'Last and then Text (T) = Pattern (P)
+                 and then M (P + 1, T + 1);
+         end case;
+      end M;
+   begin
+      return M (Pattern'First, Text'First);
+   end Wild_Match;
 
    function Attribute_Pattern_Matches
      (Pattern : String;
@@ -882,13 +980,10 @@ package body Version.Pathspec is
             else
               (if Item.Directory_Prefix then
                   Starts_With_Directory (Match_Path, Pattern)
-               elsif not Item.Has_Slash then
-                  (if Item.Top_Anchored then
-                      Glob_Match (Pattern, Match_Path)
-                   else
-                      Glob_Match (Pattern, Basename (Match_Path)))
+               elsif Item.Pathname_Glob then
+                  Glob_Match (Pattern, Match_Path)
                else
-                  Glob_Match (Pattern, Match_Path)));
+                  Wild_Match (Pattern, Match_Path)));
       begin
          return Path_Matches and then Attribute_Requirement_Matches (Item, Path);
       end;
