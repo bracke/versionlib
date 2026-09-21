@@ -186,6 +186,8 @@ package body Version.Trailers is
       --  from there on is the patch, so trailers belong before it, not after
       --  the diff.
       Tail : Line_Vectors.Vector;
+      --  The trailing comment/blank run, emitted after the trailers.
+      Ignored : Line_Vectors.Vector;
    begin
       if not Only_Input then
          for Tr of Trailers loop
@@ -204,6 +206,33 @@ package body Version.Trailers is
             exit;
          end if;
       end loop;
+
+      --  git's ignored_log_message_bytes: the final run of comment and
+      --  empty lines (an editor template, trailing blank lines) is not part
+      --  of the message -- trailers go before it and it is kept verbatim.
+      --  git's run detection cannot start at the very first line (its
+      --  "boc" of 0 reads as unset), so neither does this.
+      declare
+         Run_Start : Natural := 0;
+      begin
+         for I in Lines.First_Index .. Lines.Last_Index loop
+            if Lines (I) = "" or else Is_Comment (Lines (I)) then
+               if Run_Start = 0 and then I > Lines.First_Index then
+                  Run_Start := I;
+               end if;
+            else
+               Run_Start := 0;
+            end if;
+         end loop;
+         if Run_Start > 0 then
+            for J in Run_Start .. Lines.Last_Index loop
+               Ignored.Append (Lines (J));
+            end loop;
+            while Lines.Last_Index >= Run_Start loop
+               Lines.Delete_Last;
+            end loop;
+         end if;
+      end;
 
       Last := Lines.Last_Index;
       while Last >= 1 and then Is_Blank (Lines (Last)) loop
@@ -225,6 +254,9 @@ package body Version.Trailers is
             end loop;
          end if;
 
+         for L of Ignored loop
+            Emit (L);
+         end loop;
          for L of Tail loop
             Emit (L);
          end loop;
@@ -249,7 +281,7 @@ package body Version.Trailers is
 
          --  Block lines dropped by `--if-exists replace`.
          Removed : array (1 .. Lines.Last_Index) of Boolean :=
-           (others => False);
+           [others => False];
 
          function Block_Has_Token (Tok : String) return Boolean is
          begin
@@ -429,6 +461,9 @@ package body Version.Trailers is
          end if;
       end;
 
+      for L of Ignored loop
+         Emit (L);
+      end loop;
       for L of Tail loop
          Emit (L);
       end loop;

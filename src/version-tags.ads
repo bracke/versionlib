@@ -2,6 +2,7 @@ with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Version.Objects;
+with Version.Repository;
 
 package Version.Tags is
 
@@ -45,6 +46,18 @@ package Version.Tags is
       Message     : String;
       Signing_Key : String := "");
    --  Signing_Key non-empty produces a GPG-signed tag (git `tag -s`/`-u`).
+
+   procedure Set_Tag_Ref
+     (Repo           : Version.Repository.Repository_Handle;
+      Name           : String;
+      Object_Id      : Version.Objects.Hex_Object_Id;
+      Expected_Old   : String := "";
+      Reflog_Message : String := "");
+   --  Point refs/tags/Name at Object_Id (a lightweight tag, or a tag
+   --  object written with Version.Write.Write_Tag). Expected_Old "" means
+   --  the tag must not exist yet; otherwise it must hold that id (git's
+   --  `tag -f` replacing the previous target). A non-empty Reflog_Message
+   --  records the update in the tag's reflog (`--create-reflog`).
 
    procedure Delete_Tag
      (Name : String);
@@ -95,6 +108,10 @@ package Version.Tags is
    --  lightweight one. Lines after the first carry git's four-space
    --  continuation indent (blank ones included, as %(contents:lines=N) does);
    --  the result has no trailing newline.
+
+   function Tag_Message (Text : String) return String;
+   --  The message of a tag object's raw Text: everything after the blank
+   --  line that ends the headers (the signature, if any, included).
 
    function Tag_Object_Text
      (Name : String)

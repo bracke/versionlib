@@ -94,9 +94,16 @@ package Version.Write is
       Message     : String;
       Signing_Key : String := "")
       return Version.Objects.Hex_Object_Id;
-   --  When Signing_Key is non-empty the tag payload is signed with gpg and the
-   --  ASCII-armored PGP signature is appended after the message (git `tag -s`
-   --  / `tag -u <key>`; "default" uses the default gpg key).
+   --  Message is stored verbatim (callers newline-terminate a cleaned-up
+   --  message, as git does). When Signing_Key is non-empty the tag payload is
+   --  signed with gpg and the ASCII-armored PGP signature is appended after
+   --  the message (git `tag -s` / `tag -u <key>`; "default" uses the default
+   --  gpg key).
+
+   function Last_Sign_Error return String;
+   --  What gpg wrote (stderr and status lines) when the last signing
+   --  attempt failed with "gpg failed to sign the data:" -- git prints it
+   --  after that line.
 
    type Sign_Choice is (Sign_From_Config, Sign_Force, Sign_Disable);
    --  How a new commit's OpenPGP signature is decided:

@@ -7,10 +7,10 @@ with Version.Object_Cache;
 with Version.History;
 with Version.Refs;
 with Version.Reftable;
-with Version.Repository;
 with Version.Packed_Refs;
 with Version.Ref_Names;
 with Version.Ref_Transaction;
+with Version.Reflog;
 with Version.Revisions;
 with Version.Transport.Local;
 with Version.Write;
@@ -108,6 +108,39 @@ package body Version.Tags is
          raise;
    end Write_New_Tag_Ref;
 
+   procedure Set_Tag_Ref
+     (Repo           : Version.Repository.Repository_Handle;
+      Name           : String;
+      Object_Id      : Version.Objects.Hex_Object_Id;
+      Expected_Old   : String := "";
+      Reflog_Message : String := "")
+   is
+      Ref     : constant String := "refs/tags/" & Name;
+      Zero_Id : constant String := "0000000000000000000000000000000000000000";
+      Tx      : Version.Ref_Transaction.Transaction;
+   begin
+      if not Is_Valid_Tag_Name (Name) then
+         raise Ada.IO_Exceptions.Data_Error with Invalid_Tag_Name_Diagnostic (Name);
+      end if;
+      Version.Ref_Transaction.Start (Tx, Repo);
+      Version.Ref_Transaction.Add_Update
+        (Item         => Tx,
+         Ref_Name     => Ref,
+         New_Id       => Object_Id,
+         Expected_Old => (if Expected_Old = "" then Zero_Id else Expected_Old));
+      Version.Ref_Transaction.Commit (Tx);
+      if Reflog_Message'Length > 0 then
+         Version.Reflog.Append
+           (Repo, Ref,
+            (if Expected_Old = "" then Zero_Id else Expected_Old),
+            To_String (Object_Id), Reflog_Message);
+      end if;
+   exception
+      when others =>
+         Version.Ref_Transaction.Cancel (Tx);
+         raise;
+   end Set_Tag_Ref;
+
    procedure Create_Tag
      (Name     : String;
       Revision : String)
@@ -168,7 +201,7 @@ package body Version.Tags is
              (Repo        => Repo,
               Target_Id   => Target_Id,
               Tag_Name    => Name,
-              Message     => Message,
+              Message     => Message & Character'Val (10),
               Signing_Key => Signing_Key);
       begin
          Write_New_Tag_Ref
@@ -203,7 +236,7 @@ package body Version.Tags is
              (Repo        => Repo,
               Target_Id   => Version.Objects.To_Object_Id (Commit_Id),
               Tag_Name    => Name,
-              Message     => Message,
+              Message     => Message & Character'Val (10),
               Signing_Key => Signing_Key);
       begin
          Write_New_Tag_Ref

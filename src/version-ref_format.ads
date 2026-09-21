@@ -1,4 +1,5 @@
 with Ada.Containers.Indefinite_Vectors;
+with Ada.Strings.Unbounded;
 with Version.Repository;
 
 package Version.Ref_Format is
@@ -27,6 +28,44 @@ package Version.Ref_Format is
    --  means "all refs". Sort_Key empty means ascending refname. Count 0 means
    --  unlimited. Raises Constraint_Error on an unknown %(atom) or --sort key,
    --  matching git's fatal diagnostics semantics at the CLI boundary.
+
+   --  git's struct ref_filter: the selection `tag -l`, `branch -l` and
+   --  `for-each-ref` share beyond the name patterns. The commit lists hold
+   --  full hex ids; a ref that does not peel to a commit never passes a
+   --  commit filter, as in git.
+   type Ref_Filter is record
+      With_Commits     : String_Vectors.Vector;   --  --contains: any of
+      No_Commits       : String_Vectors.Vector;   --  --no-contains: none of
+      Reachable_From   : String_Vectors.Vector;   --  --merged: into any of
+      Unreachable_From : String_Vectors.Vector;   --  --no-merged: into none
+      Points_At        : String_Vectors.Vector;   --  the ref or its peel
+      Ignore_Case      : Boolean := False;        --  patterns and sorting
+      Match_As_Path    : Boolean := True;
+      --  True: for-each-ref's rule (a literal pattern is a prefix at a
+      --  '/' boundary, a glob is path-aware). False: git's match_pattern for
+      --  `tag`/`branch` -- wildmatch of the whole pattern against the name
+      --  with its refs/tags/, refs/heads/, refs/remotes/ or refs/ prefix
+      --  dropped, `*` crossing '/'.
+      Omit_Empty       : Boolean := False;        --  drop empty lines
+      Use_Color        : Boolean := False;        --  expand %(color:...)
+      Under            : Ada.Strings.Unbounded.Unbounded_String;
+      --  Only refs with this prefix take part ("refs/tags/" for `tag`);
+      --  empty means every ref.
+   end record;
+
+   function For_Each_Ref
+     (Repo      : Version.Repository.Repository_Handle;
+      Patterns  : String_Vectors.Vector;
+      Format    : String;
+      Sort_Keys : String_Vectors.Vector;
+      Filter    : Ref_Filter;
+      Count     : Natural := 0;
+      Quote     : String := "")
+      return String_Vectors.Vector;
+   --  As above, with git's full selection and several sort keys: the LAST
+   --  key given is the primary one (git prepends each --sort), a leading '-'
+   --  reverses a key, refname breaks the final tie. Empty Sort_Keys means
+   --  ascending refname.
 
    function Git_Date
      (Ident_Value : String;

@@ -14,7 +14,6 @@ with Version.Hash;
 with Version.Refs;
 with Version.Config;
 with Version.Reflog;
-with Version.Path_Safety;
 with Version.Ref_Names;
 with Version.Ref_Transaction;
 with Version.Hooks;
@@ -618,6 +617,21 @@ package body Version.Write is
       end loop;
    end Require_Safe_Signing_Key;
 
+   Sign_Error_Output : Unbounded_String;
+
+   function Last_Sign_Error return String is (To_String (Sign_Error_Output));
+
+   --  The committer's "Name <email>" (git's IDENT_NO_DATE form).
+   function Committer_Ident
+     (Repo : Version.Repository.Repository_Handle) return String
+   is
+      Sig : constant String := Version.Config.Committer_Signature (Repo);
+      P   : constant Natural :=
+        Ada.Strings.Fixed.Index (Sig, ">", Ada.Strings.Backward);
+   begin
+      return (if P = 0 then Sig else Sig (Sig'First .. P));
+   end Committer_Ident;
+
    function Sign_Commit_Payload
      (Repo        : Version.Repository.Repository_Handle;
       Payload     : String;
@@ -627,11 +641,20 @@ package body Version.Write is
         Join (Version.Repository.Git_Dir (Repo), "VERSION_SIGN_INPUT");
       Output_Path : constant String :=
         Join (Version.Repository.Git_Dir (Repo), "VERSION_SIGN_SIGNATURE");
-      Use_Key : constant Boolean :=
-        Signing_Key'Length > 0 and then Signing_Key /= "default";
-      Arg_Count : constant Positive := (if Use_Key then 7 else 5);
+      Error_Path : constant String :=
+        Join (Version.Repository.Git_Dir (Repo), "VERSION_SIGN_STDERR");
+      --  git's get_signing_key: user.signingKey, else the committer
+      --  identity ("Name <email>") -- what "default" means here.
+      Key : constant String :=
+        (if Signing_Key'Length > 0 and then Signing_Key /= "default"
+         then Signing_Key
+         elsif Version.Config.Has_Key (Repo, "user.signingkey")
+         then Version.Config.Get_Value (Repo, "user.signingkey")
+         else Committer_Ident (Repo));
+      Arg_Count : constant Positive := 9;
       Args : GNAT.OS_Lib.Argument_List (1 .. Arg_Count) := [others => null];
       Status : Integer;
+      Success : Boolean;
       Next : Positive := Args'First;
 
       procedure Add_Arg (Value : String) is
@@ -654,12 +677,14 @@ package body Version.Write is
       Version.Files.Delete_File_If_Exists (Output_Path);
       Version.Files.Write_Binary_File_Atomic (Path => Input_Path, Content => Payload);
 
-      Add_Arg ("--armor");
-      Add_Arg ("--detach-sign");
-      if Use_Key then
-         Add_Arg ("--local-user");
-         Add_Arg (Signing_Key);
-      end if;
+      --  git's invocation: `gpg --status-fd=2 -bsau <key>`, its stderr
+      --  (status lines included) kept for the failure report.
+      Add_Arg ("--status-fd=2");
+      Add_Arg ("-b");
+      Add_Arg ("-s");
+      Add_Arg ("-a");
+      Add_Arg ("-u");
+      Add_Arg (Key);
       Add_Arg ("--output");
       Add_Arg (Output_Path);
       Add_Arg (Input_Path);
@@ -672,18 +697,36 @@ package body Version.Write is
             Free_Args;
             Version.Files.Delete_File_If_Exists (Input_Path);
             Version.Files.Delete_File_If_Exists (Output_Path);
-            raise Ada.IO_Exceptions.Data_Error with "cannot sign commit: gpg not found";
+            Sign_Error_Output := To_Unbounded_String ("(no gpg output)");
+            raise Ada.IO_Exceptions.Data_Error with
+              "gpg failed to sign the data:";
          end if;
-         Status := GNAT.OS_Lib.Spawn (Program_Name => Program.all, Args => Args);
+         GNAT.OS_Lib.Spawn
+           (Program_Name => Program.all, Args => Args,
+            Output_File  => Error_Path, Success => Success,
+            Return_Code  => Status, Err_To_Out => True);
          GNAT.OS_Lib.Free (Program);
       end;
       Free_Args;
 
-      if Status /= 0 then
-         Version.Files.Delete_File_If_Exists (Input_Path);
-         Version.Files.Delete_File_If_Exists (Output_Path);
-         raise Ada.IO_Exceptions.Data_Error with "cannot sign commit: gpg failed";
+      if not Success or else Status /= 0 then
+         declare
+            Captured : constant String :=
+              (if Ada.Directories.Exists (Error_Path)
+               then Version.Files.Read_Binary_File (Error_Path) else "");
+         begin
+            Version.Files.Delete_File_If_Exists (Input_Path);
+            Version.Files.Delete_File_If_Exists (Output_Path);
+            Version.Files.Delete_File_If_Exists (Error_Path);
+            --  git's sign_buffer error; gpg's output is kept aside (an
+            --  exception message would truncate it).
+            Sign_Error_Output := To_Unbounded_String
+              (if Captured'Length > 0 then Captured else "(no gpg output)");
+            raise Ada.IO_Exceptions.Data_Error with
+              "gpg failed to sign the data:";
+         end;
       end if;
+      Version.Files.Delete_File_If_Exists (Error_Path);
 
       declare
          Signature : constant String := Version.Files.Read_Binary_File (Output_Path);
@@ -697,6 +740,7 @@ package body Version.Write is
          Free_Args;
          Version.Files.Delete_File_If_Exists (Input_Path);
          Version.Files.Delete_File_If_Exists (Output_Path);
+         Version.Files.Delete_File_If_Exists (Error_Path);
          raise;
    end Sign_Commit_Payload;
 
@@ -821,9 +865,11 @@ package body Version.Write is
          "tagger " & Version.Config.Committer_Signature (Repo)
          & Character'Val (10));
 
+      --  The message is stored verbatim, as git's create_tag does: a
+      --  stripspaced message ends in one newline, a --cleanup=verbatim one
+      --  in whatever it was given.
       Append (Content, Character'Val (10));
       Append (Content, Message);
-      Append (Content, Character'Val (10));
 
       --  Signed tags append the ASCII-armored PGP signature (over everything
       --  above) after the message, matching git `tag -s`.

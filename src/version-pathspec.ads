@@ -107,4 +107,9 @@ package Version.Pathspec is
      (Item : Pathspec_Item)
       return Boolean;
 
+   function Wild_Match (Pattern, Text : String) return Boolean;
+   --  git's wildmatch without WM_PATHNAME: `*` and `?` cross '/', bracket
+   --  expressions and `\` escapes as usual. What a plain pathspec, and a
+   --  `tag -l`/`branch -l` pattern, are matched with.
+
 end Version.Pathspec;

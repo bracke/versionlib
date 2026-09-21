@@ -11,6 +11,9 @@ with Version.Refs;
 with Version.Tracking;
 with Version.Reftable;
 with Version.Packed_Refs;
+with Version.History;
+with Version.Pathspec;
+with Version.Color;
 
 package body Version.Ref_Format is
 
@@ -613,12 +616,13 @@ package body Version.Ref_Format is
    ----------------------------------------------------------------------
 
    function Expand
-     (Repo   : Version.Repository.Repository_Handle;
-      Format : String;
-      Ref    : String;
-      Id     : String;
-      Head   : String;
-      Quote  : String := "")
+     (Repo      : Version.Repository.Repository_Handle;
+      Format    : String;
+      Ref       : String;
+      Id        : String;
+      Head      : String;
+      Quote     : String := "";
+      Use_Color : Boolean := False)
       return String
    is
       Result : Unbounded_String;
@@ -773,7 +777,7 @@ package body Version.Ref_Format is
                return Expand
                  (Repo,
                   "%(" & Atom (Atom'First + 1 .. Atom'Last) & ")",
-                  Ref, Peeled, Head);
+                  Ref, Peeled, Head, Use_Color => Use_Color);
             end;
          end if;
 
@@ -950,6 +954,42 @@ package body Version.Ref_Format is
                return Body_Of (Content);
             elsif Arg = "" then
                return Full_Message (Content);
+            elsif Starts_With (Arg, "lines=") then
+               --  git's append_lines: the first N lines of the message,
+               --  the ones after the first indented by four spaces, no
+               --  trailing newline (what `tag -n<N>` shows).
+               declare
+                  N    : constant Natural :=
+                    Natural'Value (Arg (Arg'First + 6 .. Arg'Last));
+                  Msg  : constant String := Full_Message (Content);
+                  Out_Text : Unbounded_String;
+                  Pos  : Natural := Msg'First;
+                  Done : Natural := 0;
+               begin
+                  while Done < N and then Pos <= Msg'Last loop
+                     declare
+                        Stop : Natural := Pos;
+                     begin
+                        while Stop <= Msg'Last
+                          and then Msg (Stop) /= Character'Val (10)
+                        loop
+                           Stop := Stop + 1;
+                        end loop;
+                        if Done > 0 then
+                           Append (Out_Text, Character'Val (10) & "    ");
+                        end if;
+                        Append (Out_Text, Msg (Pos .. Stop - 1));
+                        Done := Done + 1;
+                        exit when Stop > Msg'Last;
+                        Pos := Stop + 1;
+                     end;
+                  end loop;
+                  return To_String (Out_Text);
+               exception
+                  when Constraint_Error =>
+                     raise Ada.IO_Exceptions.Data_Error with
+                       "unrecognized %(contents) argument: " & Arg;
+               end;
             else
                return Full_Message (Content);
             end if;
@@ -960,8 +1000,11 @@ package body Version.Ref_Format is
          elsif Head_A = "creatordate" then
             return Git_Date (Ident_Date (Creator_Line (Content)), Arg);
          elsif Head_A = "color" then
-            --  Color is suppressed when the output is not a terminal, which
-            --  is always the case here, so every %(color:...) is empty.
+            --  %(color:<spec>) is honoured only under --color[=always];
+            --  piped output otherwise gets no escapes, as git decides.
+            if Use_Color then
+               return Version.Color.To_Ansi (Arg);
+            end if;
             return "";
          elsif Head_A = "symref" then
             --  A symbolic ref (e.g. refs/remotes/origin/HEAD) stores
@@ -1498,13 +1541,13 @@ package body Version.Ref_Format is
    ----------------------------------------------------------------------
 
    function For_Each_Ref
-     (Repo        : Version.Repository.Repository_Handle;
-      Patterns    : String_Vectors.Vector;
-      Format      : String := "";
-      Sort_Key    : String := "";
-      Count       : Natural := 0;
-      Ignore_Case : Boolean := False;
-      Quote       : String := "")
+     (Repo      : Version.Repository.Repository_Handle;
+      Patterns  : String_Vectors.Vector;
+      Format    : String;
+      Sort_Keys : String_Vectors.Vector;
+      Filter    : Ref_Filter;
+      Count     : Natural := 0;
+      Quote     : String := "")
       return String_Vectors.Vector
    is
       Rows     : Row_Vectors.Vector := Enumerate (Repo);
@@ -1521,76 +1564,294 @@ package body Version.Ref_Format is
         (if Format = "" then "%(objectname) %(objecttype)" & HT & "%(refname)"
          else Format);
       Result   : String_Vectors.Vector;
+      Icase    : constant Boolean := Filter.Ignore_Case;
 
-      --  Sort key handling: an optional leading '-' means descending.
-      Descending : constant Boolean :=
-        Sort_Key'Length > 0 and then Sort_Key (Sort_Key'First) = '-';
-      Key        : constant String :=
-        (if Sort_Key = "" then "refname"
-         elsif Descending then Sort_Key (Sort_Key'First + 1 .. Sort_Key'Last)
-         else Sort_Key);
-      Numeric    : constant Boolean :=
-        Key = "objectsize" or else Is_Date_Key (Key);
-      Version_Sort : constant Boolean :=
-        Key = "version:refname" or else Key = "v:refname";
+      --  One sort key, git's ref_sorting: the atom, its direction and how
+      --  its values compare.
+      type Sort_Spec is record
+         Key        : Unbounded_String;
+         Descending : Boolean := False;
+         Numeric    : Boolean := False;
+         By_Version : Boolean := False;
+      end record;
+      package Spec_Vectors is new Ada.Containers.Vectors (Positive, Sort_Spec);
+      Specs : Spec_Vectors.Vector;
+
+      function Fold (S : String) return String is
+        (if Icase then Ada.Characters.Handling.To_Lower (S) else S);
 
       function Less (L, R : Ref_Row) return Boolean is
-         LS : constant String := Sort_Field (Repo, Key, L);
-         RS : constant String := Sort_Field (Repo, Key, R);
       begin
-         if Version_Sort then
-            if LS /= RS then
-               return (if Descending then Version_Less (RS, LS)
-                       else Version_Less (LS, RS));
-            end if;
-         elsif Numeric then
+         for Spec of Specs loop
             declare
-               LN : constant Long_Long_Integer :=
-                 (if LS = "" then 0 else Long_Long_Integer'Value (LS));
-               RN : constant Long_Long_Integer :=
-                 (if RS = "" then 0 else Long_Long_Integer'Value (RS));
+               Key : constant String := To_String (Spec.Key);
+               LS  : constant String := Sort_Field (Repo, Key, L);
+               RS  : constant String := Sort_Field (Repo, Key, R);
             begin
-               if LN /= RN then
-                  return (if Descending then LN > RN else LN < RN);
+               if Spec.By_Version then
+                  if LS /= RS then
+                     return (if Spec.Descending then Version_Less (RS, LS)
+                             else Version_Less (LS, RS));
+                  end if;
+               elsif Spec.Numeric then
+                  declare
+                     LN : constant Long_Long_Integer :=
+                       (if LS = "" then 0 else Long_Long_Integer'Value (LS));
+                     RN : constant Long_Long_Integer :=
+                       (if RS = "" then 0 else Long_Long_Integer'Value (RS));
+                  begin
+                     if LN /= RN then
+                        return (if Spec.Descending then LN > RN else LN < RN);
+                     end if;
+                  end;
+               else
+                  declare
+                     LF_S : constant String := Fold (LS);
+                     RF_S : constant String := Fold (RS);
+                  begin
+                     if LF_S /= RF_S then
+                        return (if Spec.Descending then LF_S > RF_S
+                                else LF_S < RF_S);
+                     end if;
+                  end;
                end if;
             end;
-         else
-            if LS /= RS then
-               return (if Descending then LS > RS else LS < RS);
-            end if;
-         end if;
-         --  Stable tie-break on refname (git's final tiebreak).
-         return To_String (L.Name) < To_String (R.Name);
+         end loop;
+         --  git's final tiebreak: the refname, ascending.
+         return Fold (To_String (L.Name)) < Fold (To_String (R.Name));
       end Less;
 
       package Row_Sorting is
         new Row_Vectors.Generic_Sorting ("<" => Less);
-   begin
-      for R of Rows loop
-         declare
-            Name : constant String := To_String (R.Name);
-            Hit  : Boolean;
+
+      --  git's match_pattern: the name with its well-known prefix dropped,
+      --  wildmatched (no WM_PATHNAME) against every pattern.
+      function Matches_Short (Name : String) return Boolean is
+         function Stripped return String is
          begin
-            if Ignore_Case and then not Patterns.Is_Empty then
-               --  --ignore-case: compare a lowercased ref against lowercased
-               --  patterns, so `refs/heads/MAIN` matches `refs/heads/main`.
+            if Starts_With (Name, "refs/tags/") then
+               return Name (Name'First + 10 .. Name'Last);
+            elsif Starts_With (Name, "refs/heads/") then
+               return Name (Name'First + 11 .. Name'Last);
+            elsif Starts_With (Name, "refs/remotes/") then
+               return Name (Name'First + 13 .. Name'Last);
+            elsif Starts_With (Name, "refs/") then
+               return Name (Name'First + 5 .. Name'Last);
+            end if;
+            return Name;
+         end Stripped;
+         Short : constant String := Fold (Stripped);
+      begin
+         if Patterns.Is_Empty then
+            return True;
+         end if;
+         for P of Patterns loop
+            if Version.Pathspec.Wild_Match (Fold (P), Short) then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Matches_Short;
+
+      --  The commit a ref peels to ("" when it does not name one).
+      function Commit_Of (Id : String) return String is
+         use type Version.Objects.Object_Kind;
+         Cur : Unbounded_String := To_Unbounded_String (Id);
+      begin
+         loop
+            declare
+               Obj : constant Version.Objects.Git_Object :=
+                 Version.Objects.Read_Object
+                   (Repo, Version.Objects.To_Object_Id (To_String (Cur)));
+            begin
+               if Version.Objects.Kind (Obj) = Version.Objects.Commit_Object then
+                  return To_String (Cur);
+               elsif Version.Objects.Kind (Obj) = Version.Objects.Tag_Object then
+                  declare
+                     Target : constant String :=
+                       Line_Value (Version.Objects.Content (Obj), "object ");
+                  begin
+                     if Target'Length = 0 then
+                        return "";
+                     end if;
+                     Cur := To_Unbounded_String (Target);
+                  end;
+               else
+                  return "";
+               end if;
+            end;
+         end loop;
+      exception
+         when others =>
+            return "";
+      end Commit_Of;
+
+      --  The object a ref peels to, tags followed to the end.
+      function Peeled_Of (Id : String) return String is
+         use type Version.Objects.Object_Kind;
+         Cur : Unbounded_String := To_Unbounded_String (Id);
+      begin
+         loop
+            declare
+               Obj : constant Version.Objects.Git_Object :=
+                 Version.Objects.Read_Object
+                   (Repo, Version.Objects.To_Object_Id (To_String (Cur)));
+            begin
+               exit when Version.Objects.Kind (Obj) /= Version.Objects.Tag_Object;
+               declare
+                  Target : constant String :=
+                    Line_Value (Version.Objects.Content (Obj), "object ");
+               begin
+                  exit when Target'Length = 0;
+                  Cur := To_Unbounded_String (Target);
+               end;
+            end;
+         end loop;
+         return To_String (Cur);
+      exception
+         when others =>
+            return To_String (Cur);
+      end Peeled_Of;
+
+      --  Reachability: Commit contains any of List (git's commit_contains),
+      --  or is reachable from any of List (git's reach_filter).
+      function Contains_Any (Commit : String; List : String_Vectors.Vector)
+        return Boolean is
+      begin
+         for C of List loop
+            if Version.History.Is_Ancestor
+                 (Repo, Version.Objects.To_Object_Id (C),
+                  Version.Objects.To_Object_Id (Commit))
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Contains_Any;
+
+      function Reached_From_Any (Commit : String; List : String_Vectors.Vector)
+        return Boolean is
+      begin
+         for C of List loop
+            if Version.History.Is_Ancestor
+                 (Repo, Version.Objects.To_Object_Id (Commit),
+                  Version.Objects.To_Object_Id (C))
+            then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end Reached_From_Any;
+
+      Need_Commit : constant Boolean :=
+        not Filter.With_Commits.Is_Empty or else not Filter.No_Commits.Is_Empty
+        or else not Filter.Reachable_From.Is_Empty
+        or else not Filter.Unreachable_From.Is_Empty;
+
+      function Keep (R : Ref_Row) return Boolean is
+         Name : constant String := To_String (R.Name);
+         Id   : constant String := To_String (R.Id);
+      begin
+         if Length (Filter.Under) > 0
+           and then not Starts_With (Name, To_String (Filter.Under))
+         then
+            return False;
+         end if;
+         if Filter.Match_As_Path then
+            if Icase and then not Patterns.Is_Empty then
                declare
                   Folded : String_Vectors.Vector;
                begin
                   for P of Patterns loop
                      Folded.Append (String'(Ada.Characters.Handling.To_Lower (P)));
                   end loop;
-                  Hit := Matches_Any
-                    (Folded, Ada.Characters.Handling.To_Lower (Name));
+                  if not Matches_Any
+                           (Folded, Ada.Characters.Handling.To_Lower (Name))
+                  then
+                     return False;
+                  end if;
                end;
-            else
-               Hit := Matches_Any (Patterns, Name);
+            elsif not Matches_Any (Patterns, Name) then
+               return False;
             end if;
+         elsif not Matches_Short (Name) then
+            return False;
+         end if;
 
-            if Hit then
-               Filtered.Append (R);
-            end if;
+         if not Filter.Points_At.Is_Empty then
+            declare
+               Peeled : constant String := Peeled_Of (Id);
+               Hit    : Boolean := False;
+            begin
+               for P of Filter.Points_At loop
+                  if P = Id or else P = Peeled then
+                     Hit := True;
+                  end if;
+               end loop;
+               if not Hit then
+                  return False;
+               end if;
+            end;
+         end if;
+
+         if Need_Commit then
+            declare
+               Commit : constant String := Commit_Of (Id);
+            begin
+               if Commit'Length = 0 then
+                  return False;
+               end if;
+               if not Filter.With_Commits.Is_Empty
+                 and then not Contains_Any (Commit, Filter.With_Commits)
+               then
+                  return False;
+               end if;
+               if not Filter.No_Commits.Is_Empty
+                 and then Contains_Any (Commit, Filter.No_Commits)
+               then
+                  return False;
+               end if;
+               if not Filter.Reachable_From.Is_Empty
+                 and then not Reached_From_Any (Commit, Filter.Reachable_From)
+               then
+                  return False;
+               end if;
+               if not Filter.Unreachable_From.Is_Empty
+                 and then Reached_From_Any (Commit, Filter.Unreachable_From)
+               then
+                  return False;
+               end if;
+            end;
+         end if;
+         return True;
+      end Keep;
+   begin
+      --  Sort keys: git prepends each --sort, so the last one leads.
+      for K of reverse Sort_Keys loop
+         declare
+            Descending : constant Boolean :=
+              K'Length > 0 and then K (K'First) = '-';
+            Key : constant String :=
+              (if Descending then K (K'First + 1 .. K'Last) else K);
+         begin
+            Specs.Append
+              (Sort_Spec'
+                 (Key        => To_Unbounded_String (Key),
+                  Descending => Descending,
+                  Numeric    => Key = "objectsize" or else Is_Date_Key (Key),
+                  By_Version => Key = "version:refname"
+                                or else Key = "v:refname"));
          end;
+      end loop;
+      if Specs.Is_Empty then
+         Specs.Append
+           (Sort_Spec'(Key => To_Unbounded_String ("refname"), others => <>));
+      end if;
+
+      for R of Rows loop
+         if Keep (R) then
+            Filtered.Append (R);
+         end if;
       end loop;
 
       Rows := Filtered;
@@ -1601,14 +1862,40 @@ package body Version.Ref_Format is
       begin
          for R of Rows loop
             exit when Count /= 0 and then Emitted >= Count;
-            Result.Append
-              (Expand (Repo, Tmpl, To_String (R.Name), To_String (R.Id),
-                       Head, Quote));
-            Emitted := Emitted + 1;
+            declare
+               Line : constant String :=
+                 Expand (Repo, Tmpl, To_String (R.Name), To_String (R.Id),
+                         Head, Quote, Filter.Use_Color);
+            begin
+               if not (Filter.Omit_Empty and then Line'Length = 0) then
+                  Result.Append (Line);
+                  Emitted := Emitted + 1;
+               end if;
+            end;
          end loop;
       end;
 
       return Result;
+   end For_Each_Ref;
+
+   function For_Each_Ref
+     (Repo        : Version.Repository.Repository_Handle;
+      Patterns    : String_Vectors.Vector;
+      Format      : String := "";
+      Sort_Key    : String := "";
+      Count       : Natural := 0;
+      Ignore_Case : Boolean := False;
+      Quote       : String := "")
+      return String_Vectors.Vector
+   is
+      Keys   : String_Vectors.Vector;
+      Filter : Ref_Filter;
+   begin
+      if Sort_Key /= "" then
+         Keys.Append (Sort_Key);
+      end if;
+      Filter.Ignore_Case := Ignore_Case;
+      return For_Each_Ref (Repo, Patterns, Format, Keys, Filter, Count, Quote);
    end For_Each_Ref;
 
 end Version.Ref_Format;
