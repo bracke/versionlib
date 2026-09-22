@@ -35,6 +35,9 @@ package Version.Log is
       Mark           : Character := ' ';
       Source         : Ada.Strings.Unbounded.Unbounded_String;
       Reflog_Selector : Ada.Strings.Unbounded.Unbounded_String;
+      --  %gd renders the ref the short way ("stash@{0}"), while the oneline
+      --  layout names it as the command line spelled it, as git does.
+      Reflog_Selector_Long : Ada.Strings.Unbounded.Unbounded_String;
       Reflog_Ident    : Ada.Strings.Unbounded.Unbounded_String;
       Reflog_Message  : Ada.Strings.Unbounded.Unbounded_String;
    end record;

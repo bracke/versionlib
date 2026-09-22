@@ -1874,13 +1874,14 @@ package body Version.Stash.Tests is
 
       Version.Stash.Store (Id);
 
+      --  git's do_store_stash default, which it uses in place of the
+      --  stash commit's own subject.
       Assert
-        (Ada.Strings.Fixed.Index
-           (To_String
-              (Version.Stash.List_Entries
-                 (Version.Repository.Open).First_Element.Message),
-            "WIP on") = 1,
-         "stash store default message must use stored stash commit subject");
+        (To_String
+           (Version.Stash.List_Entries
+              (Version.Repository.Open).First_Element.Message)
+         = "Created via ""git stash store"".",
+         "stash store default message must be git's");
       Ada.Directories.Set_Directory (Old_Dir);
    exception
       when others =>

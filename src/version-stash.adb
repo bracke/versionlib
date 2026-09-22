@@ -1,4 +1,5 @@
 with Ada.Containers; use Ada.Containers;
+with Ada.Exceptions;
 with Ada.Directories; use Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
@@ -6,6 +7,8 @@ with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with Version.Branch;
+with Version.Config;
+with Version.Revisions;
 with Version.Files;
 with Version.Filesystem_Guard;
 with Version.Ignore;
@@ -665,6 +668,48 @@ package body Version.Stash is
          for I in Entries.First_Index .. Entries.Last_Index loop
             Delete_Working_File (Repo, To_String (Entries.Element (I).Path));
          end loop;
+
+         --  git's `clean -fd` takes the directories with the files.
+         for I in Entries.First_Index .. Entries.Last_Index loop
+            declare
+               Path : constant String := To_String (Entries.Element (I).Path);
+               Last : Natural := Path'Last;
+            begin
+               while Last >= Path'First loop
+                  if Path (Last) = '/' then
+                     declare
+                        Dir : constant String :=
+                          Join (Version.Repository.Root_Path (Repo),
+                                Path (Path'First .. Last - 1));
+                        Search : Ada.Directories.Search_Type;
+                        Empty  : Boolean := True;
+                     begin
+                        exit when not Ada.Directories.Exists (Dir);
+                        Ada.Directories.Start_Search (Search, Dir, "");
+                        while Ada.Directories.More_Entries (Search) loop
+                           declare
+                              Item : Ada.Directories.Directory_Entry_Type;
+                           begin
+                              Ada.Directories.Get_Next_Entry (Search, Item);
+                              if Ada.Directories.Simple_Name (Item)
+                                 not in "." | ".."
+                              then
+                                 Empty := False;
+                              end if;
+                           end;
+                        end loop;
+                        Ada.Directories.End_Search (Search);
+                        exit when not Empty;
+                        Ada.Directories.Delete_Directory (Dir);
+                     end;
+                  end if;
+                  Last := Last - 1;
+               end loop;
+            exception
+               when others =>
+                  null;   --  a directory we may not remove simply stays
+            end;
+         end loop;
       end if;
    end Remove_Untracked_Files;
 
@@ -975,6 +1020,30 @@ package body Version.Stash is
            Pathspecs         => Pathspecs);
    end Selected_Untracked_For_Stash;
 
+   --  git's stash commit: commit_tree stores the message exactly as given,
+   --  and the stash's own message carries no trailing newline (the index
+   --  and untracked commits, which git builds with one, do).
+   function Write_Stash_Commit
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id;
+      Parents : Version.Objects.Object_Id_Vectors.Vector;
+      Message : String) return Version.Objects.Hex_Object_Id
+   is
+      LF      : constant Character := Character'Val (10);
+      Content : Unbounded_String;
+   begin
+      Append (Content, "tree " & To_String (Tree_Id) & LF);
+      for P of Parents loop
+         Append (Content, "parent " & To_String (P) & LF);
+      end loop;
+      Append (Content, "author " & Version.Config.Author_Signature (Repo) & LF);
+      Append (Content,
+              "committer " & Version.Config.Committer_Signature (Repo) & LF);
+      Append (Content, LF);
+      Append (Content, Message);
+      return Version.Write.Write_Object (Repo, "commit", To_String (Content));
+   end Write_Stash_Commit;
+
    function Create
      (Include_Untracked : Boolean := False;
       Include_Ignored   : Boolean := False;
@@ -985,10 +1054,12 @@ package body Version.Stash is
    is
       Repo : constant Version.Repository.Repository_Handle := Version.Repository.Open;
       Head_Id : Version.Objects.Object_Id_Storage;
+      --  git stashes every file under an untracked directory, so the
+      --  untracked list must be the expanded one.
       Status : constant Version.Status.Status_Result :=
         (if Pathspecs.Is_Empty
-         then Version.Status.Current_Status
-         else Version.Status.Current_Status (Pathspecs));
+         then Version.Status.Current_Status (All_Untracked => Include_Untracked)
+         else Version.Status.Current_Status (Pathspecs, Include_Untracked));
    begin
       Require_Head (Repo, Head_Id);
       declare
@@ -1008,18 +1079,20 @@ package body Version.Stash is
          end if;
 
          declare
-            Head_Tree_Id : constant Version.Objects.Hex_Object_Id :=
-              Tree_Id_For_Commit (Repo, Head_Id);
-            Head_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
-              Tree_As_Index_Entries (Repo, Head_Tree_Id);
             Full_Index_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
               Version.Staging.Load (Repo);
             Full_Work_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
               Index_Entries_With_Working_Tree (Repo);
+            --  git's stash under a pathspec: the index parent records the
+            --  whole index, and the stash's own tree is that index with the
+            --  working-tree content of the matched paths laid over it --
+            --  so a staged file outside the pathspec travels along, while
+            --  an unstaged change outside it does not.
             Index_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
-              Overlay_Selected_Entries (Head_Entries, Full_Index_Entries, Pathspecs);
+              Full_Index_Entries;
             Work_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
-              Overlay_Selected_Entries (Head_Entries, Full_Work_Entries, Pathspecs);
+              Overlay_Selected_Entries
+                (Full_Index_Entries, Full_Work_Entries, Pathspecs);
             Index_Tree : constant Version.Objects.Hex_Object_Id :=
               Version.Write.Write_Tree_From_Index (Repo => Repo, Entries => Index_Entries);
             Work_Tree : constant Version.Objects.Hex_Object_Id :=
@@ -1039,12 +1112,16 @@ package body Version.Stash is
                   UTree : constant Version.Objects.Hex_Object_Id :=
                     Version.Write.Write_Tree_From_Index
                       (Repo => Repo, Entries => Selected_Untracked);
+                  --  git's do_create_stash commits the untracked tree with
+                  --  no parent at all.
                   UCommit : constant Version.Objects.Hex_Object_Id :=
-                    Version.Write.Write_Commit
-                      (Repo      => Repo,
-                       Tree_Id   => UTree,
-                       Parent_Id => To_String (Head_Id),
-                       Message   => Stash_Message (Repo, Head_Id, "untracked files"));
+                    Write_Stash_Commit
+                      (Repo    => Repo,
+                       Tree_Id => UTree,
+                       Parents => Version.Objects.Object_Id_Vectors.Empty_Vector,
+                       Message =>
+                         Stash_Message (Repo, Head_Id, "untracked files")
+                         & Character'Val (10));
                begin
                   Parents.Append (UCommit);
                end;
@@ -1052,7 +1129,7 @@ package body Version.Stash is
 
             return
               To_String
-                (Version.Write.Write_Commit_With_Parents
+                (Write_Stash_Commit
                    (Repo    => Repo,
                     Tree_Id => Work_Tree,
                     Parents => Parents,
@@ -1088,11 +1165,17 @@ package body Version.Stash is
       Validate_Stash_Commit (Repo, Commit_Id);
       declare
          Subject : constant String := Commit_Subject (Repo, Commit_Id);
+         --  git's do_store_stash default.
          Reflog_Message : constant String :=
            (if Message'Length /= 0 then Message
-            elsif Subject'Length /= 0 then Subject
-            else "store: " & To_String (Commit_Id));
+            else "Created via ""git stash store"".");
+         pragma Unreferenced (Subject);
       begin
+         --  Storing the commit the stash ref already holds changes
+         --  nothing, and git records no reflog entry for it.
+         if Old_Id = To_String (Commit_Id) then
+            return;
+         end if;
          Update_Stash_Ref
            (Repo         => Repo,
             New_Id       => Commit_Id,
@@ -1105,6 +1188,641 @@ package body Version.Stash is
             Message => Reflog_Message);
       end;
    end Store;
+
+
+   --  The untracked files a stash carries, written back into the working
+   --  tree (git's restore_untracked); an existing path is in the way.
+   procedure Apply_Untracked_Parent_Tree
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id)
+   is
+      Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+        Version.Objects.Flatten_Tree (Repo => Repo, Tree_Id => Tree_Id);
+   begin
+      for Item of Items loop
+         if Item.Kind /= Version.Objects.Tree_Directory then
+            declare
+               Path : constant String := To_String (Item.Path);
+               Full : constant String :=
+                 Join (Version.Repository.Root_Path (Repo), Path);
+               Obj  : constant Version.Objects.Git_Object :=
+                 Version.Objects.Read_Object (Repo, Item.Id);
+            begin
+               Version.Path_Safety.Require_Safe_Relative_Path
+                 (Path, "stash untracked path");
+               Version.Filesystem_Guard.Require_Safe_Write_Target
+                 (Repo_Root     => Version.Repository.Root_Path (Repo),
+                  Relative_Path => Path);
+               if Ada.Directories.Exists (Full) then
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "untracked path already exists: " & Path;
+               end if;
+               Version.Files.Create_Parent_Directories (Full);
+               Version.Files.Write_Binary_File_Atomic
+                 (Path => Full, Content => Version.Objects.Content (Obj));
+            end;
+         end if;
+      end loop;
+   end Apply_Untracked_Parent_Tree;
+
+   --  Write a tree's blobs into the working tree, overwriting what is
+   --  there (git's `checkout --no-overlay <tree> -- :/` for --keep-index).
+   procedure Restore_Tree_To_Working_Files
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Version.Objects.Hex_Object_Id)
+   is
+      Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+        Version.Objects.Flatten_Tree (Repo => Repo, Tree_Id => Tree_Id);
+   begin
+      for Item of Items loop
+         if Item.Kind /= Version.Objects.Tree_Directory then
+            declare
+               Path : constant String := To_String (Item.Path);
+               Full : constant String :=
+                 Join (Version.Repository.Root_Path (Repo), Path);
+               Obj  : constant Version.Objects.Git_Object :=
+                 Version.Objects.Read_Object (Repo, Item.Id);
+            begin
+               Version.Path_Safety.Require_Safe_Relative_Path
+                 (Path, "stash path");
+               Version.Filesystem_Guard.Require_Safe_Write_Target
+                 (Repo_Root     => Version.Repository.Root_Path (Repo),
+                  Relative_Path => Path);
+               if Version.Objects.Kind (Obj) = Version.Objects.Blob_Object then
+                  Version.Files.Create_Parent_Directories (Full);
+                  Version.Files.Write_Binary_File_Atomic
+                    (Path => Full, Content => Version.Objects.Content (Obj));
+               end if;
+            end;
+         end if;
+      end loop;
+   end Restore_Tree_To_Working_Files;
+
+   --  `stash push --staged`: the stash's working tree is the index tree, so
+   --  only what was staged travels with it.
+   function Create_Staged_Only
+     (Repo    : Version.Repository.Repository_Handle;
+      Head_Id : Version.Objects.Hex_Object_Id;
+      Message : String) return String
+   is
+      Index_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+      Index_Tree : constant Version.Objects.Hex_Object_Id :=
+        Version.Write.Write_Tree_From_Index (Repo, Index_Entries);
+      Index_Commit : constant Version.Objects.Hex_Object_Id :=
+        Version.Write.Write_Commit
+          (Repo      => Repo,
+           Tree_Id   => Index_Tree,
+           Parent_Id => To_String (Head_Id),
+           Message   => Stash_Message (Repo, Head_Id, "index"));
+      Parents : Version.Objects.Object_Id_Vectors.Vector;
+   begin
+      Parents.Append (Head_Id);
+      Parents.Append (Index_Commit);
+      return To_String
+        (Write_Stash_Commit
+           (Repo    => Repo,
+            Tree_Id => Index_Tree,
+            Parents => Parents,
+            Message => Top_Stash_Message (Repo, Head_Id, Message)));
+   end Create_Staged_Only;
+
+   procedure Rewrite_Stash_Reflog
+     (Repo    : Version.Repository.Repository_Handle;
+      Entries : Stash_Entry_Vectors.Vector);
+
+
+   ---------------------------------------------------------------------------
+   --  git's stash_info and the subcommands built on it
+   ---------------------------------------------------------------------------
+
+   function Get_Info
+     (Repo : Version.Repository.Repository_Handle;
+      Spec : String := "") return Stash_Info
+   is
+      function All_Digits (Text : String) return Boolean is
+        (Text'Length > 0 and then (for all C of Text => C in '0' .. '9'));
+
+      --  git's parse_stash_revision.
+      Revision : constant String :=
+        (if Spec'Length = 0 then Stash_Ref & "@{0}"
+         elsif All_Digits (Spec) then Stash_Ref & "@{" & Spec & "}"
+         else Spec);
+
+      Result : Stash_Info;
+   begin
+      if Spec'Length = 0
+        and then not Version.Refs.Ref_Exists (Repo, Stash_Ref)
+      then
+         raise Stash_Failure with "No stash entries found.";
+      end if;
+
+      Result.Revision := To_Unbounded_String (Revision);
+
+      begin
+         Result.W_Commit := Version.Revisions.Resolve (Repo, Revision);
+      exception
+         when E : Ada.IO_Exceptions.Data_Error | Ada.IO_Exceptions.Name_Error =>
+            --  A reflog that does not go back that far is git's own die
+            --  ("log for 'stash' only has N entries"); anything else is
+            --  simply not a reference.
+            declare
+               Text : constant String := Ada.Exceptions.Exception_Message (E);
+            begin
+               if Text'Length > 8
+                 and then Text (Text'First .. Text'First + 7) = "log for "
+               then
+                  raise Stash_Error with Text;
+               end if;
+               raise Stash_Failure with Revision & " is not a valid reference";
+            end;
+      end;
+
+      --  git's assert_stash_like: a stash commit has a base parent whose
+      --  tree is the base, and an index parent whose tree is the index; a
+      --  third parent carries the untracked files.
+      declare
+         Obj : constant Version.Objects.Git_Object :=
+           Version.Objects.Read_Object (Repo, Result.W_Commit);
+         Parents : Version.Objects.Object_Id_Vectors.Vector;
+      begin
+         if Version.Objects.Kind (Obj) /= Version.Objects.Commit_Object then
+            raise Stash_Error with
+              "'" & Revision & "' is not a stash-like commit";
+         end if;
+         Parents := Version.Objects.Commit_Parent_Ids (Obj);
+         if Natural (Parents.Length) not in 2 .. 3 then
+            raise Stash_Error with
+              "'" & Revision & "' is not a stash-like commit";
+         end if;
+         Result.W_Tree := Version.Objects.Commit_Tree_Id (Obj);
+         Result.B_Commit := Parents.Element (Parents.First_Index);
+         Result.B_Tree := Tree_Id_For_Commit (Repo, Result.B_Commit);
+         Result.I_Tree :=
+           Tree_Id_For_Commit (Repo, Parents.Element (Parents.First_Index + 1));
+         Result.Has_U := Natural (Parents.Length) = 3;
+         if Result.Has_U then
+            Result.U_Tree :=
+              Tree_Id_For_Commit (Repo, Parents.Element (Parents.First_Index + 2));
+         end if;
+      exception
+         when Stash_Error =>
+            raise;
+         when others =>
+            raise Stash_Error with
+              "'" & Revision & "' is not a stash-like commit";
+      end;
+
+      --  git checks whether the part before "@" names refs/stash.
+      declare
+         At_Pos : Natural := 0;
+      begin
+         for I in Revision'Range loop
+            if Revision (I) = '@' then
+               At_Pos := I;
+               exit;
+            end if;
+         end loop;
+         declare
+            Symbolic : constant String :=
+              (if At_Pos = 0 then Revision
+               else Revision (Revision'First .. At_Pos - 1));
+         begin
+            Result.Is_Stash_Ref :=
+              Symbolic = Stash_Ref
+              or else (Symbolic = "stash"
+                       and then Version.Refs.Ref_Exists (Repo, Stash_Ref));
+         end;
+      end;
+
+      return Result;
+   end Get_Info;
+
+   --  The tree of the live index, which is git's `c_tree`.
+   function Current_Index_Tree
+     (Repo : Version.Repository.Repository_Handle)
+      return Version.Objects.Hex_Object_Id
+   is
+      Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Version.Staging.Load (Repo);
+   begin
+      for E of Entries loop
+         if E.Stage /= 0 then
+            raise Stash_Error with
+              "cannot apply a stash in the middle of a merge";
+         end if;
+      end loop;
+      return Version.Write.Write_Tree_From_Index (Repo, Entries);
+   end Current_Index_Tree;
+
+   function Untracked_Tree
+     (Repo : Version.Repository.Repository_Handle;
+      Info : Stash_Info) return Version.Objects.Hex_Object_Id
+   is
+      Trees   : Version.Tree_Cache.Tree_Cache;
+      Entries : Version.Staging.Index_Entry_Vectors.Vector :=
+        Tree_As_Index_Entries (Repo, Info.W_Tree);
+   begin
+      if not Info.Has_U then
+         return Info.W_Tree;
+      end if;
+      for E of Version.Tree_Cache.Flatten_Tree (Repo, Trees, Info.U_Tree) loop
+         if E.Kind /= Version.Objects.Tree_Directory then
+            Version.Staging.Replace_Entry
+              (Entries,
+               (Path => E.Path, Id => E.Id, Mode => E.Mode, Stage => 0,
+                Skip_Worktree => False, Assume_Valid => False,
+                Intent_To_Add => False));
+         end if;
+      end loop;
+      Version.Staging.Sort_By_Path (Entries);
+      return Version.Write.Write_Tree_From_Index (Repo, Entries);
+   end Untracked_Tree;
+
+   --  git's unpack-trees guard: a path the merge would touch must not carry
+   --  working-tree changes that are not in the index.
+   procedure Require_No_Overwrite
+     (Repo        : Version.Repository.Repository_Handle;
+      Base_Items  : Version.Objects.Tree_Entry_Vectors.Vector;
+      Other_Items : Version.Objects.Tree_Entry_Vectors.Vector)
+   is
+      Status : constant Version.Status.Status_Result :=
+        Version.Status.Current_Status;
+      Blocked : Unbounded_String;
+
+      --  True when the two trees disagree about Path, i.e. the merge has
+      --  something to write there.
+      function Touched (Path : String) return Boolean is
+         function Id_In (Items : Version.Objects.Tree_Entry_Vectors.Vector)
+            return String is
+         begin
+            for E of Items loop
+               if To_String (E.Path) = Path then
+                  return To_String (E.Id);
+               end if;
+            end loop;
+            return "";
+         end Id_In;
+      begin
+         return Id_In (Base_Items) /= Id_In (Other_Items);
+      end Touched;
+   begin
+      for C of Status.Changes loop
+         if Touched (To_String (C.Path)) then
+            Append (Blocked, Character'Val (9) & To_String (C.Path)
+                    & Character'Val (10));
+         end if;
+      end loop;
+
+      if Length (Blocked) > 0 then
+         raise Stash_Error with
+           "Your local changes to the following files would be overwritten by "
+           & "merge:" & Character'Val (10) & To_String (Blocked)
+           & "Please commit your changes or stash them before you merge."
+           & Character'Val (10) & "Aborting";
+      end if;
+   end Require_No_Overwrite;
+
+   --  git's unstage_changes_unless_new: after a clean apply without
+   --  --index, the index goes back to what it held, except that paths the
+   --  stash adds anew stay staged.
+   procedure Unstage_Unless_New
+     (Repo     : Version.Repository.Repository_Handle;
+      C_Tree   : Version.Objects.Hex_Object_Id;
+      Merged   : Version.Staging.Index_Entry_Vectors.Vector)
+   is
+      Old_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=
+        Tree_As_Index_Entries (Repo, C_Tree);
+      Result      : Version.Staging.Index_Entry_Vectors.Vector := Old_Entries;
+
+      function In_Old (Path : String) return Boolean is
+      begin
+         for E of Old_Entries loop
+            if To_String (E.Path) = Path then
+               return True;
+            end if;
+         end loop;
+         return False;
+      end In_Old;
+   begin
+      for E of Merged loop
+         if not In_Old (To_String (E.Path)) then
+            Version.Staging.Replace_Entry (Result, E);
+         end if;
+      end loop;
+      Version.Staging.Sort_By_Path (Result);
+      Version.Staging.Write (Repo, Result);
+   end Unstage_Unless_New;
+
+   procedure Apply_Info
+     (Repo       : Version.Repository.Repository_Handle;
+      Info       : Stash_Info;
+      Options    : Apply_Options;
+      Conflicted : out Boolean;
+      Narration  : out Message_Vectors.Vector)
+   is
+      Trees   : Version.Tree_Cache.Tree_Cache;
+      C_Tree  : constant Version.Objects.Hex_Object_Id :=
+        Current_Index_Tree (Repo);
+      Has_Index : Boolean := Options.Restore_Index;
+      Index_Tree : Version.Objects.Object_Id_Storage := C_Tree;
+
+      function Label (Given : Unbounded_String; Default : String)
+         return String is
+        (if Length (Given) > 0 then To_String (Given) else Default);
+
+      Base_Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+        Version.Tree_Cache.Flatten_Tree (Repo, Trees, Info.B_Tree);
+      Work_Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+        Version.Tree_Cache.Flatten_Tree (Repo, Trees, Info.W_Tree);
+   begin
+      Conflicted := False;
+      Narration.Clear;
+
+      if Options.Restore_Index then
+         --  Nothing was staged when the stash was made, or the index is
+         --  already that tree: there is no index to recreate.
+         if Info.B_Tree = Info.I_Tree or else C_Tree = Info.I_Tree then
+            Has_Index := False;
+         else
+            --  git applies the stash's staged diff to the index; the index
+            --  the stash recorded is exactly that result.
+            Index_Tree := Info.I_Tree;
+         end if;
+      end if;
+
+      Require_No_Overwrite (Repo, Base_Items, Work_Items);
+
+      declare
+         Current_Items : constant Version.Objects.Tree_Entry_Vectors.Vector :=
+           Version.Tree_Cache.Flatten_Tree (Repo, Trees, C_Tree);
+         Merged_Index : Version.Staging.Index_Entry_Vectors.Vector;
+         Conflicts    : Version.Merge.Conflict_Vectors.Vector;
+      begin
+         Version.Merge.Merge_Trees
+           (Repo          => Repo,
+            Current_Name  =>
+              (if Info.B_Tree = C_Tree and then Length (Options.Label_Ours) = 0
+               then "Version stash was based on"
+               else Label (Options.Label_Ours, "Updated upstream")),
+            Target_Name   => Label (Options.Label_Theirs, "Stashed changes"),
+            Base_Items    => Base_Items,
+            Current_Items => Current_Items,
+            Target_Items  => Work_Items,
+            Merged_Index  => Merged_Index,
+            Conflicts     => Conflicts,
+            Behavior      => Version.Merge.Merge_Behavior'
+              (Base_Label => To_Unbounded_String
+                 (Label (Options.Label_Base, "Stash base")),
+               others     => <>));
+
+         --  git narrates the merge: an "Auto-merging" line for every file
+         --  it content-merged, each conflict's line right after its own.
+         declare
+            function Id_At
+              (Items : Version.Objects.Tree_Entry_Vectors.Vector; Path : String)
+               return String is
+            begin
+               for E of Items loop
+                  if To_String (E.Path) = Path then
+                     return To_String (E.Id);
+                  end if;
+               end loop;
+               return "";
+            end Id_At;
+
+            Merged_Paths : Message_Vectors.Vector;
+            Next         : Positive := 1;
+
+            function Kind_Word (K : Version.Merge.Conflict_Kind) return String is
+              (case K is
+                  when Version.Merge.Add_Add_Conflict        => "add/add",
+                  when Version.Merge.Binary_Conflict         => "binary",
+                  when Version.Merge.Directory_File_Conflict => "file/directory",
+                  when others                                => "content");
+         begin
+            for E of Current_Items loop
+               declare
+                  Path : constant String := To_String (E.Path);
+                  O    : constant String := To_String (E.Id);
+                  T    : constant String := Id_At (Work_Items, Path);
+                  B    : constant String := Id_At (Base_Items, Path);
+               begin
+                  if T /= "" and then O /= T
+                    and then (B = "" or else (O /= B and then T /= B))
+                  then
+                     Merged_Paths.Append (Path);
+                  end if;
+               end;
+            end loop;
+
+            for C of Conflicts loop
+               declare
+                  CP : constant String := To_String (C.Path);
+               begin
+                  while Next <= Natural (Merged_Paths.Length)
+                    and then Merged_Paths.Element (Next) < CP
+                  loop
+                     Narration.Append
+                       (String'("Auto-merging " & Merged_Paths.Element (Next)));
+                     Next := Next + 1;
+                  end loop;
+                  if Next <= Natural (Merged_Paths.Length)
+                    and then Merged_Paths.Element (Next) = CP
+                  then
+                     Narration.Append (String'("Auto-merging " & CP));
+                     Next := Next + 1;
+                  end if;
+                  Narration.Append
+                    (String'("CONFLICT (" & Kind_Word (C.Kind)
+                     & "): Merge conflict in " & CP));
+               end;
+            end loop;
+            while Next <= Natural (Merged_Paths.Length) loop
+               Narration.Append
+                 (String'("Auto-merging " & Merged_Paths.Element (Next)));
+               Next := Next + 1;
+            end loop;
+         end;
+
+         --  A stash whose tracked side is already in the tree merges to
+         --  nothing, which git's merge reports.
+         if Conflicts.Is_Empty
+           and then Version.Write.Write_Tree_From_Index (Repo, Merged_Index) = C_Tree
+         then
+            Narration.Append (String'("Already up to date."));
+         end if;
+
+         if not Conflicts.Is_Empty then
+            Conflicted := True;
+            Version.Staging.Write (Repo, Merged_Index);
+         elsif Has_Index then
+            --  The recreated index; the working tree keeps the merge.
+            Version.Staging.Write
+              (Repo, Tree_As_Index_Entries (Repo, Index_Tree));
+         else
+            Unstage_Unless_New (Repo, C_Tree, Merged_Index);
+         end if;
+      end;
+
+      if Info.Has_U then
+         begin
+            Apply_Untracked_Parent_Tree (Repo, Info.U_Tree);
+         exception
+            when others =>
+               raise Stash_Error with
+                 "could not restore untracked files from stash";
+         end;
+      end if;
+   end Apply_Info;
+
+   procedure Drop_Info
+     (Repo : Version.Repository.Repository_Handle;
+      Info : Stash_Info)
+   is
+      Revision : constant String := To_String (Info.Revision);
+
+      --  The entry number in "<ref>@{N}"; anything else drops the top.
+      function Entry_Index return Natural is
+         Open : Natural := 0;
+      begin
+         for K in Revision'Range loop
+            if Revision (K) = '{' then
+               Open := K;
+            end if;
+         end loop;
+         if Open = 0 or else Revision (Revision'Last) /= '}' then
+            return 0;
+         end if;
+         return Natural'Value (Revision (Open + 1 .. Revision'Last - 1));
+      exception
+         when Constraint_Error =>
+            return 0;
+      end Entry_Index;
+
+      Entries : Stash_Entry_Vectors.Vector := List_Entries (Repo);
+      N       : constant Natural := Entry_Index;
+   begin
+      if Natural (Entries.Length) <= N then
+         raise Stash_Error with
+           To_String (Info.Revision) & ": Could not drop stash entry";
+      end if;
+      Entries.Delete (Entries.First_Index + N);
+      Rewrite_Stash_Reflog (Repo, Entries);
+   end Drop_Info;
+
+   procedure Push_Entry
+     (Repo      : Version.Repository.Repository_Handle;
+      Options   : Push_Options;
+      Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
+      Saved     : out Boolean;
+      Title     : out Unbounded_String)
+   is
+      Head_Id : Version.Objects.Object_Id_Storage;
+      Status  : constant Version.Status.Status_Result :=
+        (if Pathspecs.Is_Empty
+         then Version.Status.Current_Status
+                (All_Untracked => Options.Include_Untracked)
+         else Version.Status.Current_Status
+                (Pathspecs, Options.Include_Untracked));
+   begin
+      Saved := False;
+      Title := Null_Unbounded_String;
+      Require_Head (Repo, Head_Id);
+
+      declare
+         Selected_Untracked : constant Version.Staging.Index_Entry_Vectors.Vector :=
+           Selected_Untracked_For_Stash
+             (Repo              => Repo,
+              Status            => Status,
+              Include_Untracked => Options.Include_Untracked,
+              Include_Ignored   => Options.Include_Ignored,
+              Pathspecs         => Pathspecs);
+         --  `--staged` stashes the staged changes alone, so the working
+         --  tree's own edits do not count as something to save.
+         Nothing : constant Boolean :=
+           (if Options.Only_Staged
+            then Status.Staged.Is_Empty
+            else Status_Is_Clean
+                   (Status, Options.Include_Untracked, Options.Include_Ignored,
+                    Natural (Selected_Untracked.Length)));
+      begin
+         if Nothing then
+            return;
+         end if;
+
+         declare
+            Stash_Text : constant String :=
+              (if Options.Only_Staged
+               then Create_Staged_Only (Repo, Head_Id, To_String (Options.Message))
+               else Create
+                      (Include_Untracked => Options.Include_Untracked,
+                       Include_Ignored   => Options.Include_Ignored,
+                       Pathspecs         => Pathspecs,
+                       Message           => To_String (Options.Message)));
+            Stash_Id : constant Version.Objects.Hex_Object_Id :=
+              Version.Objects.To_Object_Id (Stash_Text);
+            Old_Id   : constant String := Current_Ref_Id_Or_Zero (Repo, Stash_Ref);
+            Message  : constant String :=
+              Top_Stash_Message (Repo, Head_Id, To_String (Options.Message));
+         begin
+            Update_Stash_Ref (Repo, Stash_Id, Old_Id);
+            Version.Reflog.Append
+              (Repo, Stash_Ref, Old_Id, To_String (Stash_Id), Message);
+            Saved := True;
+            Title := To_Unbounded_String (Message);
+
+            if Options.Only_Staged then
+               --  git reverses the staged diff in the working tree and then
+               --  resets the index, so a staged-only stash takes the staged
+               --  content out of both.
+               declare
+                  Head_Tree : constant Version.Objects.Hex_Object_Id :=
+                    Tree_Id_For_Commit (Repo, Head_Id);
+                  Head_Items : constant Version.Staging.Index_Entry_Vectors.Vector :=
+                    Tree_As_Index_Entries (Repo, Head_Tree);
+               begin
+                  for Change of Status.Staged loop
+                     declare
+                        Path : constant String := To_String (Change.Path);
+                        Full : constant String :=
+                          Join (Version.Repository.Root_Path (Repo), Path);
+                     begin
+                        if Version.Staging.Find_Entry (Head_Items, Path) = 0 then
+                           Version.Files.Delete_File_If_Exists (Full);
+                        else
+                           Version.Restore.Restore_Path_From_Commit
+                             (Repo => Repo, Commit_Id => Head_Id, Path => Path);
+                        end if;
+                     end;
+                  end loop;
+                  Version.Staging.Write (Repo, Head_Items);
+               end;
+            else
+               Restore_Selected_Tracked_Paths
+                 (Repo      => Repo,
+                  Head_Id   => Head_Id,
+                  Status    => Status,
+                  Pathspecs => Pathspecs);
+               if Options.Include_Untracked or else Options.Include_Ignored then
+                  Remove_Untracked_Files (Repo, Selected_Untracked);
+               end if;
+
+               if Options.Keep_Index then
+                  --  git checks the recorded index tree back out over the
+                  --  reset working tree, so the staged state survives.
+                  declare
+                     Info : constant Stash_Info := Get_Info (Repo, Stash_Text);
+                  begin
+                     Version.Staging.Write
+                       (Repo, Tree_As_Index_Entries (Repo, Info.I_Tree));
+                     Restore_Tree_To_Working_Files (Repo, Info.I_Tree);
+                  end;
+               end if;
+            end if;
+         end;
+      end;
+   end Push_Entry;
 
    procedure Push
      (Include_Untracked : Boolean := False;

@@ -13,6 +13,8 @@ with Version.Pack_Index_Cache;
 with Version.Ref_Cache;
 with Version.Files;
 with Version.Reflog;
+with Version.Refs;
+with Version.Ref_Names;
 with Version.Staging;
 with Version.Ref_Format;
 
@@ -478,6 +480,12 @@ package body Version.Revisions is
       end if;
 
       if not Has_Prefix (Name, "refs/") then
+         --  git's ref_rev_parse_rules put "refs/%s" before the namespaces,
+         --  which is how `stash` names refs/stash.
+         if Resolve_Ref_Name (Repo, Refs, "refs/" & Name, Id) then
+            return Id;
+         end if;
+
          if Resolve_Ref_Name (Repo, Refs, "refs/heads/" & Name, Id) then
             return Id;
          end if;
@@ -917,9 +925,30 @@ package body Version.Revisions is
                Ref_In : constant String :=
                  (if At_Pos = Rev'First then "HEAD"
                   else Rev (Rev'First .. At_Pos - 1));
-               Ref    : constant String :=
-                 (if Ref_In = "HEAD" then "HEAD"
-                  else "refs/heads/" & Ref_In);
+               --  git's dwim_log: the ref_rev_parse_rules, in order --
+               --  the name itself, refs/, refs/tags/, refs/heads/,
+               --  refs/remotes/, refs/remotes/<x>/HEAD. "stash" is
+               --  refs/stash, not refs/heads/stash.
+               function Dwim (Name : String) return String is
+               begin
+                  if Name = "HEAD" then
+                     return "HEAD";
+                  end if;
+                  for Candidate of Version.Ref_Format.String_Vectors.Vector'
+                    [Name, "refs/" & Name, "refs/tags/" & Name,
+                     "refs/heads/" & Name, "refs/remotes/" & Name,
+                     "refs/remotes/" & Name & "/HEAD"]
+                  loop
+                     if Version.Ref_Names.Is_Valid_Ref_Name (Candidate)
+                       and then Version.Refs.Ref_Exists (Repo, Candidate)
+                     then
+                        return Candidate;
+                     end if;
+                  end loop;
+                  return "refs/heads/" & Name;
+               end Dwim;
+
+               Ref    : constant String := Dwim (Ref_In);
                Is_Num : Boolean := Inner'Length > 0;
             begin
                for C of Inner loop
@@ -934,14 +963,22 @@ package body Version.Revisions is
                        := Version.Reflog.Read_Entries (Repo, Ref);
                      N : constant Natural := Natural'Value (Inner);
                   begin
+                     --  A ref without a reflog still answers @{0} with its
+                     --  current value, and counts as one entry, as git does.
                      if Entries.Is_Empty then
-                        raise Ada.IO_Exceptions.Data_Error
-                          with "no reflog for " & Ref;
+                        if N = 0 and then Version.Refs.Ref_Exists (Repo, Ref) then
+                           return Version.Refs.Resolve_Ref (Repo, Ref);
+                        end if;
+                        raise Ada.IO_Exceptions.Data_Error with
+                          "log for '" & Ref_In & "' only has "
+                          & (if Version.Refs.Ref_Exists (Repo, Ref) then "1" else "0")
+                          & " entries";
                      end if;
-                     --  git accepts @{n} for n in 0 .. entry-count-1.
+                     --  git accepts @{n} for n in 0 .. entry-count-1, and
+                     --  names the ref the way the caller spelled it.
                      if N >= Natural (Entries.Length) then
                         raise Ada.IO_Exceptions.Data_Error with
-                          "log for " & Ref & " only has "
+                          "log for '" & Ref_In & "' only has "
                           & Ada.Strings.Fixed.Trim
                               (Integer'Image (Integer (Entries.Length)),
                                Ada.Strings.Both) & " entries";

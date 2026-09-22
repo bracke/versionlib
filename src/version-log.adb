@@ -636,8 +636,11 @@ package body Version.Log is
          return
            Mark_Prefix (Note)
            & Shown_Id (Repo, Commit_Id, Header, Header.Full_Oneline)
-           & " " & To_String (Note.Reflog_Selector) & ": "
-           & To_String (Note.Reflog_Message);
+           & " "
+           & To_String
+               (if Length (Note.Reflog_Selector_Long) > 0
+                then Note.Reflog_Selector_Long else Note.Reflog_Selector)
+           & ": " & To_String (Note.Reflog_Message);
       end if;
 
       --  git's show_log order: mark, id, parents, children, source,
