@@ -152,7 +152,11 @@ package body Version.Clean is
                   Ada.Directories.Get_Next_Entry (Search, E);
                   declare
                      Name  : constant String := Ada.Directories.Simple_Name (E);
-                     Child : constant String := Ada.Directories.Full_Name (E);
+                     --  Composed, not asked of Ada.Directories: its
+                     --  Full_Name validates the simple name and a host may
+                     --  forbid a character git tracks happily.
+                     Child : constant String :=
+                       Version.Files.Child_Path (Full, Name);
                   begin
                      if Name = "." or else Name = ".." then
                         null;
@@ -187,7 +191,7 @@ package body Version.Clean is
                      Name      : constant String :=
                        Ada.Directories.Simple_Name (E);
                      Child     : constant String :=
-                       Ada.Directories.Full_Name (E);
+                       Version.Files.Child_Path (Full, Name);
                      Child_Rel : constant String :=
                        (if Rel = "" then Name else Rel & "/" & Name);
                   begin

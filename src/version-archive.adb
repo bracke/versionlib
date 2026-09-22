@@ -272,7 +272,7 @@ package body Version.Archive is
       if Output'Length > 0 and then Version.Files.Exists (Native)
         and then Ada.Directories.Kind (Native) = Ada.Directories.Ordinary_File
       then
-         Ada.Directories.Delete_File (Native);
+         Version.Files.Delete_File (Native);
       end if;
    exception
       when others =>

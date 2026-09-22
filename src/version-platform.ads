@@ -13,6 +13,11 @@ package Version.Platform is
 
    function Core_Filemode_Default return String;
 
+   --  Whether the host lets an ordinary process create a symbolic link.
+   --  git probes this at `init` and records core.symlinks = false where it
+   --  cannot, which a stock Windows install cannot.
+   function Supports_Symbolic_Links return Boolean;
+
    function Is_Windows_Drive_Path
      (Path : String)
       return Boolean;

@@ -109,6 +109,11 @@ package body Version.Platform is
       end if;
    end Core_Filemode_Default;
 
+   function Supports_Symbolic_Links return Boolean is
+   begin
+      return Current = POSIX_Platform;
+   end Supports_Symbolic_Links;
+
    function Is_Windows_Drive_Path
      (Path : String)
       return Boolean

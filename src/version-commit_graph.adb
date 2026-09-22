@@ -484,7 +484,7 @@ package body Version.Commit_Graph is
             --  git leaves the file read-only; replace it rather than write
             --  through it.
             if Version.Files.Exists (Path) then
-               Ada.Directories.Delete_File (Path);
+               Version.Files.Delete_File (Path);
             end if;
 
             Version.Files.Write_Binary_File

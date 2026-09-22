@@ -377,7 +377,7 @@ package body Version.Multi_Pack_Index is
             Path : constant String := Midx_Path (Repo);
          begin
             if Version.Files.Exists (Path) then
-               Ada.Directories.Delete_File (Path);
+               Version.Files.Delete_File (Path);
             end if;
 
             Version.Files.Write_Binary_File

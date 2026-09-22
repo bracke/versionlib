@@ -3,6 +3,7 @@ with Ada.Strings.Fixed;
 with AUnit.Assertions;    use AUnit.Assertions;
 with AUnit.Test_Cases;
 
+with Version.Files;
 with Version.Git_Fixtures;
 with Version.Init;
 with Version.Repository;
@@ -191,8 +192,10 @@ package body Version.Text_Filter.Tests is
 
       --  The materialized file must now use CRLF line endings.
       declare
+         --  Raw bytes: Ada.Text_IO strips the CR on a host that translates,
+         --  so a text read could never see the CRLF this test is about.
          Content : constant String :=
-           Version.Test_Support.Read_Text_File
+           Version.Files.Read_Binary_File
              (Version.Test_Support.Join (Root, "a.txt"));
          Has_CRLF : Boolean := False;
       begin

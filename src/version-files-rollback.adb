@@ -71,7 +71,7 @@ package body Version.Files.Rollback is
 
       if Replaced then
          begin
-            Ada.Directories.Delete_File (Backup);
+            Delete_File (Backup);
             Backup_Ready := False;
          exception
             when others =>

@@ -518,7 +518,14 @@ package body Version.Clone.Tests is
       Target_File : constant String :=
         Version.Test_Support.Join (Target, "a.txt");
 
-      Remote_Url : constant String := "file://localhost" & Source;
+      --  file://localhost<path>: the path is absolute, and a Windows one
+      --  starts with its drive letter rather than a separator, so the slash
+      --  that divides authority from path has to be put there.
+      Remote_Url : constant String :=
+        "file://localhost"
+        & (if Source'Length > 0 and then Source (Source'First) = '/'
+           then "" else "/")
+        & Source;
    begin
       Ada.Directories.Create_Directory (Source);
       Version.Init.Init (Source);

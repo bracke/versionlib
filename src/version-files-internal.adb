@@ -41,7 +41,7 @@ package body Version.Files.Internal is
           = Ada.Directories.Ordinary_File
       then
          begin
-            Ada.Directories.Delete_File (Native_Source);
+            Delete_File (Native_Source);
          exception
             when others =>
                null;

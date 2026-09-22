@@ -1,3 +1,4 @@
+with Ada.IO_Exceptions;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with GNAT.OS_Lib;
@@ -47,7 +48,9 @@ package body Version.Ignore.Tests is
          4 => new String'(Path)];
    begin
       Ada.Directories.Set_Directory (Root);
-      Status := GNAT.OS_Lib.Spawn (Program_Name => "/usr/bin/git", Args => Args);
+      Status :=
+        GNAT.OS_Lib.Spawn
+          (Program_Name => Version.Test_Support.Git_Program, Args => Args);
       Ada.Directories.Set_Directory (Old_Dir);
 
       for I in Args'Range loop
@@ -1527,6 +1530,10 @@ package body Version.Ignore.Tests is
         Version.Test_Support.Join (Root, "quoted" & "\bignore");
       Invalid_Escape_Path : constant String :=
         Version.Test_Support.Join (Root, "badqescapeignore");
+      --  A host that forbids a control character in a file name cannot hold
+      --  Backspace_Path at all (Windows rejects every byte below 0x20), so
+      --  the config reader's \b de-escaping is untestable there.
+      Backspace_Names : Boolean := True;
       Old_Dir       : constant String := Ada.Directories.Current_Directory;
       User_Tilde_Ignore_Name : constant String :=
         "version-test-user-tilde-ignore";
@@ -1661,8 +1668,13 @@ package body Version.Ignore.Tests is
         (Missing_User_Ignore, "missing-user-only.tmp" & Character'Val (10));
       Version.Test_Support.Write_Text_File
         (Quoted_Path, "quoted-only.tmp" & Character'Val (10));
-      Version.Test_Support.Write_Text_File
-        (Backspace_Path, "backspace-only.tmp" & Character'Val (10));
+      begin
+         Version.Test_Support.Write_Text_File
+           (Backspace_Path, "backspace-only.tmp" & Character'Val (10));
+      exception
+         when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+            Backspace_Names := False;
+      end;
       Version.Test_Support.Write_Text_File
         (Invalid_Escape_Path, "invalid-escape-only.tmp" & Character'Val (10));
       Version.Test_Support.Write_Text_File
@@ -1803,13 +1815,15 @@ package body Version.Ignore.Tests is
         ("quoted-only.tmp",
          "quoted core.excludesFile path with spaces should be loaded");
 
-      Set_Core_Excludes_File_Raw
-        (Character'Val (34)
-         & Backspace_Config_Path
-         & Character'Val (34));
-      Check_Ignored
-        ("backspace-only.tmp",
-         "quoted core.excludesFile path with \b escape should be loaded");
+      if Backspace_Names then
+         Set_Core_Excludes_File_Raw
+           (Character'Val (34)
+            & Backspace_Config_Path
+            & Character'Val (34));
+         Check_Ignored
+           ("backspace-only.tmp",
+            "quoted core.excludesFile path with \b escape should be loaded");
+      end if;
 
       Set_Core_Excludes_File_Raw
         (Character'Val (34)

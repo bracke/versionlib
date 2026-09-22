@@ -2253,7 +2253,11 @@ package body Version.Ignore is
 
          declare
             Name : constant String := Ada.Directories.Simple_Name (E);
-            Full : constant String := Ada.Directories.Full_Name (E);
+            --  Composed rather than asked of Ada.Directories: its
+            --  Full_Name validates the simple name, and a host that forbids
+            --  a control character in one refuses to name a file git is
+            --  perfectly happy to track.
+            Full : constant String := Version.Files.Child_Path (Dir, Name);
          begin
             if Name /= "." and then Name /= ".." then
                if Ada.Directories.Kind (E) = Ada.Directories.Directory then

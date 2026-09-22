@@ -3496,7 +3496,7 @@ package body Version.LFS is
             Retained := Retained + 1;
          elsif not Dry_Run then
             begin
-               Ada.Directories.Delete_File (F);
+               Version.Files.Delete_File (F);
             exception
                when others => null;
             end;
@@ -4005,7 +4005,7 @@ package body Version.LFS is
                   end if;
                end loop;
                if not Found and then Version.Files.Exists (Attr_Path) then
-                  Ada.Directories.Delete_File (Attr_Path);
+                  Version.Files.Delete_File (Attr_Path);
                end if;
             end;
          end if;

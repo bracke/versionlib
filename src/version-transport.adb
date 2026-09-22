@@ -139,19 +139,22 @@ package body Version.Transport is
             Raw : constant String := Url (Url'First + Prefix'Length .. Url'Last);
             Decoded : constant String := Percent_Decode (Raw);
             Localhost : constant String := "localhost/";
-         begin
-            if Decoded'Length > Localhost'Length
-              and then Decoded
-                (Decoded'First .. Decoded'First + Localhost'Length - 1)
-                = Localhost
-            then
-               return Decoded
-                 (Decoded'First + Localhost'Length - 1 .. Decoded'Last);
-            end if;
 
-            if Decoded'Length > 0
-              and then Decoded (Decoded'First) /= '/'
-              and then not Version.Platform.Is_Windows_Drive_Path (Decoded)
+            --  file://localhost/<path> names the same thing as
+            --  file:///<path>; strip the authority and go on, so a Windows
+            --  drive path spelled either way lands in the same rule below.
+            Path : constant String :=
+              (if Decoded'Length > Localhost'Length
+                 and then Decoded
+                   (Decoded'First .. Decoded'First + Localhost'Length - 1)
+                   = Localhost
+               then Decoded
+                 (Decoded'First + Localhost'Length - 1 .. Decoded'Last)
+               else Decoded);
+         begin
+            if Path'Length > 0
+              and then Path (Path'First) /= '/'
+              and then not Version.Platform.Is_Windows_Drive_Path (Path)
             then
                raise Ada.IO_Exceptions.Data_Error with
                  "unsupported file URL authority: " & Url;
@@ -162,15 +165,15 @@ package body Version.Transport is
             --  which is not a usable Windows drive path.  Drop only this
             --  synthetic leading slash; ordinary POSIX file:///tmp paths stay
             --  /tmp.
-            if Decoded'Length >= 4
-              and then Decoded (Decoded'First) = '/'
+            if Path'Length >= 4
+              and then Path (Path'First) = '/'
               and then Version.Platform.Is_Windows_Drive_Path
-                (Decoded (Decoded'First + 1 .. Decoded'Last))
+                (Path (Path'First + 1 .. Path'Last))
             then
-               return Decoded (Decoded'First + 1 .. Decoded'Last);
+               return Path (Path'First + 1 .. Path'Last);
             end if;
 
-            return Decoded;
+            return Path;
          end;
       end if;
 

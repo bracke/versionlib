@@ -488,7 +488,7 @@ package body Version.Reftable.Writer is
                     Version.Files.Join (RT_Dir, To_String (T.Name));
                begin
                   if Version.Files.Exists (P) then
-                     Ada.Directories.Delete_File (P);
+                     Version.Files.Delete_File (P);
                   end if;
                end;
             end if;
@@ -687,7 +687,7 @@ package body Version.Reftable.Writer is
                P : constant String := Version.Reftable.Table_Path (Repo, S);
             begin
                if S /= New_Name and then Version.Files.Exists (P) then
-                  Ada.Directories.Delete_File (P);
+                  Version.Files.Delete_File (P);
                end if;
             end Del;
          begin

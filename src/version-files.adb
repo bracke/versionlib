@@ -1,3 +1,4 @@
+with GNAT.OS_Lib;
 with Ada.Directories; use Ada.Directories;
 with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
@@ -385,14 +386,80 @@ package body Version.Files is
       end if;
    end Set_Executable;
 
+   --  Clear the read-only attribute on every file under Path, so the host
+   --  lets the tree go. See Delete_File.
+   procedure Make_Tree_Writable (Path : String);
+
+   procedure Make_Tree_Writable (Path : String) is
+      Search : Ada.Directories.Search_Type;
+      Item   : Ada.Directories.Directory_Entry_Type;
+   begin
+      Ada.Directories.Start_Search
+        (Search, Path, "",
+         [Ada.Directories.Ordinary_File => True,
+          Ada.Directories.Directory     => True,
+          Ada.Directories.Special_File  => False]);
+
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Item);
+
+         declare
+            Name : constant String := Ada.Directories.Simple_Name (Item);
+            Full : constant String := Child_Path (Path, Name);
+         begin
+            if Name /= "." and then Name /= ".." then
+               if Ada.Directories.Kind (Item) = Ada.Directories.Directory then
+                  Make_Tree_Writable (Full);
+               else
+                  GNAT.OS_Lib.Set_Writable (Full);
+               end if;
+            end if;
+         end;
+      end loop;
+
+      Ada.Directories.End_Search (Search);
+   exception
+      when others =>
+         null;
+   end Make_Tree_Writable;
+
+   function Child_Path (Directory : String; Name : String) return String is
+   begin
+      if Directory'Length = 0 then
+         return Name;
+      elsif Directory (Directory'Last) in '/' | '\' then
+         return Directory & Name;
+      else
+         return Directory & '/' & Name;
+      end if;
+   end Child_Path;
+
+   procedure Delete_File (Path : String) is
+      Native : constant String := To_Native_Path (Path);
+   begin
+      Ada.Directories.Delete_File (Native);
+   exception
+      when Ada.Directories.Use_Error =>
+         --  git's mingw_unlink: a read-only file cannot be removed on
+         --  Windows, and every loose object is written read-only.
+         GNAT.OS_Lib.Set_Writable (Native);
+         Ada.Directories.Delete_File (Native);
+   end Delete_File;
+
    procedure Delete_File_If_Exists (Path : String) is
       Native : constant String := To_Native_Path (Path);
    begin
       if Exists (Native)
         and then Ada.Directories.Kind (Native) = Ada.Directories.Ordinary_File
       then
-         Ada.Directories.Delete_File (Native);
+         Delete_File (Native);
       end if;
+   exception
+      --  git's unlink_or_warn: a file the host still refuses to remove --
+      --  on Windows one a child process left open -- does not fail the
+      --  operation that was only tidying up after itself.
+      when Ada.Directories.Use_Error =>
+         null;
    end Delete_File_If_Exists;
 
    procedure Rename_Directory (Source : String; Target : String) is
@@ -425,7 +492,16 @@ package body Version.Files is
            with "directory delete target is not a directory: " & Path;
       end if;
 
-      Ada.Directories.Delete_Tree (Native);
+      begin
+         Ada.Directories.Delete_Tree (Native);
+      exception
+         when Ada.Directories.Use_Error =>
+            --  Same rule one level up: a tree holding read-only files (an
+            --  object store, a quarantine) refuses to go on Windows until
+            --  each of them is writable.
+            Make_Tree_Writable (Native);
+            Ada.Directories.Delete_Tree (Native);
+      end;
    end Delete_Directory_Tree_If_Exists;
 
    procedure Remove_File_If_Safe (Repo_Root : String; Relative_Path : String)

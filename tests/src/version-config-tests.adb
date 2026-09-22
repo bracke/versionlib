@@ -4,6 +4,7 @@ with Ada.IO_Exceptions;
 with AUnit.Assertions;
 with AUnit.Test_Cases;
 
+with Version.Platform;
 with Version.Repository;
 with Version.Init;
 with Version.Test_Support;
@@ -196,7 +197,11 @@ package body Version.Config.Tests is
               (Before
                = "core.repositoryformatversion=0"
                  & Character'Val (10)
-                 & "core.filemode=true"
+                 --  git records what the host can represent: a filesystem
+                 --  with no executable bit gets core.filemode=false.
+                 & "core.filemode="
+                 & (if Version.Platform.Supports_Executable_Bit
+                    then "true" else "false")
                  & Character'Val (10)
                  & "core.bare=false"
                  & Character'Val (10)

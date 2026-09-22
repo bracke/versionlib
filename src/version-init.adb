@@ -39,7 +39,14 @@ package body Version.Init is
         & HT & "repositoryformatversion = " & Version_Line & LF
         & HT & "filemode = " & Version.Platform.Core_Filemode_Default & LF
         & HT & "bare = " & Bare_Line & LF
-        & (if Bare then "" else HT & "logallrefupdates = true" & LF);
+        & (if Bare then "" else HT & "logallrefupdates = true" & LF)
+        --  git's init_db records what it probed about the filesystem, in
+        --  this order: no symbolic links, then a name comparison that folds
+        --  case. A repository cloned on such a host carries both lines.
+        & (if Version.Platform.Supports_Symbolic_Links then ""
+           else HT & "symlinks = false" & LF)
+        & (if Version.Platform.Is_Case_Insensitive_Default
+           then HT & "ignorecase = true" & LF else "");
       Extensions : constant String :=
         (if Is_Sha256 then HT & "objectformat = sha256" & LF else "")
         & (if Is_Reftable then HT & "refstorage = reftable" & LF else "");

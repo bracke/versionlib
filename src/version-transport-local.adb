@@ -269,8 +269,12 @@ package body Version.Transport.Local is
 
    procedure Reject_Invalid_Object_Store_Entry (Path : String) is
    begin
+      --  One spelling of a path in a diagnostic: the entry comes from
+      --  Ada.Directories, which composes with the host separator, and git
+      --  prints a forward slash on every host.
       raise Ada.IO_Exceptions.Data_Error with
-        "invalid local object-store entry: " & Path;
+        "invalid local object-store entry: "
+        & Version.Files.Normalize_Separators (Path);
    end Reject_Invalid_Object_Store_Entry;
 
    procedure Collect_Directory_Tree

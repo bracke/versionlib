@@ -92,7 +92,6 @@ package body Version.Test_Support is
       Version.Staging.Write (Repo => Repo, Entries => Kept);
    end Stage_Resolved_File;
 
-
    function Shell_Program return String is
       use type GNAT.OS_Lib.String_Access;
       Found : GNAT.OS_Lib.String_Access :=
@@ -139,5 +138,20 @@ package body Version.Test_Support is
 
       GNAT.Sockets.Accept_Socket (Server, Client, Peer);
    end Accept_With_Timeout;
+
+   function Git_Program return String is
+      use type GNAT.OS_Lib.String_Access;
+
+      Found : GNAT.OS_Lib.String_Access :=
+        GNAT.OS_Lib.Locate_Exec_On_Path ("git");
+   begin
+      if Found = null then
+         return "/usr/bin/git";
+      end if;
+
+      return Result : constant String := Found.all do
+         GNAT.OS_Lib.Free (Found);
+      end return;
+   end Git_Program;
 
 end Version.Test_Support;

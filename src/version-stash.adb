@@ -2386,7 +2386,7 @@ package body Version.Stash is
                     with "stash reflog is not an ordinary file: " & Path;
                end if;
 
-               Ada.Directories.Delete_File (Native_Path);
+               Version.Files.Delete_File (Native_Path);
             end Delete_Stash_Log;
 
             procedure Restore_Stash_Ref is

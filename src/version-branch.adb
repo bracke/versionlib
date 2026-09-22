@@ -528,7 +528,7 @@ package body Version.Branch is
       end if;
 
       Ensure_Branch_Reflog_Deletable (Repo, Name);
-      Ada.Directories.Delete_File (Path);
+      Version.Files.Delete_File (Path);
    end Delete_Branch_Reflog;
 
    procedure Restore_Branch_Ref

@@ -60,6 +60,25 @@ package Version.Files is
    --  Preferred replacement API. Uses the platform's direct rename/replace
    --  behavior where it can preserve an existing target atomically.
 
+   function Child_Path
+     (Directory : String;
+      Name      : String)
+      return String;
+   --  Directory, a separator, and Name kept byte for byte -- what a
+   --  directory entry's path is. Join is wrong here because it normalizes
+   --  separators, which rewrites a file name that legitimately contains a
+   --  backslash; Ada.Directories.Full_Name is wrong because it validates
+   --  the simple name, which a host may reject for a control character git
+   --  tracks happily.
+
+   procedure Delete_File
+     (Path : String);
+   --  Remove Path. Unlike Ada.Directories.Delete_File this clears the
+   --  read-only attribute and tries once more when the host refuses: git
+   --  writes every loose object read-only, and Windows will not unlink a
+   --  read-only file -- git's own mingw_unlink chmods first for exactly
+   --  this reason. Raises what Ada.Directories.Delete_File raises otherwise.
+
    procedure Delete_File_If_Exists
      (Path : String);
 
