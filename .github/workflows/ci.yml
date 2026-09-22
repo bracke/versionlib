@@ -14,75 +14,25 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: versionlib
-      - name: Check out httpclient sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
-      - name: Check out project_tools sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
-      - name: Check out zlib sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
-      - name: Check out cryptolib sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
-      - name: Check out regexp sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
-      - name: Check out i18n sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
-      - name: Check out sshlib sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
-      - name: Check out hostkit sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
-      - name: Compute an OS-stable i18n upstream cache key
-        id: cldr_key
-        if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          # i18n's regen fetches three flaky sources -- cldr-json (GitHub), tzdb
-          # (IANA) and the Unicode UCD/UCA/collation/transforms -- each of which
-          # reaches the Windows runner only intermittently. The next step caches
-          # all of them. Versions are pinned in the tracked cldr manifest plus
-          # hardcoded constants in the three downloader sources, so hash all four:
-          # any version/logic change busts the cache. Strip CR so the key is
-          # identical on every OS (git checks these out CRLF on Windows, LF else).
-          h=$(cat \
-                "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" \
-                "$GITHUB_WORKSPACE/i18n/cldr/src/download_cldr_upstream.adb" \
-                "$GITHUB_WORKSPACE/i18n/cldr/src/download_tzdb.adb" \
-                "$GITHUB_WORKSPACE/i18n/cldr/src/fetch_ucd.adb" \
-              | tr -d '\r' | git hash-object --stdin)
-          echo "key=i18n-upstream-$h" >> "$GITHUB_OUTPUT"
-      - name: Cache the i18n upstream download trees (CI-only; avoids flaky 82 MB+ downloads)
-        # Only the raw download trees are cached (not the generated export), so the
-        # regen re-runs with current i18n code; each downloader skips when its dir
-        # is present. The reliable posix job seeds one shared cross-OS entry the
-        # windows job restores, taking Windows out of the download path. Inlined
-        # because versionlib checks out siblings by hand, not via project_tools'
-        # checkout-ada-siblings action.
-        if: steps.cldr_key.outputs.key != ''
-        uses: actions/cache@v4
+      - name: Check out sibling crates (transitive pin closure)
+        # Derived from the alire.toml pins themselves, and it carries the i18n
+        # upstream download cache: a hand-listed set goes stale the moment the
+        # graph gains a crate (it last missed ssllib and truststores, and the
+        # build died on the pin rather than the code).
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
-          path: |
-            i18n/cldr/upstream/cldr-json
-            i18n/cldr/upstream/tzdb
-            i18n/cldr/upstream/ucd
-            i18n/cldr/upstream/ucd16
-            i18n/cldr/upstream/uca
-            i18n/cldr/upstream/collation
-            i18n/cldr/upstream/transforms
-            i18n/cldr/upstream/transforms_test
-          key: ${{ steps.cldr_key.outputs.key }}
-          enableCrossOsArchive: true
+          root: versionlib
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
         with:
           toolchain: gnat_native=15.2.1 gprbuild
+
+      - name: Raise Alire solver timeout so slow runners get a complete solution
+        # Default solver.timeout is 5 s (+10 s grace); a large graph on a slow
+        # runner can time out and ship an INCOMPLETE solution, silently dropping
+        # transitive crates (then gprbuild fails with "<x>.gpr not found").
+        shell: bash
+        run: alr settings --global --set solver.timeout 600
       - name: Build versionlib verification tooling
         working-directory: versionlib/tools
         run: alr --non-interactive build
@@ -101,75 +51,25 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: versionlib
-      - name: Check out httpclient sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/httpclient", path: httpclient }
-      - name: Check out project_tools sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/project_tools", path: project_tools }
-      - name: Check out zlib sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/zlib", path: zlib }
-      - name: Check out cryptolib sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/cryptolib", path: cryptolib }
-      - name: Check out regexp sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/regexp", path: regexp }
-      - name: Check out i18n sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/i18n", path: i18n }
-      - name: Check out sshlib sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/sshlib", path: sshlib }
-      - name: Check out hostkit sibling
-        uses: actions/checkout@v7
-        with: { repository: "${{ github.repository_owner }}/hostkit", path: hostkit }
-      - name: Compute an OS-stable i18n upstream cache key
-        id: cldr_key
-        if: hashFiles('i18n/cldr/upstream/source_manifest.txt') != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          # i18n's regen fetches three flaky sources -- cldr-json (GitHub), tzdb
-          # (IANA) and the Unicode UCD/UCA/collation/transforms -- each of which
-          # reaches the Windows runner only intermittently. The next step caches
-          # all of them. Versions are pinned in the tracked cldr manifest plus
-          # hardcoded constants in the three downloader sources, so hash all four:
-          # any version/logic change busts the cache. Strip CR so the key is
-          # identical on every OS (git checks these out CRLF on Windows, LF else).
-          h=$(cat \
-                "$GITHUB_WORKSPACE/i18n/cldr/upstream/source_manifest.txt" \
-                "$GITHUB_WORKSPACE/i18n/cldr/src/download_cldr_upstream.adb" \
-                "$GITHUB_WORKSPACE/i18n/cldr/src/download_tzdb.adb" \
-                "$GITHUB_WORKSPACE/i18n/cldr/src/fetch_ucd.adb" \
-              | tr -d '\r' | git hash-object --stdin)
-          echo "key=i18n-upstream-$h" >> "$GITHUB_OUTPUT"
-      - name: Cache the i18n upstream download trees (CI-only; avoids flaky 82 MB+ downloads)
-        # Only the raw download trees are cached (not the generated export), so the
-        # regen re-runs with current i18n code; each downloader skips when its dir
-        # is present. The reliable posix job seeds one shared cross-OS entry the
-        # windows job restores, taking Windows out of the download path. Inlined
-        # because versionlib checks out siblings by hand, not via project_tools'
-        # checkout-ada-siblings action.
-        if: steps.cldr_key.outputs.key != ''
-        uses: actions/cache@v4
+      - name: Check out sibling crates (transitive pin closure)
+        # Derived from the alire.toml pins themselves, and it carries the i18n
+        # upstream download cache: a hand-listed set goes stale the moment the
+        # graph gains a crate (it last missed ssllib and truststores, and the
+        # build died on the pin rather than the code).
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
-          path: |
-            i18n/cldr/upstream/cldr-json
-            i18n/cldr/upstream/tzdb
-            i18n/cldr/upstream/ucd
-            i18n/cldr/upstream/ucd16
-            i18n/cldr/upstream/uca
-            i18n/cldr/upstream/collation
-            i18n/cldr/upstream/transforms
-            i18n/cldr/upstream/transforms_test
-          key: ${{ steps.cldr_key.outputs.key }}
-          enableCrossOsArchive: true
+          root: versionlib
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
         with:
           toolchain: gnat_native=15.2.1 gprbuild
+
+      - name: Raise Alire solver timeout so slow runners get a complete solution
+        # Default solver.timeout is 5 s (+10 s grace); a large graph on a slow
+        # runner can time out and ship an INCOMPLETE solution, silently dropping
+        # transitive crates (then gprbuild fails with "<x>.gpr not found").
+        shell: bash
+        run: alr settings --global --set solver.timeout 600
       - name: Build library
         working-directory: versionlib
         shell: bash
@@ -177,6 +77,12 @@ jobs:
       - name: Build and run the AUnit suite
         working-directory: versionlib
         shell: bash
+        env:
+          # A merge fixture runs `git commit` without -m: with no editor
+          # configured git opens one and blocks on stdin, which on a runner is
+          # a hung job rather than a failure.
+          GIT_EDITOR: "true"
+          EDITOR: "true"
         run: |
           (cd tests && alr --non-interactive build)
           if [ -f ./tests/bin/tests.exe ]; then ./tests/bin/tests.exe; else ./tests/bin/tests; fi
