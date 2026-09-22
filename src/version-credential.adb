@@ -1,4 +1,5 @@
 with Ada.Characters.Handling;
+with Version.Platform;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with GNAT.OS_Lib;
@@ -124,7 +125,7 @@ package body Version.Credential is
                2 => new String'
                       (Command & " " & Action
                        & " < '" & In_Path & "' > '" & Out_Path & "'")];
-      Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+      Status := GNAT.OS_Lib.Spawn (Version.Platform.Shell_Program, Args);
       GNAT.OS_Lib.Free (Args (1));
       GNAT.OS_Lib.Free (Args (2));
 

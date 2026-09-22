@@ -1696,7 +1696,7 @@ package body Version.Submodules is
                   begin
                      Ada.Directories.Set_Directory
                        (Version.Files.To_Native_Path (Work));
-                     Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+                     Status := GNAT.OS_Lib.Spawn (Version.Platform.Shell_Program, Args);
                      Ada.Directories.Set_Directory (Old_Dir);
                      GNAT.OS_Lib.Free (Args (1));
                      GNAT.OS_Lib.Free (Args (2));

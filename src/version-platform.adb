@@ -1,6 +1,8 @@
 with Ada.Characters.Handling;
 with Ada.Environment_Variables;
 
+with GNAT.OS_Lib;
+
 package body Version.Platform is
 
    function Lower (Value : String) return String is
@@ -132,5 +134,21 @@ package body Version.Platform is
          return '/';
       end if;
    end Native_Path_Separator;
+
+   function Shell_Program return String is
+      Found : GNAT.OS_Lib.String_Access :=
+        GNAT.OS_Lib.Locate_Exec_On_Path ("sh");
+      use type GNAT.OS_Lib.String_Access;
+   begin
+      if Found = null then
+         return "/bin/sh";
+      end if;
+      declare
+         Path : constant String := Found.all;
+      begin
+         GNAT.OS_Lib.Free (Found);
+         return Path;
+      end;
+   end Shell_Program;
 
 end Version.Platform;

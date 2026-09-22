@@ -1,4 +1,5 @@
-with Ada.Containers; use Ada.Containers;
+with Ada.Containers;
+with Version.Platform; use Ada.Containers;
 with Ada.Containers.Ordered_Sets;
 with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Containers.Vectors;
@@ -487,7 +488,7 @@ package body Version.Rebase is
       Status : Integer;
    begin
       Version.Files.Write_Binary_File (Path, Original_Msg);
-      Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+      Status := GNAT.OS_Lib.Spawn (Version.Platform.Shell_Program, Args);
       GNAT.OS_Lib.Free (Args (1));
       GNAT.OS_Lib.Free (Args (2));
       if Status /= 0 then
@@ -1232,7 +1233,7 @@ package body Version.Rebase is
                Progress;
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error, "Executing: " & Command);
-               Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+               Status := GNAT.OS_Lib.Spawn (Version.Platform.Shell_Program, Args);
                GNAT.OS_Lib.Free (Args (1));
                GNAT.OS_Lib.Free (Args (2));
                if Status /= 0 then
@@ -1877,7 +1878,7 @@ package body Version.Rebase is
                   raise Ada.IO_Exceptions.Data_Error with
                     "Terminal is dumb, but EDITOR unset";
                end if;
-               Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+               Status := GNAT.OS_Lib.Spawn (Version.Platform.Shell_Program, Args);
                GNAT.OS_Lib.Free (Args (1));
                GNAT.OS_Lib.Free (Args (2));
                if Status /= 0 then

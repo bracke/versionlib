@@ -1344,7 +1344,7 @@ package body Version.Diff is
             new String'(In_Name.all)];
       begin
          GNAT.OS_Lib.Spawn
-           (Program_Name           => "/bin/sh",
+           (Program_Name           => Version.Platform.Shell_Program,
             Args                   => Args,
             Output_File_Descriptor => Out_FD,
             Return_Code            => Code,

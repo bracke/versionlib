@@ -23,4 +23,11 @@ package Version.Platform is
 
    function Native_Path_Separator return Character;
 
+   --  The POSIX shell git runs hooks, editors, aliases and merge drivers
+   --  through. /bin/sh on a POSIX host; on Windows there is no such path and
+   --  the shell is whatever Git for Windows put on PATH, so it is located
+   --  rather than assumed. Falls back to "/bin/sh" when nothing is found, so
+   --  the caller still reports the failure it always did.
+   function Shell_Program return String;
+
 end Version.Platform;

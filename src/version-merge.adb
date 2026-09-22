@@ -3953,7 +3953,7 @@ package body Version.Merge is
 
          Args (1) := new String'("-c");
          Args (2) := new String'(Command);
-         Status := GNAT.OS_Lib.Spawn (Program_Name => "/bin/sh", Args => Args);
+         Status := GNAT.OS_Lib.Spawn (Program_Name => Version.Platform.Shell_Program, Args => Args);
 
          Ada.Directories.Set_Directory (Old_Dir);
          Restore_Env ("GIT_DIR", Old_Git_Dir_Exists, Old_Git_Dir);

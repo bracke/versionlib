@@ -1,4 +1,5 @@
 with Ada.Environment_Variables;
+with Version.Platform;
 with Ada.IO_Exceptions;
 
 with GNAT.OS_Lib;
@@ -71,7 +72,7 @@ package body Version.Editor is
       Args (2) := new String'(Editor & " ""$@""");
       Args (3) := new String'(Editor);
       Args (4) := new String'(Path);
-      Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
+      Status := GNAT.OS_Lib.Spawn (Version.Platform.Shell_Program, Args);
       for I in Args'Range loop
          GNAT.OS_Lib.Free (Args (I));
       end loop;
