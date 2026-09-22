@@ -20,7 +20,7 @@ package body Version.Git_Fixtures is
 
       Status :=
         GNAT.OS_Lib.Spawn
-          (Program_Name => "/bin/sh",
+          (Program_Name => Version.Test_Support.Shell_Program,
            Args         => Args);
 
       Ada.Directories.Set_Directory (Old_Dir);

@@ -14,6 +14,10 @@ package body Version.Editor is
      (if Ada.Environment_Variables.Exists (Name)
       then Ada.Environment_Variables.Value (Name) else "");
 
+   --  git's is_terminal_dumb: no TERM at all counts as dumb.
+   function Terminal_Is_Dumb return Boolean is
+     (Env ("TERM") = "" or else Env ("TERM") = "dumb");
+
    function Configured
      (Repo     : Version.Repository.Repository_Handle;
       Fallback : Boolean := True) return String
@@ -22,15 +26,21 @@ package body Version.Editor is
         (if Version.Config.Has_Key (Repo, "core.editor")
          then Version.Config.Trim (Version.Config.Get_Value (Repo, "core.editor"))
          else "");
+      Dumb : constant Boolean := Terminal_Is_Dumb;
    begin
       if Env ("GIT_EDITOR") /= "" then
          return Env ("GIT_EDITOR");
       elsif Core /= "" then
          return Core;
-      elsif Env ("VISUAL") /= "" then
+      elsif not Dumb and then Env ("VISUAL") /= "" then
+         --  git skips VISUAL on a dumb terminal, but still honours EDITOR.
          return Env ("VISUAL");
       elsif Env ("EDITOR") /= "" then
          return Env ("EDITOR");
+      elsif Dumb then
+         --  git's git_editor returns nothing rather than falling back to vi,
+         --  and the caller reports "Terminal is dumb, but EDITOR unset".
+         return "";
       elsif Fallback then
          return "vi";
       else

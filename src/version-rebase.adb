@@ -1818,7 +1818,7 @@ package body Version.Rebase is
                declare
                   Used : array
                     (All_Commits.First_Index .. All_Commits.Last_Index)
-                    of Boolean := (others => False);
+                    of Boolean := [others => False];
                begin
                   for I in All_Commits.First_Index .. All_Commits.Last_Index loop
                      if not Used (I)
@@ -1863,11 +1863,20 @@ package body Version.Rebase is
          --  generated todo untouched).
          if Edit_Todo then
             declare
+               Editor : constant String := Sequence_Editor;
                Args : GNAT.OS_Lib.Argument_List :=
                  [1 => new String'("-c"),
-                  2 => new String'(Sequence_Editor & " '" & Todo_Path & "'")];
+                  2 => new String'(Editor & " '" & Todo_Path & "'")];
                Status : Integer;
             begin
+               if Editor'Length = 0 then
+                  --  git refuses rather than running the todo file itself.
+                  GNAT.OS_Lib.Free (Args (1));
+                  GNAT.OS_Lib.Free (Args (2));
+                  Version.Files.Delete_File_If_Exists (Todo_Path);
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "Terminal is dumb, but EDITOR unset";
+               end if;
                Status := GNAT.OS_Lib.Spawn ("/bin/sh", Args);
                GNAT.OS_Lib.Free (Args (1));
                GNAT.OS_Lib.Free (Args (2));

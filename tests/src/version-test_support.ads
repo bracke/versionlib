@@ -47,4 +47,10 @@ package Version.Test_Support is
       Right : String)
       return String;
 
+
+   --  The POSIX shell, located on PATH rather than assumed at /bin/sh: Git
+   --  for Windows ships sh.exe and the absolute path does not exist there,
+   --  so every fixture command failed before it ran.
+   function Shell_Program return String;
+
 end Version.Test_Support;

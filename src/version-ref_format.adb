@@ -856,32 +856,17 @@ package body Version.Ref_Format is
             if Ref'Length > 11
               and then Ref (Ref'First .. Ref'First + 10) = "refs/heads/"
             then
-               --  `add -f` can check one branch out twice; git's lookup finds
-               --  the entry it recorded last, which is the last linked
-               --  worktree in name order.
-               declare
-                  Best : Unbounded_String;
-                  Main : Unbounded_String;
-               begin
-                  for W of Version.Worktrees.List loop
-                     if not W.Detached
-                       and then To_String (W.Branch)
-                                = Ref (Ref'First + 11 .. Ref'Last)
-                     then
-                        if W.Current then
-                           Main := W.Path;
-                        elsif Length (Best) = 0
-                          or else To_String (W.Path) > To_String (Best)
-                        then
-                           Best := W.Path;
-                        end if;
-                     end if;
-                  end loop;
-                  if Length (Best) > 0 then
-                     return To_String (Best);
+               --  `add -f` can check one branch out twice; which of the two
+               --  git then names is an artefact of its hashmap and differs
+               --  between hosts, so the first entry is as good an answer.
+               for W of Version.Worktrees.List loop
+                  if not W.Detached
+                    and then To_String (W.Branch)
+                             = Ref (Ref'First + 11 .. Ref'Last)
+                  then
+                     return To_String (W.Path);
                   end if;
-                  return To_String (Main);
-               end;
+               end loop;
             end if;
             return "";
          elsif Head_A = "subject" or else Atom = "contents:subject" then

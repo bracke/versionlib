@@ -1,3 +1,4 @@
+with GNAT.OS_Lib;
 with Ada.Strings.Unbounded;
 
 with Version.Files;
@@ -72,5 +73,22 @@ package body Version.Test_Support is
       Version.Staging.Sort_By_Path (Kept);
       Version.Staging.Write (Repo => Repo, Entries => Kept);
    end Stage_Resolved_File;
+
+
+   function Shell_Program return String is
+      use type GNAT.OS_Lib.String_Access;
+      Found : GNAT.OS_Lib.String_Access :=
+        GNAT.OS_Lib.Locate_Exec_On_Path ("sh");
+   begin
+      if Found = null then
+         return "/bin/sh";
+      end if;
+      declare
+         Path : constant String := Found.all;
+      begin
+         GNAT.OS_Lib.Free (Found);
+         return Path;
+      end;
+   end Shell_Program;
 
 end Version.Test_Support;
