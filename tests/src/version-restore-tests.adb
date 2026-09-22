@@ -256,7 +256,7 @@ package body Version.Restore.Tests is
       Ada.Directories.Set_Directory (Root);
       Save_File (Root, "a.txt", "one" & LF, "one");
 
-      Ada.Directories.Delete_File (A_Path);
+      Version.Files.Delete_File (A_Path);
       Version.Restore.Restore_Path ("a.txt");
 
       Assert

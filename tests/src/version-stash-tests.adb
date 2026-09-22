@@ -967,7 +967,7 @@ package body Version.Stash.Tests is
          Ref_Before : constant String :=
            Version.Files.Read_Binary_File (Stash_Ref_Path (Root));
       begin
-         Ada.Directories.Delete_File (Stash_Log_Path (Root));
+         Version.Files.Delete_File (Stash_Log_Path (Root));
          Ada.Directories.Create_Path (Stash_Log_Path (Root));
          Version.Test_Support.Write_Text_File
            (Version.Test_Support.Join (Stash_Log_Path (Root), "sentinel"),
@@ -1379,7 +1379,7 @@ package body Version.Stash.Tests is
               "pathspec untracked stash must remove selected untracked file");
       Assert (File_Text (Root, "keep.dat") = "kept",
               "pathspec untracked stash must leave non-selected untracked file");
-      Ada.Directories.Delete_File (Version.Test_Support.Join (Root, "keep.dat"));
+      Version.Files.Delete_File (Version.Test_Support.Join (Root, "keep.dat"));
       Version.Stash.Apply;
       Assert (File_Text (Root, "stash.dat") = "selected",
               "pathspec untracked stash apply must restore selected untracked file");
@@ -1448,7 +1448,7 @@ package body Version.Stash.Tests is
       Assert
         (File_Text (Root, "kept.log") = "kept",
          "include-ignored pathspec stash must preserve non-selected ignored file");
-      Ada.Directories.Delete_File (Version.Test_Support.Join (Root, "kept.log"));
+      Version.Files.Delete_File (Version.Test_Support.Join (Root, "kept.log"));
       Version.Stash.Apply;
       Assert
         (File_Text (Root, "selected.log") = "selected",

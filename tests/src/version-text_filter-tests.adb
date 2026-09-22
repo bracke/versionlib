@@ -186,7 +186,7 @@ package body Version.Text_Filter.Tests is
 
       --  Turn on autocrlf, drop the working file, and check it back out.
       Version.Git_Fixtures.Run (Root, "git config core.autocrlf true");
-      Ada.Directories.Delete_File
+      Version.Files.Delete_File
         (Version.Test_Support.Join (Root, "a.txt"));
       Version.Restore.Restore_Path_From_Index (Version.Repository.Open, "a.txt");
 
@@ -244,7 +244,7 @@ package body Version.Text_Filter.Tests is
          & "printf 'a $Id$ b\n$Id$\nn $Identity$ n\n' > want && cmp got want");
 
       Version.Git_Fixtures.Run (Root, "git commit -q -m c1");
-      Ada.Directories.Delete_File (Version.Test_Support.Join (Root, "f.c"));
+      Version.Files.Delete_File (Version.Test_Support.Join (Root, "f.c"));
       Version.Restore.Restore_Path_From_Index (Version.Repository.Open, "f.c");
 
       --  Checkout expanded the ident; the worktree now round-trips clean.

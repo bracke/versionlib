@@ -307,9 +307,9 @@ package body Version.Pack_Write.Tests is
          Pack_Path  => Pack_Path,
          Index_Path => Index_Path);
 
-      Ada.Directories.Delete_File (Version.Objects.Loose_Object_Path (Repo, Commit_Id));
-      Ada.Directories.Delete_File (Version.Objects.Loose_Object_Path (Repo, Tree_Id));
-      Ada.Directories.Delete_File (Version.Objects.Loose_Object_Path (Repo, Blob_Id));
+      Version.Files.Delete_File (Version.Objects.Loose_Object_Path (Repo, Commit_Id));
+      Version.Files.Delete_File (Version.Objects.Loose_Object_Path (Repo, Tree_Id));
+      Version.Files.Delete_File (Version.Objects.Loose_Object_Path (Repo, Blob_Id));
 
       declare
          Commit_Obj : constant Version.Objects.Git_Object := Version.Objects.Read_Object (Repo, Commit_Id);
@@ -415,9 +415,9 @@ package body Version.Pack_Write.Tests is
             Index_Path : constant String :=
               Join (Pack_Dir, "ingested-tag-" & Pack_Name & ".idx");
          begin
-            Ada.Directories.Delete_File (Index_Path);
+            Version.Files.Delete_File (Index_Path);
             Version.Pack.Index_Pack (Repo => Repo, Pack_Path => Pack_Path);
-            Ada.Directories.Delete_File
+            Version.Files.Delete_File
               (Version.Objects.Loose_Object_Path (Repo, Tag_Id));
 
             declare

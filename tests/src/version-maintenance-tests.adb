@@ -130,7 +130,7 @@ package body Version.Maintenance.Tests is
          end;
          Ada.Directories.Set_Directory (Old_Dir);
 
-         Ada.Directories.Delete_File (Object_File_Path (Root, Head_Id));
+         Version.Files.Delete_File (Object_File_Path (Root, Head_Id));
       exception
          when others =>
             if Ada.Directories.Current_Directory /= Old_Dir then

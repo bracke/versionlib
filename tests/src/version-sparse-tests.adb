@@ -252,7 +252,7 @@ package body Version.Sparse.Tests is
       begin
          Version.Sparse.Set_From_Strings (Repo, Sparse_Items);
          Version.Restore.Restore_Working_Tree (Repo);
-         Ada.Directories.Delete_File
+         Version.Files.Delete_File
            (Version.Test_Support.Join (Root, "src/main.adb"));
          declare
             S : constant Version.Status.Status_Result :=

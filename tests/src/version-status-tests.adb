@@ -16,6 +16,7 @@ with Version.Write;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
+with Version.Files;
 
 package body Version.Status.Tests is
    use Version.Objects;
@@ -353,7 +354,7 @@ package body Version.Status.Tests is
    begin
       Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
 
-      Ada.Directories.Delete_File
+      Version.Files.Delete_File
       (Version.Test_Support.Join (Root, "a.txt"));
 
       Ada.Directories.Set_Directory (Root);
@@ -397,7 +398,7 @@ package body Version.Status.Tests is
    begin
       Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
 
-      Ada.Directories.Delete_File
+      Version.Files.Delete_File
       (Version.Test_Support.Join (Root, "a.txt"));
 
       Version.Git_Fixtures.Run (Root, "git add a.txt");

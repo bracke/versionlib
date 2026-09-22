@@ -10,6 +10,7 @@ with Version.Pathspec;
 with Version.Repository;
 with Version.Revisions;
 with Version.Test_Support;
+with Version.Files;
 
 package body Version.Diff.Tests is
 
@@ -164,7 +165,7 @@ package body Version.Diff.Tests is
       Old_Dir : constant String := Ada.Directories.Current_Directory;
    begin
       Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
-      Ada.Directories.Delete_File (Version.Test_Support.Join (Root, "a.txt"));
+      Version.Files.Delete_File (Version.Test_Support.Join (Root, "a.txt"));
       Version.Git_Fixtures.Run (Root, "git add a.txt");
 
       Ada.Directories.Set_Directory (Root);
@@ -287,7 +288,7 @@ package body Version.Diff.Tests is
       Version.Test_Support.Write_Text_File
         (Version.Test_Support.Join (Root, "keep.txt"),
          "changed" & Character'Val (10));
-      Ada.Directories.Delete_File
+      Version.Files.Delete_File
         (Version.Test_Support.Join (Root, "skip.txt"));
 
       Version.Pathspec.Append_Parse (Specs, "keep.txt");

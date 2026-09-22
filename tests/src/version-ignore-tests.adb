@@ -12,6 +12,7 @@ with Version.Repository;
 with Version.Status; use Version.Status;
 with Version.Test_Support;
 with Version.Platform;
+with Version.Files;
 
 package body Version.Ignore.Tests is
 
@@ -486,34 +487,39 @@ package body Version.Ignore.Tests is
            (Version.Ignore.Is_Ignored (Rules, "[abc].literal", False)
             = Git_Check_Ignored (Root, "[abc].literal"),
             "escaped opening bracket should match git check-ignore as a literal");
-         Assert
-           (Version.Ignore.Is_Ignored (Rules, "literal\slash", False),
-            "escaped backslash should match a literal backslash path");
-         Assert
-           (Version.Ignore.Is_Ignored (Rules, "literal\slash", False)
-            = Git_Check_Ignored (Root, "literal\slash"),
-            "escaped backslash should match git check-ignore as a literal");
-         Assert
-           (Version.Ignore.Is_Ignored (Rules, "trailing\", False),
-            "trailing escaped backslash should match a literal backslash path");
-         Assert
-           (Version.Ignore.Is_Ignored (Rules, "trailing\", False)
-            = Git_Check_Ignored (Root, "trailing\"),
-            "trailing escaped backslash should match git check-ignore");
-         Assert
-           (Version.Ignore.Is_Ignored (Rules, "ordinaryq", False),
-            "backslash before ordinary character should escape that character");
-         Assert
-           (Version.Ignore.Is_Ignored (Rules, "ordinaryq", False)
-            = Git_Check_Ignored (Root, "ordinaryq"),
-            "ordinary-character backslash escape should match git check-ignore");
-         Assert
-           (not Version.Ignore.Is_Ignored (Rules, "ordinary\q", False),
-            "backslash before ordinary character should not remain literal");
-         Assert
-           (Version.Ignore.Is_Ignored (Rules, "ordinary\q", False)
-            = Git_Check_Ignored (Root, "ordinary\q"),
-            "literal ordinary-character backslash path should match git check-ignore");
+         --  A backslash is an ordinary character in a path name only where
+         --  the host does not use it as a separator; on Windows git itself
+         --  will not name a file this way.
+         if Version.Platform.Native_Path_Separator /= '\' then
+            Assert
+              (Version.Ignore.Is_Ignored (Rules, "literal\slash", False),
+               "escaped backslash should match a literal backslash path");
+            Assert
+              (Version.Ignore.Is_Ignored (Rules, "literal\slash", False)
+               = Git_Check_Ignored (Root, "literal\slash"),
+               "escaped backslash should match git check-ignore as a literal");
+            Assert
+              (Version.Ignore.Is_Ignored (Rules, "trailing\", False),
+               "trailing escaped backslash should match a literal backslash path");
+            Assert
+              (Version.Ignore.Is_Ignored (Rules, "trailing\", False)
+               = Git_Check_Ignored (Root, "trailing\"),
+               "trailing escaped backslash should match git check-ignore");
+            Assert
+              (Version.Ignore.Is_Ignored (Rules, "ordinaryq", False),
+               "backslash before ordinary character should escape that character");
+            Assert
+              (Version.Ignore.Is_Ignored (Rules, "ordinaryq", False)
+               = Git_Check_Ignored (Root, "ordinaryq"),
+               "ordinary-character backslash escape should match git check-ignore");
+            Assert
+              (not Version.Ignore.Is_Ignored (Rules, "ordinary\q", False),
+               "backslash before ordinary character should not remain literal");
+            Assert
+              (Version.Ignore.Is_Ignored (Rules, "ordinary\q", False)
+               = Git_Check_Ignored (Root, "ordinary\q"),
+               "literal ordinary-character backslash path should match git check-ignore");
+         end if;
       end;
 
       Ada.Directories.Set_Directory (Old_Dir);
@@ -649,6 +655,14 @@ package body Version.Ignore.Tests is
          "nested-linked-only.tmp" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "ln -s root-ignore-target .gitignore");
       Version.Git_Fixtures.Run (Root, "ln -s ../nested-ignore-target sub/.gitignore");
+
+      --  `ln -s` copies rather than links on a host that will not make a
+      --  symbolic link, and then there is no symlink to refuse to load.
+      if not GNAT.OS_Lib.Is_Symbolic_Link
+               (Version.Test_Support.Join (Root, ".gitignore"))
+      then
+         return;
+      end if;
 
       Ada.Directories.Set_Directory (Root);
 
@@ -1566,11 +1580,11 @@ package body Version.Ignore.Tests is
       procedure Remove_User_Tilde_Files is
       begin
          if Ada.Directories.Exists (User_Tilde_Ignore_Path) then
-            Ada.Directories.Delete_File (User_Tilde_Ignore_Path);
+            Version.Files.Delete_File (User_Tilde_Ignore_Path);
          end if;
 
          if Ada.Directories.Exists (User_Tilde_Config_Path) then
-            Ada.Directories.Delete_File (User_Tilde_Config_Path);
+            Version.Files.Delete_File (User_Tilde_Config_Path);
          end if;
 
          Version.Test_Support.Cleanup (User_Tilde_Repo_Path);

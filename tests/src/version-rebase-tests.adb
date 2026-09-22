@@ -378,7 +378,7 @@ package body Version.Rebase.Tests is
         (Ada.Directories.Exists
            (Version.Test_Support.Join (Root, "rebase-post-commit.txt")),
          "rebase continue must run post-commit hook");
-      Ada.Directories.Delete_File
+      Version.Files.Delete_File
         (Version.Test_Support.Join (Root, "rebase-post-commit.txt"));
 
       declare

@@ -11,6 +11,22 @@ with Version.Test_Support;
 
 package body Version.Config.Tests is
 
+   LF_Char : constant Character := Character'Val (10);
+
+   --  What `init` records about the filesystem, as git's init_db does: the
+   --  two lines exist only on a host that needs them.
+   Probe_Keys : constant String :=
+     (if Version.Platform.Supports_Symbolic_Links then ""
+      else "core.symlinks" & LF_Char)
+     & (if Version.Platform.Is_Case_Insensitive_Default
+        then "core.ignorecase" & LF_Char else "");
+
+   Probe_List : constant String :=
+     (if Version.Platform.Supports_Symbolic_Links then ""
+      else "core.symlinks=false" & LF_Char)
+     & (if Version.Platform.Is_Case_Insensitive_Default
+        then "core.ignorecase=true" & LF_Char else "");
+
    use AUnit.Assertions;
    use AUnit.Test_Cases.Registration;
 
@@ -207,6 +223,7 @@ package body Version.Config.Tests is
                  & Character'Val (10)
                  & "core.logallrefupdates=true"
                  & Character'Val (10)
+                 & Probe_List
                  & "user.name=Ada User"
                  & Character'Val (10)
                  & "user.email=ada@example.invalid"
@@ -301,6 +318,7 @@ package body Version.Config.Tests is
                  & Character'Val (10)
                  & "core.logallrefupdates"
                  & Character'Val (10)
+                 & Probe_Keys
                  & "user.name"
                  & Character'Val (10)
                  & "user.email"
@@ -609,6 +627,7 @@ package body Version.Config.Tests is
               & Character'Val (10)
               & "core.logallrefupdates"
               & Character'Val (10)
+              & Probe_Keys
               & "user.name"
               & Character'Val (10)
               & "remote.origin.url"

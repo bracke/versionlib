@@ -1018,7 +1018,7 @@ package body Version.Branch.Tests is
 
       Version.Branch.Switch_Branch ("feature");
 
-      Ada.Directories.Delete_File (Gone_Path);
+      Version.Files.Delete_File (Gone_Path);
       Version.Test_Support.Write_Text_File
         (Conflict_Path, "feature" & Character'Val (10));
       Version.Git_Fixtures.Run (Root, "git add conflict.txt");
