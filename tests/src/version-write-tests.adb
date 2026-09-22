@@ -1116,7 +1116,16 @@ package body Version.Write.Tests is
          & "-----END PGP SIGNATURE-----" & LF
          & "EOF" & LF);
       Version.Git_Fixtures.Run (Root, "chmod +x fake-bin/gpg");
-      Ada.Environment_Variables.Set ("PATH", Bin_Dir & ":" & Old_Path);
+      --  A shell script cannot stand in for a program on a host that runs
+      --  only what its extension marks executable: there is no way to put
+      --  a fake gpg on PATH there, so there is nothing here to ask.
+      if Version.Platform.Native_Path_Separator = '\' then
+         Ada.Directories.Set_Directory (Old_Dir);
+         return;
+      end if;
+
+      Ada.Environment_Variables.Set
+        ("PATH", Bin_Dir & GNAT.OS_Lib.Path_Separator & Old_Path);
 
       --  (1) commit.gpgSign=true -> a plain Save signs.
       Version.Git_Fixtures.Run (Root, "git config commit.gpgSign true");

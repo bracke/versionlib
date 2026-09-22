@@ -11,6 +11,8 @@ with Version.Objects;
 with Version.Repository;
 with Version.Ref_Cache;
 with Version.Test_Support;
+with Version.Platform;
+with GNAT.OS_Lib;
 
 package body Version.Log.Tests is
 
@@ -169,7 +171,16 @@ package body Version.Log.Tests is
          & "C=$(git hash-object -w -t commit c.txt); "
          & "git update-ref HEAD ""$C""");
 
-      Ada.Environment_Variables.Set ("PATH", Bin_Dir & ":" & Old_Path);
+      --  A shell script cannot stand in for a program on a host that runs
+      --  only what its extension marks executable: there is no way to put
+      --  a fake gpg on PATH there, so there is nothing here to ask.
+      if Version.Platform.Native_Path_Separator = '\' then
+         Ada.Directories.Set_Directory (Old_Dir);
+         return;
+      end if;
+
+      Ada.Environment_Variables.Set
+        ("PATH", Bin_Dir & GNAT.OS_Lib.Path_Separator & Old_Path);
       declare
          Repo   : constant Version.Repository.Repository_Handle :=
            Version.Repository.Open;
