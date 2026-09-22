@@ -30,4 +30,12 @@ package Version.Platform is
    --  the caller still reports the failure it always did.
    function Shell_Program return String;
 
+   --  Path resolved to the form the host itself reports: on Windows %TEMP%
+   --  is handed out in the 8.3 short spelling (C:\Users\RUNNER~1\...) while
+   --  every tool prints the long one, so a path built from it never matched
+   --  the paths in the output it was compared against. Returns Path unchanged
+   --  when it cannot be resolved (it does not exist, or the host has no
+   --  notion of a canonical form).
+   function Canonical_Path (Path : String) return String;
+
 end Version.Platform;

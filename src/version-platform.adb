@@ -3,6 +3,8 @@ with Ada.Environment_Variables;
 
 with GNAT.OS_Lib;
 
+with Hostkit.FS;
+
 package body Version.Platform is
 
    function Lower (Value : String) return String is
@@ -150,5 +152,14 @@ package body Version.Platform is
          return Path;
       end;
    end Shell_Program;
+
+   function Canonical_Path (Path : String) return String is
+      Resolved : constant String := Hostkit.FS.Real_Path (Path);
+   begin
+      return (if Resolved'Length = 0 then Path else Resolved);
+   exception
+      when others =>
+         return Path;
+   end Canonical_Path;
 
 end Version.Platform;
