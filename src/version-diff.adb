@@ -1747,9 +1747,14 @@ package body Version.Diff is
    --  symlink -> 120000, an executable regular file -> 100755, else 100644.
    --  Mirrors Version.Status.Working_Index_Mode so a chmod (a mode-only
    --  change) is visible to diff, not silently masked by the index mode.
+   --  Index_Mode is what the index records: on a host with no executable bit
+   --  it is the answer, because git (core.filemode=false there) keeps the
+   --  index's mode rather than reporting a change the filesystem cannot
+   --  represent.
    function Working_Disk_Mode
-     (Repo : Version.Repository.Repository_Handle;
-      Path : String) return String
+     (Repo       : Version.Repository.Repository_Handle;
+      Path       : String;
+      Index_Mode : String := "") return String
    is
       Full : constant String :=
         Version.Files.To_Native_Path
@@ -1757,6 +1762,10 @@ package body Version.Diff is
    begin
       if GNAT.OS_Lib.Is_Symbolic_Link (Full) then
          return "120000";
+      elsif not Version.Platform.Supports_Executable_Bit
+        and then Index_Mode in "100644" | "100755"
+      then
+         return Index_Mode;
       elsif Version.Platform.Supports_Executable_Bit
         and then GNAT.OS_Lib.Is_Executable_File (Full)
       then
@@ -1801,7 +1810,9 @@ package body Version.Diff is
                        (if Idx_Mode = "160000"
                         then Index.Element (I).Mode
                         else To_Unbounded_String
-                               (Working_Disk_Mode (Repo, Path)));
+                               (Working_Disk_Mode
+                                  (Repo, Path,
+                                   To_String (Index.Element (I).Mode))));
                      Result.Append (Entry_Copy);
                   end;
                end if;
@@ -4681,7 +4692,8 @@ package body Version.Diff is
                        (if not W_Present then "000000"
                         elsif Tracked and then Idx_Mode (Path) = "160000"
                         then Idx_Mode (Path)
-                        else Pad6 (Working_Disk_Mode (Repo, Path)));
+                        else Pad6 (Working_Disk_Mode
+                                     (Repo, Path, Idx_Mode (Path))));
                      --  git prints the index sha only when the working file is
                      --  fully up to date with the index (content AND mode); an
                      --  unstaged content or mode change prints a zero id.
@@ -4753,7 +4765,7 @@ package body Version.Diff is
                      --  gitlink keeps its index mode (no worktree file mode).
                      WMode : constant String :=
                        (if To_String (E.Mode) = "160000" then IMode
-                        else Pad6 (Working_Disk_Mode (Repo, Path)));
+                        else Pad6 (Working_Disk_Mode (Repo, Path, IMode)));
                   begin
                      if WSha /= ISha or else WMode /= IMode then
                         Mode_Map.Include (Path, IMode);

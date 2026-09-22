@@ -76,15 +76,24 @@ package body Version.Status is
    --  The mode git would record for a path as it is on disk right now.  A
    --  mode-only change (chmod +x) is a change to git, even when the content is
    --  untouched -- status compared blob ids only and missed it entirely.
+   --  Index_Mode is what the index records for the path: on a host with no
+   --  executable bit it is the answer, because git (core.filemode=false
+   --  there) keeps the index's mode rather than reporting a mode change the
+   --  filesystem cannot even represent.
    function Working_Index_Mode
-     (Repo : Version.Repository.Repository_Handle;
-      Path : String) return String
+     (Repo       : Version.Repository.Repository_Handle;
+      Path       : String;
+      Index_Mode : String := "") return String
    is
       Full : constant String :=
         Version.Files.Join (Version.Repository.Root_Path (Repo), Path);
    begin
       if GNAT.OS_Lib.Is_Symbolic_Link (Version.Files.To_Native_Path (Full)) then
          return "120000";
+      elsif not Version.Platform.Supports_Executable_Bit
+        and then Index_Mode in "100644" | "100755"
+      then
+         return Index_Mode;
       elsif Version.Platform.Supports_Executable_Bit
         and then GNAT.OS_Lib.Is_Executable_File
                    (Version.Files.To_Native_Path (Full))
@@ -371,7 +380,7 @@ package body Version.Status is
          then
             return "160000";
          elsif Work_Id.Contains (Path) then
-            return Working_Index_Mode (Repo, Path);
+            return Working_Index_Mode (Repo, Path, Look (Idx_Mode, Path, ""));
          else
             return "000000";
          end if;
@@ -883,7 +892,10 @@ package body Version.Status is
                     --  would report every submodule as permanently modified.
                     or else (To_String (Index_Entries.Element (I).Mode)
                              /= "160000"
-                             and then Working_Index_Mode (Repo, Path)
+                             and then Working_Index_Mode
+                                        (Repo, Path,
+                                         To_String
+                                           (Index_Entries.Element (I).Mode))
                                       /= To_String
                                            (Index_Entries.Element (I).Mode))
                   then
