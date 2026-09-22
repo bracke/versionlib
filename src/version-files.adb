@@ -5,6 +5,8 @@ with Ada.IO_Exceptions;
 with Ada.Unchecked_Deallocation;
 with Interfaces; use type Interfaces.Unsigned_32;
 with Interfaces.C;
+with Hostkit.FS;
+
 with Version.Platform; use Version.Platform;
 with Version.Files.Rollback;
 with Version.Files.Internal;
@@ -307,11 +309,6 @@ package body Version.Files is
    end Read_Binary_File;
 
    procedure Write_Symlink (Path : String; Target : String) is
-      function C_Symlink
-        (Target_Name : Interfaces.C.char_array;
-         Link_Name   : Interfaces.C.char_array)
-         return Interfaces.C.int
-        with Import, Convention => C, External_Name => "symlink";
       function C_Unlink (Name : Interfaces.C.char_array)
         return Interfaces.C.int
         with Import, Convention => C, External_Name => "unlink";
@@ -337,11 +334,10 @@ package body Version.Files is
       --  symlink() refuses to replace an existing name, so clear it first.
       Ignored := C_Unlink (Interfaces.C.To_C (Native));
 
-      if Interfaces.C."/="
-           (C_Symlink
-              (Interfaces.C.To_C (Target), Interfaces.C.To_C (Native)),
-            0)
-      then
+      --  Hostkit rather than symlink(2) directly: the C entry point does not
+      --  exist on Windows, so importing it broke the link of every executable
+      --  built over this library there.
+      if not Hostkit.FS.Create_Link (Target => Target, Link_Path => Native) then
          raise Ada.IO_Exceptions.Use_Error with
            "could not create symlink: " & Path;
       end if;

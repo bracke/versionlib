@@ -10,6 +10,8 @@ with Interfaces.C;
 with System;
 with GNAT.OS_Lib;
 
+with Hostkit.FS;
+
 with Version.Config;
 with Version.Console;
 with Version.Files;
@@ -68,11 +70,6 @@ package body Version.Merge is
    package Edit_Span_Vectors is new Ada.Containers.Vectors
      (Index_Type   => Natural,
       Element_Type => Edit_Span);
-
-   function Symlink
-     (Target : System.Address; Linkpath : System.Address)
-      return Interfaces.C.int;
-   pragma Import (C, Symlink, "symlink");
 
    function Unlink (Path : System.Address) return Interfaces.C.int;
    pragma Import (C, Unlink, "unlink");
@@ -3153,15 +3150,15 @@ package body Version.Merge is
               (Path    => Absolute_Path,
                Content => Target);
          else
-            declare
-               Target_C : aliased String := Target & Character'Val (0);
-               Link_C   : aliased String := Native_Path & Character'Val (0);
-            begin
-               if Symlink (Target_C'Address, Link_C'Address) /= 0 then
-                  raise Ada.IO_Exceptions.Use_Error with
-                    "could not create merge symlink: " & Relative_Path;
-               end if;
-            end;
+            --  Hostkit rather than symlink(2) directly: the C entry point
+            --  does not exist on Windows, so importing it broke the link of
+            --  every executable built over this library there.
+            if not Hostkit.FS.Create_Link
+                     (Target => Target, Link_Path => Native_Path)
+            then
+               raise Ada.IO_Exceptions.Use_Error with
+                 "could not create merge symlink: " & Relative_Path;
+            end if;
          end if;
       end;
    end Write_Symlink_From_Object;

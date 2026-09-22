@@ -23,6 +23,7 @@ with Version.Hash;
 with Version.History;
 with Version.Pkt_Line;
 with Version.Refs;
+with Version.Ref_Transaction;
 with Version.Staging;
 with Version.Tags;
 with Version.Transport;
@@ -3945,16 +3946,30 @@ package body Version.LFS is
          end;
       end loop;
 
-      for I in Roots.First_Index .. Roots.Last_Index loop
-         if Map.Contains (Roots.Element (I)) then
-            Version.Refs.Atomic_Write_Ref
-              (Path      =>
-                 Join (Version.Repository.Common_Git_Dir (Repo),
-                       Root_Refs.Element (I)),
-               Object_Id =>
-                 Version.Objects.To_Object_Id (Map.Element (Roots.Element (I))));
-         end if;
-      end loop;
+      --  Every rewritten root moves in one transaction: a migrate that dies
+      --  halfway must not leave some branches rewritten and others not.
+      declare
+         Tx : Version.Ref_Transaction.Transaction;
+      begin
+         Version.Ref_Transaction.Start (Tx, Repo);
+         begin
+            for I in Roots.First_Index .. Roots.Last_Index loop
+               if Map.Contains (Roots.Element (I)) then
+                  Version.Ref_Transaction.Add_Update
+                    (Item     => Tx,
+                     Ref_Name => Root_Refs.Element (I),
+                     New_Id   =>
+                       Version.Objects.To_Object_Id
+                         (Map.Element (Roots.Element (I))));
+               end if;
+            end loop;
+            Version.Ref_Transaction.Commit (Tx);
+         exception
+            when others =>
+               Version.Ref_Transaction.Cancel (Tx);
+               raise;
+         end;
+      end;
 
       declare
          Branch    : constant String :=

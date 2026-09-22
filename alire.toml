@@ -31,6 +31,13 @@ i18n = "^1.0.0"
 [[depends-on]]
 ssh_lib = "^1.0.0"
 
+# Host primitives with a real implementation per platform -- creating a
+# symbolic link among them. The raw POSIX symlink(2) this used to import has no
+# MinGW counterpart, so the Windows link of any executable over this library
+# failed on an undefined reference.
+[[depends-on]]
+hostkit = "*"
+
 # Local development overrides. These path pins make `alr build` use the sibling
 # checkouts; they are dev-only and must NOT appear in the published manifest
 # (each dependency is resolved from the registry on publish).

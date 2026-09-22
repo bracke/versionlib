@@ -7,6 +7,8 @@ with System;
 
 with GNAT.OS_Lib;
 
+with Hostkit.FS;
+
 with Version.Config;
 with Version.Objects; use Version.Objects;
 with Version.Refs;
@@ -176,11 +178,6 @@ package body Version.Restore is
       return False;
    end Contains_NUL;
 
-   function Symlink
-     (Target : System.Address; Linkpath : System.Address)
-      return Interfaces.C.int;
-   pragma Import (C, Symlink, "symlink");
-
    function Unlink (Path : System.Address) return Interfaces.C.int;
    pragma Import (C, Unlink, "unlink");
 
@@ -236,15 +233,15 @@ package body Version.Restore is
       Version.Files.Create_Parent_Directories (Absolute_Path);
       Remove_File_Or_Link_For_Symlink_Write (Repo, Path);
 
-      declare
-         Target_C : aliased String := Target & Character'Val (0);
-         Link_C   : aliased String := Native_Path & Character'Val (0);
-      begin
-         if Symlink (Target_C'Address, Link_C'Address) /= 0 then
-            raise Ada.IO_Exceptions.Use_Error
-              with "could not create symlink: " & Path;
-         end if;
-      end;
+      --  Hostkit rather than symlink(2) directly: the C entry point does not
+      --  exist on Windows, so importing it broke the link of every executable
+      --  built over this library there.
+      if not Hostkit.FS.Create_Link
+               (Target => Target, Link_Path => Native_Path)
+      then
+         raise Ada.IO_Exceptions.Use_Error
+           with "could not create symlink: " & Path;
+      end if;
    end Write_Symlink_To_Working_Tree;
 
    function Commit_Tree

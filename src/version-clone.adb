@@ -20,6 +20,7 @@ with Version.Hash;
 with Version.Repository;
 with Version.Reflog;
 with Version.Ref_Names;
+with Version.Ref_Transaction;
 with Version.Restore;
 with Version.Staging;
 with Version.Transport;
@@ -364,6 +365,9 @@ package body Version.Clone is
          Info : Version.Bundle.Bundle_Info;
          Head_Id        : Unbounded_String;
          Default_Branch : Unbounded_String;
+         --  Every ref the bundle carries lands in one transaction: a clone
+         --  that dies halfway must not leave a half-populated remote.
+         Tx             : Version.Ref_Transaction.Transaction;
 
          --  The bundle id recorded for refs/heads/Name, or "" if absent.
          function Branch_Id (Name : String) return String is
@@ -385,28 +389,34 @@ package body Version.Clone is
          Version.Bundle.Unbundle (Repo, Full_Bundle, Info);
 
          --  Bundle refs become remote-tracking refs; tags are copied as-is.
-         for R of Info.Refs loop
-            declare
-               Name : constant String := To_String (R.Name);
-            begin
-               if Name = "HEAD" then
-                  Head_Id := To_Unbounded_String (Version.Objects.To_String (R.Id));
-               elsif Has_Prefix (Name, Heads_Prefix) then
-                  Version.Refs.Atomic_Write_Ref
-                    (Path      =>
-                       Remote_Tracking_Ref_Path
-                         (Repo, "origin",
-                          Name (Name'First + Heads_Prefix'Length .. Name'Last)),
-                     Object_Id => R.Id);
-               elsif Has_Prefix (Name, Tags_Prefix) then
-                  Version.Refs.Atomic_Write_Ref
-                    (Path      =>
-                       Version.Files.Join
-                         (Version.Repository.Common_Git_Dir (Repo), Name),
-                     Object_Id => R.Id);
-               end if;
-            end;
-         end loop;
+         Version.Ref_Transaction.Start (Tx, Repo);
+         begin
+            for R of Info.Refs loop
+               declare
+                  Name : constant String := To_String (R.Name);
+               begin
+                  if Name = "HEAD" then
+                     Head_Id :=
+                       To_Unbounded_String (Version.Objects.To_String (R.Id));
+                  elsif Has_Prefix (Name, Heads_Prefix) then
+                     Version.Ref_Transaction.Add_Update
+                       (Item     => Tx,
+                        Ref_Name =>
+                          "refs/remotes/origin/"
+                          & Name (Name'First + Heads_Prefix'Length .. Name'Last),
+                        New_Id   => R.Id);
+                  elsif Has_Prefix (Name, Tags_Prefix) then
+                     Version.Ref_Transaction.Add_Update
+                       (Item => Tx, Ref_Name => Name, New_Id => R.Id);
+                  end if;
+               end;
+            end loop;
+            Version.Ref_Transaction.Commit (Tx);
+         exception
+            when others =>
+               Version.Ref_Transaction.Cancel (Tx);
+               raise;
+         end;
 
          --  Default branch, following git's guess_remote_head: prefer main
          --  then master when they carry HEAD's id (or HEAD is absent); else the
@@ -748,7 +758,6 @@ package body Version.Clone is
    procedure Clone_Bare
      (Source : String; Target : String; Mirror : Boolean := False)
    is
-      use Ada.Strings.Unbounded;
       Norm : constant String :=
         Ada.Directories.Full_Name
           (Version.Files.To_Native_Path
