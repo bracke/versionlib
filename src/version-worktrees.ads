@@ -1,7 +1,11 @@
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 package Version.Worktrees is
+   Worktree_Error : exception;
+   --  A condition git dies on; the message is git's text without "fatal: ".
+
    type Worktree_Info is record
       Path      : Ada.Strings.Unbounded.Unbounded_String;
       Branch    : Ada.Strings.Unbounded.Unbounded_String;
@@ -9,6 +13,8 @@ package Version.Worktrees is
       Current   : Boolean := False;
       Missing   : Boolean := False;
       Locked    : Boolean := False;
+      Lock_Reason : Ada.Strings.Unbounded.Unbounded_String;
+      --  What `lock --reason` recorded, "" when none was given.
       Head      : Ada.Strings.Unbounded.Unbounded_String;
       --  The commit this worktree has checked out. git's `worktree list`
       --  reports it for every entry, attached or not, so it cannot be read
@@ -22,12 +28,26 @@ package Version.Worktrees is
    procedure Add
      (Path        : String;
       Branch      : String;
-      No_Checkout : Boolean := False);
+      No_Checkout : Boolean := False;
+      Force       : Boolean := False);
+   --  Force checks the branch out even when another worktree holds it, as
+   --  git's `worktree add -f` does.
 
    procedure Add_Detached
      (Path        : String;
       Rev         : String;
       No_Checkout : Boolean := False);
+
+   procedure Add_Orphan
+     (Path        : String;
+      Branch      : String;
+      No_Checkout : Boolean := False);
+   --  git's `worktree add --orphan`: a worktree whose HEAD points at an
+   --  unborn branch, so it starts with an empty index and no files.
+
+   function Lock_Reason (Path : String) return String;
+   --  The text `lock --reason` recorded for this worktree, "" when it is
+   --  unlocked or was locked without one.
 
    function List
       return Worktree_Info_Vectors.Vector;
@@ -53,17 +73,38 @@ package Version.Worktrees is
       Element_Type => Prunable_Entry);
 
    procedure Move
-     (From : String;
-      To   : String);
+     (From  : String;
+      To    : String;
+      Force : Natural := 0);
+   --  Force 1 moves a worktree whose directory is missing or whose
+   --  destination is in the way, 2 also moves a locked one, as git's
+   --  repeated -f does.
    --  Relocate a linked worktree. The administrative directory keeps its
    --  name; only its `gitdir` pointer moves, since that is what records
    --  where the worktree actually lives.
 
+   package Report_Vectors is new Ada.Containers.Indefinite_Vectors
+     (Index_Type => Positive, Element_Type => String);
+   --  git's `report` callback: the lines a repair prints, and the ones that
+   --  also make it exit 1.
+
    procedure Repair
-     (Path : String);
-   --  Re-point a worktree and its administrative entry at each other after
-   --  the directory was moved by hand -- the state `move` avoids creating and
-   --  the only way out of it once it exists.
+     (Path    : String;
+      Reports : in out Report_Vectors.Vector;
+      Errors  : in out Report_Vectors.Vector);
+   --  git's repair_worktree_at_path: re-point this worktree's administrative
+   --  entry at it after the directory was moved by hand -- the state `move`
+   --  avoids creating and the only way out of it once it exists. Reports
+   --  gains `repair: gitdir incorrect: <file>` when the pointer was stale;
+   --  Errors git's `not a valid path` / `unable to locate repository` texts.
+   --  The main worktree is not a linked one and is silently skipped.
+
+   procedure Repair_All
+     (Reports : in out Report_Vectors.Vector;
+      Errors  : in out Report_Vectors.Vector);
+   --  git's repair_worktrees, the other direction: every administrative entry
+   --  whose worktree is still there but whose `.git` file no longer points
+   --  back is rewritten, reporting `repair: .git file broken: <path>`.
 
    procedure Lock
      (Path   : String;
@@ -89,7 +130,9 @@ package Version.Worktrees is
 
    procedure Remove
      (Path  : String;
-      Force : Boolean := False);
+      Force : Natural := 0);
+   --  Force 1 discards local modifications, 2 also removes a locked
+   --  worktree, as git's repeated -f does.
    --  Removes a linked worktree. A worktree whose directory has already been
    --  deleted is reclaimed by dropping its admin entry, which is the only way
    --  back: git accepts that, and refusing left the entry unreclaimable by

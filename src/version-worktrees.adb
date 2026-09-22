@@ -5,7 +5,6 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
 with Version.Files;
-with Version.Availability;
 with Version.Objects;
 with Version.Platform;
 with Version.Refs;
@@ -206,6 +205,7 @@ package body Version.Worktrees is
             Current  => False,
             Missing  => False,
             Locked   => False,
+            Lock_Reason => Null_Unbounded_String,
             Head     => Null_Unbounded_String);
       else
          return
@@ -215,6 +215,7 @@ package body Version.Worktrees is
             Current  => False,
             Missing  => False,
             Locked   => False,
+            Lock_Reason => Null_Unbounded_String,
             Head     => To_Unbounded_String (Line));
       end if;
    end Head_Branch_Or_Detached;
@@ -223,7 +224,8 @@ package body Version.Worktrees is
      (Result          : in out Worktree_Info_Vectors.Vector;
       Path            : String;
       Git_Dir         : String;
-      Current_Git_Dir : String)
+      Current_Git_Dir : String;
+      Linked          : Boolean)
    is
       Info : Worktree_Info := Head_Branch_Or_Detached (Git_Dir);
    begin
@@ -232,8 +234,29 @@ package body Version.Worktrees is
       Info.Current :=
         Version.Files.Normalize_Separators (Git_Dir)
         = Version.Files.Normalize_Separators (Current_Git_Dir);
-      Info.Missing := not Ada.Directories.Exists (Native (Path));
+      --  git calls an entry prunable when the `.git` file its gitdir names
+      --  is gone, not merely when the directory is.
+      Info.Missing :=
+        Linked and then not Version.Files.Is_Ordinary_File (Join (Path, ".git"));
       Info.Locked  := Version.Files.Is_Ordinary_File (Join (Git_Dir, "locked"));
+      if Info.Locked then
+         declare
+            Raw  : constant String :=
+              Version.Files.Read_Binary_File (Join (Git_Dir, "locked"));
+            Last : Natural := Raw'Last;
+         begin
+            while Last >= Raw'First
+              and then Raw (Last) in Character'Val (10) | Character'Val (13)
+            loop
+               Last := Last - 1;
+            end loop;
+            Info.Lock_Reason :=
+              To_Unbounded_String (Raw (Raw'First .. Last));
+         exception
+            when others =>
+               Info.Lock_Reason := Null_Unbounded_String;
+         end;
+      end if;
 
       --  An attached worktree's HEAD is whatever its branch points at; the
       --  branch itself lives in the common git dir, so the caller's handle
@@ -251,6 +274,13 @@ package body Version.Worktrees is
          end;
       end if;
 
+      --  An unborn branch has no commit; git still reports a HEAD for the
+      --  entry, as the null object id.
+      if Length (Info.Head) = 0 then
+         Info.Head := To_Unbounded_String
+           (Version.Objects.To_String (Version.Objects.Zero_Object_Id));
+      end if;
+
       Result.Append (Info);
    exception
       when others =>
@@ -263,21 +293,6 @@ package body Version.Worktrees is
         Version.Files.Normalize_Separators (Left)
         = Version.Files.Normalize_Separators (Right);
    end Same_Path;
-
-   function Dot_Git_Points_To_Admin
-     (Dot_Git_Path : String; Admin_Path : String) return Boolean
-   is
-      Work_Path : constant String :=
-        Version.Files.Normalize_Separators
-          (Ada.Directories.Containing_Directory (Native (Dot_Git_Path)));
-      Resolved  : constant String :=
-        Version.Repository.Resolve_Git_Dir (Work_Path);
-   begin
-      return Resolved'Length > 0 and then Same_Path (Resolved, Admin_Path);
-   exception
-      when others =>
-         return False;
-   end Dot_Git_Points_To_Admin;
 
    procedure For_Each_Linked
      (Repo   : Version.Repository.Repository_Handle;
@@ -328,17 +343,17 @@ package body Version.Worktrees is
                                (Ada.Directories.Containing_Directory
                                   (Native (Dot_Git_Path)));
                         begin
-                           if Dot_Git_Points_To_Admin (Dot_Git_Path, Admin)
-                             or else
-                               not Ada.Directories.Exists (Native (Work_Path))
-                           then
-                              Append_Info
-                                (Result          => Result,
-                                 Path            => Work_Path,
-                                 Git_Dir         => Admin,
-                                 Current_Git_Dir =>
-                                   Version.Repository.Git_Dir (Repo));
-                           end if;
+                           --  git lists every administrative entry that has
+                           --  a gitdir file; whether the worktree points
+                           --  back is what `repair` is for, not a reason to
+                           --  hide the entry.
+                           Append_Info
+                             (Result          => Result,
+                              Path            => Work_Path,
+                              Git_Dir         => Admin,
+                              Current_Git_Dir =>
+                                Version.Repository.Git_Dir (Repo),
+                              Linked          => True);
                         end;
                      end;
                   end if;
@@ -365,7 +380,8 @@ package body Version.Worktrees is
         (Result          => Result,
          Path            => Primary_Worktree_Path (Repo),
          Git_Dir         => Version.Repository.Common_Git_Dir (Repo),
-         Current_Git_Dir => Version.Repository.Git_Dir (Repo));
+         Current_Git_Dir => Version.Repository.Git_Dir (Repo),
+         Linked          => False);
       For_Each_Linked (Repo, Result);
       return Result;
    end List;
@@ -562,28 +578,34 @@ package body Version.Worktrees is
       null;
    end Reject_Nested_Worktree;
 
-   procedure Prepare_Target_Directory (Path : String) is
+   --  Given is the path as the user spelled it: git's refusal quotes that,
+   --  not the absolute form it works with.
+   procedure Prepare_Target_Directory (Path : String; Given : String) is
    begin
       Require_Safe_Path_Text (Path, "worktree path");
       if Ada.Directories.Exists (Native (Path)) then
          if Ada.Directories.Kind (Native (Path)) /= Ada.Directories.Directory
+           or else not Is_Empty_Directory (Path)
          then
-            raise Ada.IO_Exceptions.Data_Error
-              with "worktree path exists but is not a directory";
-         end if;
-         if not Is_Empty_Directory (Path) then
-            raise Ada.IO_Exceptions.Data_Error
-              with "worktree path is not empty";
+            raise Worktree_Error with "'" & Given & "' already exists";
          end if;
       else
          Ada.Directories.Create_Path (Native (Path));
       end if;
    end Prepare_Target_Directory;
 
+   --  Admin_Existed guards the administrative directory of a worktree that
+   --  was already there: a refused `add` onto an existing worktree's path
+   --  must not take that worktree's entry with it.
    procedure Cleanup_Failed_Add
-     (Work_Path : String; Admin_Path : String; Existed_Before : Boolean) is
+     (Work_Path      : String;
+      Admin_Path     : String;
+      Existed_Before : Boolean;
+      Admin_Existed  : Boolean) is
    begin
-      if Ada.Directories.Exists (Native (Admin_Path)) then
+      if not Admin_Existed
+        and then Ada.Directories.Exists (Native (Admin_Path))
+      then
          begin
             Version.Files.Delete_Directory_Tree_If_Exists (Admin_Path);
          exception
@@ -607,7 +629,10 @@ package body Version.Worktrees is
    end Cleanup_Failed_Add;
 
    procedure Add
-     (Path : String; Branch : String; No_Checkout : Boolean := False)
+     (Path        : String;
+      Branch      : String;
+      No_Checkout : Boolean := False;
+      Force       : Boolean := False)
    is
       Repo           : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
@@ -617,6 +642,11 @@ package body Version.Worktrees is
       Admin_Name     : constant String := Unique_Admin_Name (Repo, Work_Path);
       Admin_Path     : constant String :=
         Join (Worktrees_Dir (Repo), Admin_Name);
+      Admin_Existed  : constant Boolean :=
+        Ada.Directories.Exists (Native (Admin_Path));
+      --  Nothing has been created until the target directory is accepted, so
+      --  a refusal before that must leave an existing worktree there alone.
+      Started        : Boolean := False;
       Ref_Name       : constant String := "refs/heads/" & Branch;
    begin
       Version.Ref_Names.Require_Branch_Name (Branch);
@@ -624,17 +654,30 @@ package body Version.Worktrees is
          raise Ada.IO_Exceptions.Data_Error
            with "branch does not exist: " & Branch;
       end if;
-      if Branch_Checked_Out_Elsewhere (Branch)
-        or else
-          (not Version.Refs.Is_Detached (Repo)
-           and then Version.Refs.Current_Branch_Name (Repo) = Branch)
+      if not Force
+        and then (Branch_Checked_Out_Elsewhere (Branch)
+                  or else
+                    (not Version.Refs.Is_Detached (Repo)
+                     and then Version.Refs.Current_Branch_Name (Repo) = Branch))
       then
-         raise Ada.IO_Exceptions.Data_Error
-           with Version.Availability.Branch_In_Use_By_Worktree (Branch);
+         --  git names the worktree that holds it.
+         declare
+            Where : Unbounded_String;
+         begin
+            for W of List loop
+               if not W.Detached and then To_String (W.Branch) = Branch then
+                  Where := W.Path;
+               end if;
+            end loop;
+            raise Worktree_Error with
+              "'" & Branch & "' is already used by worktree at '"
+              & To_String (Where) & "'";
+         end;
       end if;
 
       Reject_Nested_Worktree (Repo, Work_Path);
-      Prepare_Target_Directory (Work_Path);
+      Prepare_Target_Directory (Work_Path, Path);
+      Started := True;
       Version.Files.Create_Directory_If_Missing (Admin_Path);
       Write_Common_Admin
         (Admin_Path, Work_Path, Version.Repository.Common_Git_Dir (Repo));
@@ -646,10 +689,13 @@ package body Version.Worktrees is
       end if;
    exception
       when others =>
-         Cleanup_Failed_Add
-           (Work_Path      => Work_Path,
-            Admin_Path     => Admin_Path,
-            Existed_Before => Existed_Before);
+         if Started then
+            Cleanup_Failed_Add
+              (Work_Path      => Work_Path,
+               Admin_Path     => Admin_Path,
+               Existed_Before => Existed_Before,
+               Admin_Existed  => Admin_Existed);
+         end if;
          raise;
    end Add;
 
@@ -664,11 +710,17 @@ package body Version.Worktrees is
       Admin_Name     : constant String := Unique_Admin_Name (Repo, Work_Path);
       Admin_Path     : constant String :=
         Join (Worktrees_Dir (Repo), Admin_Name);
+      Admin_Existed  : constant Boolean :=
+        Ada.Directories.Exists (Native (Admin_Path));
+      --  Nothing has been created until the target directory is accepted, so
+      --  a refusal before that must leave an existing worktree there alone.
+      Started        : Boolean := False;
       Commit_Id      : constant Version.Objects.Hex_Object_Id :=
         Version.Revisions.Resolve_Commit (Repo => Repo, Text => Rev);
    begin
       Reject_Nested_Worktree (Repo, Work_Path);
-      Prepare_Target_Directory (Work_Path);
+      Prepare_Target_Directory (Work_Path, Path);
+      Started := True;
       Version.Files.Create_Directory_If_Missing (Admin_Path);
       Write_Common_Admin
         (Admin_Path, Work_Path, Version.Repository.Common_Git_Dir (Repo));
@@ -680,12 +732,63 @@ package body Version.Worktrees is
       end if;
    exception
       when others =>
-         Cleanup_Failed_Add
-           (Work_Path      => Work_Path,
-            Admin_Path     => Admin_Path,
-            Existed_Before => Existed_Before);
+         if Started then
+            Cleanup_Failed_Add
+              (Work_Path      => Work_Path,
+               Admin_Path     => Admin_Path,
+               Existed_Before => Existed_Before,
+               Admin_Existed  => Admin_Existed);
+         end if;
          raise;
    end Add_Detached;
+
+   procedure Add_Orphan
+     (Path        : String;
+      Branch      : String;
+      No_Checkout : Boolean := False)
+   is
+      pragma Unreferenced (No_Checkout);
+      Repo           : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Work_Path      : constant String := Abs_Path (Path);
+      Existed_Before : constant Boolean :=
+        Ada.Directories.Exists (Native (Work_Path));
+      Admin_Name     : constant String := Unique_Admin_Name (Repo, Work_Path);
+      Admin_Path     : constant String :=
+        Join (Worktrees_Dir (Repo), Admin_Name);
+      Admin_Existed  : constant Boolean :=
+        Ada.Directories.Exists (Native (Admin_Path));
+      --  Nothing has been created until the target directory is accepted, so
+      --  a refusal before that must leave an existing worktree there alone.
+      Started        : Boolean := False;
+   begin
+      Version.Ref_Names.Require_Branch_Name (Branch);
+      if Version.Refs.Ref_Exists (Repo, "refs/heads/" & Branch) then
+         raise Worktree_Error with
+           "a branch named '" & Branch & "' already exists";
+      end if;
+
+      Reject_Nested_Worktree (Repo, Work_Path);
+      Prepare_Target_Directory (Work_Path, Path);
+      Started := True;
+      Version.Files.Create_Directory_If_Missing (Admin_Path);
+      Write_Common_Admin
+        (Admin_Path, Work_Path, Version.Repository.Common_Git_Dir (Repo));
+      --  An unborn branch: HEAD names it, and there is nothing to check out.
+      Version.Files.Write_Binary_File_Atomic
+        (Path    => Join (Admin_Path, "HEAD"),
+         Content => "ref: refs/heads/" & Branch & Character'Val (10));
+   exception
+      when others =>
+         if Started then
+            Cleanup_Failed_Add
+              (Work_Path      => Work_Path,
+               Admin_Path     => Admin_Path,
+               Existed_Before => Existed_Before,
+               Admin_Existed  => Admin_Existed);
+         end if;
+         raise;
+   end Add_Orphan;
 
    procedure Require_No_Operation_State
      (Repo : Version.Repository.Repository_Handle) is
@@ -708,7 +811,7 @@ package body Version.Worktrees is
       end if;
    end Require_No_Operation_State;
 
-   procedure Require_Clean (Path : String) is
+   procedure Require_Clean (Path : String; Given : String) is
       function Has_User_Untracked
         (Items : Version.Status.File_Change_Vectors.Vector) return Boolean
       is
@@ -738,8 +841,9 @@ package body Version.Worktrees is
            or else not S.Conflicted.Is_Empty
            or else Has_User_Untracked (S.Untracked)
          then
-            raise Ada.IO_Exceptions.Data_Error
-              with "cannot remove worktree: working tree is not clean";
+            raise Worktree_Error with
+              "'" & Given & "' contains modified or untracked files, use "
+              & "--force to delete it";
          end if;
       end Action;
    begin
@@ -806,26 +910,38 @@ package body Version.Worktrees is
       return File'Length > 0 and then Version.Files.Is_Ordinary_File (File);
    end Is_Locked;
 
-   procedure Move (From : String; To : String) is
+   procedure Move (From : String; To : String; Force : Natural := 0) is
       Caller   : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
       Src      : constant String := Abs_Path (From);
       Dst      : constant String := Abs_Path (To);
       Admin    : constant String := Admin_Dir_Of (From);
    begin
-      if Admin'Length = 0 then
-         raise Ada.IO_Exceptions.Data_Error
-           with "not a linked worktree: " & From;
-      end if;
-
       if Same_Path (Src, Primary_Worktree_Path (Caller)) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "cannot move the main working tree";
+         raise Worktree_Error with "'" & From & "' is a main working tree";
       end if;
 
-      if Is_Locked (Src) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "cannot move a locked working tree";
+      if Admin'Length = 0 then
+         raise Worktree_Error with "'" & From & "' is not a working tree";
+      end if;
+
+      if Is_Locked (Src) and then Force < 2 then
+         declare
+            Why : constant String := Lock_Reason (From);
+         begin
+            raise Worktree_Error with
+              (if Why'Length > 0
+               then "cannot move a locked working tree, lock reason: " & Why
+               else "cannot move a locked working tree;")
+              & Character'Val (10)
+              & "use 'move -f -f' to override or unlock first";
+         end;
+      end if;
+
+      if not Ada.Directories.Exists (Native (Src)) then
+         raise Worktree_Error with
+           "validation failed, cannot move working tree: '" & From
+           & "' does not exist";
       end if;
 
       declare
@@ -839,8 +955,7 @@ package body Version.Worktrees is
             else Dst);
       begin
          if Ada.Directories.Exists (Native (Final_Dst)) then
-            raise Ada.IO_Exceptions.Data_Error
-              with "target '" & To & "' already exists";
+            raise Worktree_Error with "'" & To & "' already exists";
          end if;
 
          Ada.Directories.Rename
@@ -855,56 +970,202 @@ package body Version.Worktrees is
       end;
    end Move;
 
-   procedure Repair (Path : String) is
-      Work : constant String := Abs_Path (Path);
-      Dot  : constant String := Join (Work, ".git");
+   --  The `gitdir: <path>` a .git file names, "" when it names none.
+   function Gitdir_Target (Dot_Git : String) return String is
+      Tag  : constant String := "gitdir: ";
+      Line : constant String :=
+        Ada.Strings.Fixed.Trim
+          (Version.Transport.Local.Read_First_Line (Dot_Git),
+           Ada.Strings.Both);
    begin
+      if Line'Length <= Tag'Length
+        or else Line (Line'First .. Line'First + Tag'Length - 1) /= Tag
+      then
+         return "";
+      end if;
+      return Line (Line'First + Tag'Length .. Line'Last);
+   exception
+      when others =>
+         return "";
+   end Gitdir_Target;
+
+   procedure Repair
+     (Path    : String;
+      Reports : in out Report_Vectors.Vector;
+      Errors  : in out Report_Vectors.Vector)
+   is
+      Caller : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Work   : constant String := Abs_Path (Path);
+      Dot    : constant String := Join (Work, ".git");
+   begin
+      if Same_Path (Work, Primary_Worktree_Path (Caller)) then
+         return;
+      end if;
+
+      if not Ada.Directories.Exists (Native (Work))
+        or else Ada.Directories.Kind (Native (Work))
+                /= Ada.Directories.Directory
+      then
+         Errors.Append ("not a valid path: " & Path);
+         return;
+      end if;
+
       if not Version.Files.Is_Ordinary_File (Dot) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "not a linked worktree: " & Path;
+         if Ada.Directories.Exists (Native (Dot)) then
+            Errors.Append
+              ("unable to locate repository; .git is not a file: " & Dot);
+         else
+            Errors.Append
+              ("unable to locate repository; .git file broken: " & Dot);
+         end if;
+         return;
       end if;
 
       --  The worktree's own .git file still names its administrative
       --  directory -- that link survives a move, and is what makes the
       --  repair possible at all. Only the pointer back has gone stale.
       declare
-         Line : constant String :=
-           Ada.Strings.Fixed.Trim
-             (Version.Transport.Local.Read_First_Line (Dot),
-              Ada.Strings.Both);
-         Tag  : constant String := "gitdir: ";
+         Admin : constant String := Gitdir_Target (Dot);
       begin
-         if Line'Length <= Tag'Length
-           or else Line (Line'First .. Line'First + Tag'Length - 1) /= Tag
+         if Admin'Length = 0 or else not Ada.Directories.Exists (Native (Admin))
          then
-            raise Ada.IO_Exceptions.Data_Error
-              with "not a linked worktree: " & Path;
+            Errors.Append
+              ("unable to locate repository; .git file does not reference a "
+               & "repository: " & Dot);
+            return;
          end if;
 
+         --  git only reports the pointer it actually had to correct.
          declare
-            Admin : constant String :=
-              Line (Line'First + Tag'Length .. Line'Last);
+            Gitdir : constant String := Join (Admin, "gitdir");
+            Stale  : constant Boolean :=
+              not Version.Files.Is_Ordinary_File (Gitdir)
+              or else Ada.Strings.Fixed.Trim
+                        (Version.Transport.Local.Read_First_Line (Gitdir),
+                         Ada.Strings.Both)
+                      /= Dot;
          begin
-            if not Ada.Directories.Exists (Native (Admin)) then
-               raise Ada.IO_Exceptions.Data_Error
-                 with "not a linked worktree: " & Path;
+            if Stale then
+               Reports.Append ("repair: gitdir incorrect: " & Gitdir);
+               Version.Files.Write_Binary_File_Atomic
+                 (Gitdir, Dot & Character'Val (10));
             end if;
-
-            Version.Files.Write_Binary_File_Atomic
-              (Join (Admin, "gitdir"), Dot & Character'Val (10));
          end;
       end;
    end Repair;
 
+   procedure Repair_All
+     (Reports : in out Report_Vectors.Vector;
+      Errors  : in out Report_Vectors.Vector)
+   is
+      pragma Unreferenced (Errors);
+      Caller    : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+      Root      : constant String := Worktrees_Dir (Caller);
+      Search    : Ada.Directories.Search_Type;
+      Dir_Entry : Ada.Directories.Directory_Entry_Type;
+   begin
+      if not Ada.Directories.Exists (Native (Root)) then
+         return;
+      end if;
+
+      Ada.Directories.Start_Search
+        (Search    => Search,
+         Directory => Native (Root),
+         Pattern   => "*",
+         Filter    =>
+           [Ada.Directories.Ordinary_File => False,
+            Ada.Directories.Directory     => True,
+            Ada.Directories.Special_File  => False]);
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, Dir_Entry);
+         declare
+            Name  : constant String := Ada.Directories.Simple_Name (Dir_Entry);
+            Admin : constant String :=
+              Version.Files.Normalize_Separators
+                (Ada.Directories.Full_Name (Dir_Entry));
+            Gitdir : constant String := Join (Admin, "gitdir");
+         begin
+            if Name /= "." and then Name /= ".."
+              and then Version.Files.Is_Ordinary_File (Gitdir)
+            then
+               declare
+                  Dot : constant String :=
+                    Ada.Strings.Fixed.Trim
+                      (Version.Transport.Local.Read_First_Line (Gitdir),
+                       Ada.Strings.Both);
+                  Work : constant String :=
+                    Version.Files.Normalize_Separators
+                      (Ada.Directories.Containing_Directory (Native (Dot)));
+               begin
+                  --  A worktree whose directory is gone is prune's business,
+                  --  not repair's.
+                  if Ada.Directories.Exists (Native (Work))
+                    and then (not Version.Files.Is_Ordinary_File (Dot)
+                              or else not Same_Path
+                                            (Gitdir_Target (Dot), Admin))
+                  then
+                     Reports.Append ("repair: .git file broken: " & Work);
+                     Version.Files.Write_Binary_File_Atomic
+                       (Dot, "gitdir: " & Admin & Character'Val (10));
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      Ada.Directories.End_Search (Search);
+   end Repair_All;
+
+   function Lock_Reason (Path : String) return String is
+      File : constant String := Lock_File_Of (Path);
+   begin
+      if File'Length = 0 or else not Version.Files.Is_Ordinary_File (File) then
+         return "";
+      end if;
+      declare
+         Raw  : constant String := Version.Files.Read_Binary_File (File);
+         Last : Natural := Raw'Last;
+      begin
+         while Last >= Raw'First
+           and then Raw (Last) in Character'Val (10) | Character'Val (13)
+         loop
+            Last := Last - 1;
+         end loop;
+         return Raw (Raw'First .. Last);
+      end;
+   exception
+      when others =>
+         return "";
+   end Lock_Reason;
+
+   --  git refuses to lock or unlock the worktree the repository itself
+   --  lives in.
+   procedure Require_Linked_For_Lock (Path : String) is
+      Caller : constant Version.Repository.Repository_Handle :=
+        Version.Repository.Open;
+   begin
+      if Same_Path (Abs_Path (Path), Primary_Worktree_Path (Caller)) then
+         raise Worktree_Error
+           with "The main working tree cannot be locked or unlocked";
+      end if;
+      if Admin_Dir_Of (Path)'Length = 0 then
+         raise Worktree_Error with "'" & Path & "' is not a working tree";
+      end if;
+   end Require_Linked_For_Lock;
+
    procedure Lock (Path : String; Reason : String := "") is
       File : constant String := Lock_File_Of (Path);
    begin
-      if File'Length = 0 then
-         raise Ada.IO_Exceptions.Data_Error
-           with "not a linked worktree: " & Path;
-      elsif Version.Files.Is_Ordinary_File (File) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "'" & Path & "' is already locked";
+      Require_Linked_For_Lock (Path);
+      if Version.Files.Is_Ordinary_File (File) then
+         declare
+            Why : constant String := Lock_Reason (Path);
+         begin
+            raise Worktree_Error with
+              "'" & Path & "' is already locked"
+              & (if Why'Length > 0 then ", reason: " & Why else "");
+         end;
       end if;
 
       Version.Files.Write_Binary_File
@@ -915,12 +1176,9 @@ package body Version.Worktrees is
    procedure Unlock (Path : String) is
       File : constant String := Lock_File_Of (Path);
    begin
-      if File'Length = 0 then
-         raise Ada.IO_Exceptions.Data_Error
-           with "not a linked worktree: " & Path;
-      elsif not Version.Files.Is_Ordinary_File (File) then
-         raise Ada.IO_Exceptions.Data_Error
-           with "'" & Path & "' is not locked";
+      Require_Linked_For_Lock (Path);
+      if not Version.Files.Is_Ordinary_File (File) then
+         raise Worktree_Error with "'" & Path & "' is not locked";
       end if;
 
       Version.Files.Delete_File_If_Exists (File);
@@ -1013,7 +1271,7 @@ package body Version.Worktrees is
       end loop;
    end Prune;
 
-   procedure Remove (Path : String; Force : Boolean := False) is
+   procedure Remove (Path : String; Force : Natural := 0) is
       Caller        : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
       Work_Path     : constant String := Abs_Path (Path);
@@ -1023,8 +1281,7 @@ package body Version.Worktrees is
       if Version.Files.Normalize_Separators (Work_Path)
         = Version.Files.Normalize_Separators (Primary_Worktree_Path (Caller))
       then
-         raise Ada.IO_Exceptions.Data_Error
-           with "cannot remove primary worktree";
+         raise Worktree_Error with "'" & Path & "' is a main working tree";
       end if;
       if not Version.Files.Is_Ordinary_File (Dot_Git) then
          --  The directory is gone. Its admin entry is still there holding the
@@ -1063,8 +1320,7 @@ package body Version.Worktrees is
             end;
          end if;
 
-         raise Ada.IO_Exceptions.Data_Error
-           with "not a linked worktree: " & Path;
+         raise Worktree_Error with "'" & Path & "' is not a working tree";
       end if;
 
       Git_Dir_Value :=
@@ -1089,16 +1345,22 @@ package body Version.Worktrees is
       --  A locked worktree is one the user asked not to be touched; saying
       --  the tree is unclean instead names the wrong reason and points at
       --  the wrong remedy.  A second --force (Force) overrides the lock.
-      if Is_Locked (Work_Path) and then not Force then
-         raise Ada.IO_Exceptions.Data_Error with
-           "cannot remove a locked working tree;"
-           & Character'Val (10)
-           & "use 'remove -f -f' to override or unlock first";
+      if Is_Locked (Work_Path) and then Force < 2 then
+         declare
+            Why : constant String := Lock_Reason (Path);
+         begin
+            raise Worktree_Error with
+              (if Why'Length > 0
+               then "cannot remove a locked working tree, lock reason: " & Why
+               else "cannot remove a locked working tree;")
+              & Character'Val (10)
+              & "use 'remove -f -f' to override or unlock first";
+         end;
       end if;
 
       --  --force also lets a worktree with local modifications be removed.
-      if not Force then
-         Require_Clean (Work_Path);
+      if Force < 1 then
+         Require_Clean (Work_Path, Path);
       end if;
       Version.Files.Delete_Directory_Tree_If_Exists (Work_Path);
       if Ada.Directories.Exists (Native (To_String (Git_Dir_Value))) then

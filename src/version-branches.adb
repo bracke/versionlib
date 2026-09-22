@@ -60,6 +60,11 @@ package body Version.Branches is
       elsif Version.Refs.Ref_Exists (Repo, "refs/remotes/" & Spec) then
          return "refs/remotes/" & Spec;
       end if;
+      --  git's dwim_ref follows a symbolic ref, so `--track <new> HEAD`
+      --  tracks the branch HEAD points at.
+      if Spec = "HEAD" and then not Version.Refs.Is_Detached (Repo) then
+         return "refs/heads/" & Version.Refs.Current_Branch_Name (Repo);
+      end if;
       return "";
    end Branch_Ref_Of;
 

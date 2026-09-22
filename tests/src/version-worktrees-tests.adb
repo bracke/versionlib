@@ -100,7 +100,7 @@ package body Version.Worktrees.Tests is
       begin
          Version.Worktrees.Add (Path => Other, Branch => "feature");
       exception
-         when Ada.IO_Exceptions.Data_Error =>
+         when Version.Worktrees.Worktree_Error =>
             Raised := True;
       end;
       Assert (Raised, "same branch must not be checked out twice");
@@ -119,7 +119,7 @@ package body Version.Worktrees.Tests is
       begin
          Version.Worktrees.Remove (Work);
       exception
-         when Ada.IO_Exceptions.Data_Error =>
+         when Version.Worktrees.Worktree_Error =>
             Raised := True;
       end;
       Assert (Raised, "dirty linked worktree removal must be rejected");
@@ -332,7 +332,7 @@ package body Version.Worktrees.Tests is
       Version.Worktrees.Remove (Work);
    end Remove_Rejects_Common_Dir_Mismatch;
 
-   procedure List_Ignores_Mismatched_Admin_Backlink
+   procedure List_Reports_Mismatched_Admin_Backlink
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       Root       : constant String := Prepare_Repo (T);
@@ -358,13 +358,16 @@ package body Version.Worktrees.Tests is
         (Path    => Version.Files.Join (Fake_Admin, "commondir"),
          Content => "../.." & Character'Val (10));
 
+      --  git lists every administrative entry that has a gitdir file and
+      --  marks it prunable when the `.git` file it names is gone; whether
+      --  the worktree points back is what `repair` is for.
       Assert
-        (not Contains_Worktree (Version.Worktrees.List, Fake_Work),
-         "list must ignore admin entries whose target .git file does not point back");
+        (Contains_Worktree (Version.Worktrees.List, Fake_Work),
+         "list must report admin entries whose target .git file is missing");
 
       Ada.Directories.Delete_Tree (Version.Files.To_Native_Path (Fake_Admin));
       Ada.Directories.Delete_Tree (Version.Files.To_Native_Path (Fake_Work));
-   end List_Ignores_Mismatched_Admin_Backlink;
+   end List_Reports_Mismatched_Admin_Backlink;
 
    procedure Malformed_Git_File_Is_Rejected
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -407,6 +410,7 @@ package body Version.Worktrees.Tests is
          Current  => True,
          Missing  => False,
          Locked   => False,
+         Lock_Reason => Null_Unbounded_String,
          Head     => Null_Unbounded_String);
       Linked   : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-feature"),
@@ -415,6 +419,7 @@ package body Version.Worktrees.Tests is
          Current  => False,
          Missing  => False,
          Locked   => False,
+         Lock_Reason => Null_Unbounded_String,
          Head     => Null_Unbounded_String);
       Missing  : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-missing"),
@@ -423,6 +428,7 @@ package body Version.Worktrees.Tests is
          Current  => False,
          Missing  => True,
          Locked   => False,
+         Lock_Reason => Null_Unbounded_String,
          Head     => Null_Unbounded_String);
       Detached : constant Version.Worktrees.Worktree_Info :=
         (Path     => To_Unbounded_String ("/repo-detached"),
@@ -431,6 +437,7 @@ package body Version.Worktrees.Tests is
          Current  => False,
          Missing  => False,
          Locked   => False,
+         Lock_Reason => Null_Unbounded_String,
          Head     => Null_Unbounded_String);
    begin
       Assert
@@ -568,8 +575,8 @@ package body Version.Worktrees.Tests is
          "Worktree: remove rejects commondir mismatch");
       Register_Routine
         (T,
-         List_Ignores_Mismatched_Admin_Backlink'Access,
-         "Worktree: list ignores mismatched admin backlink");
+         List_Reports_Mismatched_Admin_Backlink'Access,
+         "Worktree: list reports a mismatched admin backlink as prunable");
       Register_Routine
         (T,
          Malformed_Git_File_Is_Rejected'Access,

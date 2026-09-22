@@ -856,13 +856,32 @@ package body Version.Ref_Format is
             if Ref'Length > 11
               and then Ref (Ref'First .. Ref'First + 10) = "refs/heads/"
             then
-               for W of Version.Worktrees.List loop
-                  if not W.Detached
-                    and then To_String (W.Branch) = Ref (Ref'First + 11 .. Ref'Last)
-                  then
-                     return To_String (W.Path);
+               --  `add -f` can check one branch out twice; git's lookup finds
+               --  the entry it recorded last, which is the last linked
+               --  worktree in name order.
+               declare
+                  Best : Unbounded_String;
+                  Main : Unbounded_String;
+               begin
+                  for W of Version.Worktrees.List loop
+                     if not W.Detached
+                       and then To_String (W.Branch)
+                                = Ref (Ref'First + 11 .. Ref'Last)
+                     then
+                        if W.Current then
+                           Main := W.Path;
+                        elsif Length (Best) = 0
+                          or else To_String (W.Path) > To_String (Best)
+                        then
+                           Best := W.Path;
+                        end if;
+                     end if;
+                  end loop;
+                  if Length (Best) > 0 then
+                     return To_String (Best);
                   end if;
-               end loop;
+                  return To_String (Main);
+               end;
             end if;
             return "";
          elsif Head_A = "subject" or else Atom = "contents:subject" then
