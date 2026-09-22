@@ -31,7 +31,7 @@ package body Version.Clean is
             then Dir_Unit (Dir_Unit'First .. Dir_Unit'Last - 1)
             else Dir_Unit);
       begin
-         return Ada.Directories.Exists
+         return Version.Files.Exists
            (Version.Files.Join
               (Version.Files.Join (Repo_Root, Rel), ".git"));
       end Is_Nested_Repo;

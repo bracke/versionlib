@@ -149,7 +149,7 @@ package body Version.Push.Tests is
          Request     : Stream_Element_Array (1 .. 8192);
          Request_End : Stream_Element_Offset;
       begin
-         GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+         Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
          GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
          Send_Response (Client, Content_Type, Payload);
          GNAT.Sockets.Close_Socket (Client);
@@ -248,7 +248,7 @@ package body Version.Push.Tests is
          Port := Bound.Port;
       end Ready;
 
-      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+      Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
       GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
       Send_Discovery (Client);
       GNAT.Sockets.Close_Socket (Client);
@@ -344,7 +344,7 @@ package body Version.Push.Tests is
          Port := Bound.Port;
       end Ready;
 
-      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+      Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
       GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
       Send_Discovery (Client);
       GNAT.Sockets.Close_Socket (Client);
@@ -451,7 +451,7 @@ package body Version.Push.Tests is
          Request     : Stream_Element_Array (1 .. 8192);
          Request_End : Stream_Element_Offset;
       begin
-         GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+         Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
          GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
          Send_Response (Client, Content_Type, Payload);
          GNAT.Sockets.Close_Socket (Client);
@@ -472,7 +472,7 @@ package body Version.Push.Tests is
          Request     : Stream_Element_Array (1 .. 8192);
          Request_End : Stream_Element_Offset;
       begin
-         GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+         Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
          GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
          GNAT.Sockets.Close_Socket (Client);
       exception

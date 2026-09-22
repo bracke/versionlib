@@ -152,7 +152,7 @@ package body Version.LFS is
 
       function File_Has_Filter (Path : String) return Boolean is
       begin
-         if not Ada.Directories.Exists (Path)
+         if not Version.Files.Exists (Path)
            or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
          then
             return False;
@@ -1285,7 +1285,7 @@ package body Version.LFS is
       Parser     : Version.Pkt_Line.Parser;
       Opened     : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Local_Path)
+      if not Version.Files.Exists (Local_Path)
         or else Ada.Directories.Kind (Local_Path)
                 /= Ada.Directories.Ordinary_File
       then
@@ -1401,7 +1401,7 @@ package body Version.LFS is
 
       function Ordinary (Path : String) return Boolean is
       begin
-         return Ada.Directories.Exists (Path)
+         return Version.Files.Exists (Path)
            and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File;
       end Ordinary;
    begin
@@ -1599,7 +1599,7 @@ package body Version.LFS is
          Oid : constant String := Version.Hash.Sha256_Hex (Content);
          Path : constant String := LFS_Object_Path (Repo, Oid);
       begin
-         if not Ada.Directories.Exists (Path) then
+         if not Version.Files.Exists (Path) then
             Version.Files.Write_Binary_File_Atomic (Path, Content);
          elsif Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
            or else Version.Files.Read_Binary_File (Path) /= Content
@@ -1658,7 +1658,7 @@ package body Version.LFS is
             Path          : constant String := LFS_Object_Path (Repo, Oid);
             Expected_Size : constant Natural := Parse_Size (Size);
          begin
-            if not Ada.Directories.Exists (Path)
+            if not Version.Files.Exists (Path)
               or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
             then
                if not Fetch_LFS_Object (Repo, Oid, Expected_Size) then
@@ -1689,13 +1689,13 @@ package body Version.LFS is
       Local_Path : constant String := LFS_Object_Path (Repo, Oid);
       Dest_Path  : constant String := LFS_Object_Path_Under (Source, Oid);
    begin
-      if Ada.Directories.Exists (Dest_Path)
+      if Version.Files.Exists (Dest_Path)
         and then Ada.Directories.Kind (Dest_Path) = Ada.Directories.Ordinary_File
       then
          return True;   --  already present on the remote store
       end if;
 
-      if not Ada.Directories.Exists (Local_Path)
+      if not Version.Files.Exists (Local_Path)
         or else Ada.Directories.Kind (Local_Path)
                 /= Ada.Directories.Ordinary_File
       then
@@ -1849,7 +1849,7 @@ package body Version.LFS is
       Batch_Url  : constant String := LFS_Batch_Url (Url, Is_LFS_Url);
    begin
       if Batch_Url'Length = 0
-        or else not Ada.Directories.Exists (Local_Path)
+        or else not Version.Files.Exists (Local_Path)
         or else Ada.Directories.Kind (Local_Path)
                 /= Ada.Directories.Ordinary_File
       then
@@ -3013,7 +3013,7 @@ package body Version.LFS is
       declare
          Path : constant String := LFS_Object_Path (Repo, Oid);
       begin
-         return Ada.Directories.Exists (Path)
+         return Version.Files.Exists (Path)
            and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File;
       end;
    end Object_Cached;
@@ -3100,7 +3100,7 @@ package body Version.LFS is
    is
       use Ada.Strings.Unbounded;
    begin
-      if not Ada.Directories.Exists (File)
+      if not Version.Files.Exists (File)
         or else Ada.Directories.Kind (File) /= Ada.Directories.Ordinary_File
       then
          return;
@@ -3176,7 +3176,7 @@ package body Version.LFS is
       end loop;
       declare
          Old : constant String :=
-           (if Ada.Directories.Exists (Attr)
+           (if Version.Files.Exists (Attr)
             then Version.Files.Read_Binary_File (Attr) else "");
          Base : constant String :=
            (if Old'Length = 0 or else Old (Old'Last) = Character'Val (10)
@@ -3198,7 +3198,7 @@ package body Version.LFS is
       Attr    : constant String := Root_Attributes_Path (Repo);
       Removed : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Attr) then
+      if not Version.Files.Exists (Attr) then
          return False;
       end if;
       declare
@@ -3440,7 +3440,7 @@ package body Version.LFS is
       Search : Ada.Directories.Search_Type;
       Item   : Ada.Directories.Directory_Entry_Type;
    begin
-      if not Ada.Directories.Exists (Dir) then
+      if not Version.Files.Exists (Dir) then
          return;
       end if;
       Ada.Directories.Start_Search
@@ -4004,7 +4004,7 @@ package body Version.LFS is
                      exit;
                   end if;
                end loop;
-               if not Found and then Ada.Directories.Exists (Attr_Path) then
+               if not Found and then Version.Files.Exists (Attr_Path) then
                   Ada.Directories.Delete_File (Attr_Path);
                end if;
             end;

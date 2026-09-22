@@ -1626,12 +1626,12 @@ package body Version.Ref_Format is
                  (Repo, Version.Objects.To_Object_Id (Id), 7) - 1));
    begin
       --  A rebase or bisect in progress names the branch it works on.
-      if Ada.Directories.Exists (Version.Files.Join (Git_Dir, "rebase-merge"))
-        or else Ada.Directories.Exists (Version.Files.Join (Git_Dir, "rebase-apply"))
+      if Version.Files.Exists (Version.Files.Join (Git_Dir, "rebase-merge"))
+        or else Version.Files.Exists (Version.Files.Join (Git_Dir, "rebase-apply"))
       then
          declare
             Name : constant String :=
-              (if Ada.Directories.Exists (Version.Files.Join (Git_Dir, "rebase-merge"))
+              (if Version.Files.Exists (Version.Files.Join (Git_Dir, "rebase-merge"))
                then State_Line ("rebase-merge/head-name")
                else State_Line ("rebase-apply/head-name"));
          begin
@@ -1640,7 +1640,7 @@ package body Version.Ref_Format is
             end if;
             declare
                Onto : constant String :=
-                 (if Ada.Directories.Exists
+                 (if Version.Files.Exists
                        (Version.Files.Join (Git_Dir, "rebase-merge"))
                   then State_Line ("rebase-merge/onto")
                   else State_Line ("rebase-apply/onto"));

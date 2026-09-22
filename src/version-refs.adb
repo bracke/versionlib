@@ -197,7 +197,7 @@ package body Version.Refs is
          Ref_Path : constant String :=
            Join (Version.Repository.Common_Git_Dir (Repo), Name);
       begin
-         if Ada.Directories.Exists (Ref_Path)
+         if Version.Files.Exists (Ref_Path)
            and then
              Ada.Directories.Kind (Ref_Path) = Ada.Directories.Ordinary_File
          then
@@ -263,7 +263,7 @@ package body Version.Refs is
          Ref_Path : constant String :=
            Join (Version.Repository.Common_Git_Dir (Repo), Name);
       begin
-         if Ada.Directories.Exists (Ref_Path)
+         if Version.Files.Exists (Ref_Path)
            and then
              Ada.Directories.Kind (Ref_Path) = Ada.Directories.Ordinary_File
          then
@@ -320,7 +320,7 @@ package body Version.Refs is
       E      : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Base_Dir) then
+      if not Version.Files.Exists (Base_Dir) then
          return;
       end if;
 
@@ -586,7 +586,7 @@ package body Version.Refs is
 
       Version.Ref_Names.Require_Ref_Name (Target);
 
-      if Ada.Directories.Exists (Lock_Path) then
+      if Version.Files.Exists (Lock_Path) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Lock_Path;
       end if;
@@ -605,7 +605,7 @@ package body Version.Refs is
       declare
          Lock_Path : constant String := Path & ".lock";
       begin
-         if Ada.Directories.Exists (Lock_Path) then
+         if Version.Files.Exists (Lock_Path) then
             raise Ada.IO_Exceptions.Data_Error
               with "lock file already exists: " & Lock_Path;
          end if;

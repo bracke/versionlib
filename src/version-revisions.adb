@@ -94,7 +94,7 @@ package body Version.Revisions is
          Pack_Dir : constant String := Join (Objects_Dir, "pack");
          Stamp    : Ada.Calendar.Time := Abbrev_Packs_Stamp;
       begin
-         if Ada.Directories.Exists (Pack_Dir) then
+         if Version.Files.Exists (Pack_Dir) then
             Stamp := Ada.Directories.Modification_Time (Pack_Dir);
          end if;
          if not Abbrev_Packs_Valid or else Stamp /= Abbrev_Packs_Stamp then
@@ -111,7 +111,7 @@ package body Version.Revisions is
       --  so counting it here too would double-count one object (e.g. after
       --  `git repack` without `-d` leaves the loose copies) and make every
       --  prefix read as ambiguous -- git dedups such candidates by object id.
-      if Ada.Directories.Exists (Sub)
+      if Version.Files.Exists (Sub)
         and then Ada.Directories.Kind (Sub) = Ada.Directories.Directory
       then
          declare
@@ -199,7 +199,7 @@ package body Version.Revisions is
 
          --  Loose objects share the two-char fanout directory named by the
          --  prefix; a file name completes the id after the fanout.
-         if Ada.Directories.Exists (Sub)
+         if Version.Files.Exists (Sub)
            and then Ada.Directories.Kind (Sub) = Ada.Directories.Directory
          then
             declare
@@ -306,7 +306,7 @@ package body Version.Revisions is
          raise Ada.IO_Exceptions.Data_Error with "unknown revision: " & Prefix;
       end if;
 
-      if not Ada.Directories.Exists (Objects_Dir) then
+      if not Version.Files.Exists (Objects_Dir) then
          raise Ada.IO_Exceptions.Data_Error with "unknown revision: " & Prefix;
       end if;
 
@@ -437,7 +437,7 @@ package body Version.Revisions is
               Join (Version.Repository.Git_Dir (Repo), Name);
             use type Ada.Directories.File_Kind;
          begin
-            if Ada.Directories.Exists (Path)
+            if Version.Files.Exists (Path)
               and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File
             then
                declare

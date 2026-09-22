@@ -1,10 +1,10 @@
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 
 with Version.Objects;
 with Version.Ref_Format;
 with Version.Revisions;
+with Version.Files;
 
 package body Version.Rev_Args is
 
@@ -46,7 +46,7 @@ package body Version.Rev_Args is
       --  git accepts an operand as a path when it names something on disk,
       --  resolved from the directory the command ran in -- not from the
       --  worktree root, which would miss a path named from a subdirectory.
-      return Ada.Directories.Exists (Text);
+      return Version.Files.Exists (Text);
    exception
       when others =>
          return False;

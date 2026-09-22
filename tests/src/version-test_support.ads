@@ -1,3 +1,5 @@
+with GNAT.Sockets;
+
 package Version.Test_Support is
 
    --  Create a fresh temporary directory for a test case.
@@ -52,5 +54,19 @@ package Version.Test_Support is
    --  for Windows ships sh.exe and the absolute path does not exist there,
    --  so every fixture command failed before it ran.
    function Shell_Program return String;
+
+
+   --  Accept a connection, but never for longer than Timeout.
+   --
+   --  A mock server task that blocks in Accept_Socket forever takes the whole
+   --  suite with it: the test's task master waits for the task to terminate,
+   --  so any exception raised in the test body before the client connects
+   --  deadlocks the run rather than failing one case.  Raising here turns a
+   --  hung job into a failing test with its own diagnosis.
+   procedure Accept_With_Timeout
+     (Server  : GNAT.Sockets.Socket_Type;
+      Client  : out GNAT.Sockets.Socket_Type;
+      Peer    : out GNAT.Sockets.Sock_Addr_Type;
+      Timeout : Duration := 60.0);
 
 end Version.Test_Support;

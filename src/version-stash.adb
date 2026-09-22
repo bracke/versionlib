@@ -470,7 +470,7 @@ package body Version.Stash is
                then
                   Version.Path_Safety.Require_Safe_Relative_Path
                     (Path, "ignored stash path");
-                  if Ada.Directories.Exists (Full)
+                  if Version.Files.Exists (Full)
                     and then Ada.Directories.Kind (Full) = Ada.Directories.Ordinary_File
                   then
                      Result.Append
@@ -561,7 +561,7 @@ package body Version.Stash is
                   Full : constant String := Join (Version.Repository.Root_Path (Repo), Path);
                begin
                   Version.Path_Safety.Require_Safe_Relative_Path (Path, "stash path");
-                  if not Ada.Directories.Exists (Full) then
+                  if not Version.Files.Exists (Full) then
                      Result.Delete (I);
                   elsif Ada.Directories.Kind (Full) /= Ada.Directories.Ordinary_File then
                      raise Ada.IO_Exceptions.Data_Error with
@@ -602,7 +602,7 @@ package body Version.Stash is
                Blob_Id : Version.Objects.Object_Id_Storage;
             begin
                Version.Path_Safety.Require_Safe_Relative_Path (Path, "untracked stash path");
-               if Ada.Directories.Exists (Full)
+               if Version.Files.Exists (Full)
                  and then Ada.Directories.Kind (Full) = Ada.Directories.Ordinary_File
                then
                   Blob_Id := Version.Write.Write_Blob
@@ -630,7 +630,7 @@ package body Version.Stash is
       Full       : constant String := Join (Version.Repository.Root_Path (Repo), Normalized);
    begin
       Version.Path_Safety.Require_Safe_Relative_Path (Normalized, "stash path");
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Full)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Full)) then
          if Ada.Directories.Kind (Version.Files.To_Native_Path (Full)) = Ada.Directories.Ordinary_File then
             Version.Filesystem_Guard.Require_Safe_Delete_Target
               (Repo_Root     => Version.Repository.Root_Path (Repo),
@@ -684,7 +684,7 @@ package body Version.Stash is
                         Search : Ada.Directories.Search_Type;
                         Empty  : Boolean := True;
                      begin
-                        exit when not Ada.Directories.Exists (Dir);
+                        exit when not Version.Files.Exists (Dir);
                         Ada.Directories.Start_Search (Search, Dir, "");
                         while Ada.Directories.More_Entries (Search) loop
                            declare
@@ -832,7 +832,7 @@ package body Version.Stash is
       Raw_Index : Natural := 0;
    begin
       Lines.Clear;
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return;
       end if;
       Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
@@ -1213,7 +1213,7 @@ package body Version.Stash is
                Version.Filesystem_Guard.Require_Safe_Write_Target
                  (Repo_Root     => Version.Repository.Root_Path (Repo),
                   Relative_Path => Path);
-               if Ada.Directories.Exists (Full) then
+               if Version.Files.Exists (Full) then
                   raise Ada.IO_Exceptions.Data_Error with
                     "untracked path already exists: " & Path;
                end if;
@@ -2055,7 +2055,7 @@ package body Version.Stash is
                      Version.Filesystem_Guard.Require_Safe_Write_Target
                        (Repo_Root     => Version.Repository.Root_Path (Repo),
                         Relative_Path => Path);
-                     if Ada.Directories.Exists (Full) then
+                     if Version.Files.Exists (Full) then
                         raise Ada.IO_Exceptions.Data_Error with
                           "untracked path already exists: " & Path;
                      end if;
@@ -2097,7 +2097,7 @@ package body Version.Stash is
                      Version.Filesystem_Guard.Require_Safe_Write_Target
                        (Repo_Root     => Version.Repository.Root_Path (Repo),
                         Relative_Path => Path);
-                     if Ada.Directories.Exists (Full) then
+                     if Version.Files.Exists (Full) then
                         raise Ada.IO_Exceptions.Data_Error with
                           "untracked path already exists: " & Path;
                      end if;
@@ -2344,17 +2344,17 @@ package body Version.Stash is
         Join (Version.Repository.Common_Git_Dir (Repo), Stash_Ref) & ".lock";
       Native_Log_Path : constant String := Version.Files.To_Native_Path (Log_Path);
    begin
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Ref_Lock_Path)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Ref_Lock_Path)) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Ref_Lock_Path;
       end if;
 
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Log_Lock_Path)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Log_Lock_Path)) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Log_Lock_Path;
       end if;
 
-      if Ada.Directories.Exists (Native_Log_Path)
+      if Version.Files.Exists (Native_Log_Path)
         and then Ada.Directories.Kind (Native_Log_Path) /= Ada.Directories.Ordinary_File
       then
          raise Ada.IO_Exceptions.Data_Error
@@ -2379,7 +2379,7 @@ package body Version.Stash is
             procedure Delete_Stash_Log is
                Native_Path : constant String := Version.Files.To_Native_Path (Path);
             begin
-               if not Ada.Directories.Exists (Native_Path) then
+               if not Version.Files.Exists (Native_Path) then
                   return;
                elsif Ada.Directories.Kind (Native_Path) /= Ada.Directories.Ordinary_File then
                   raise Ada.IO_Exceptions.Data_Error

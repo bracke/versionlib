@@ -127,7 +127,7 @@ package body Version.Repository is
               Context       => "gitdir in .git file",
               Allow_Dot_Dot => True);
       begin
-         if not Ada.Directories.Exists (Version.Files.To_Native_Path (Resolved))
+         if not Version.Files.Exists (Version.Files.To_Native_Path (Resolved))
            or else Ada.Directories.Kind (Version.Files.To_Native_Path (Resolved)) /=
              Ada.Directories.Directory
          then
@@ -149,14 +149,14 @@ package body Version.Repository is
       --  git treats a directory that holds HEAD, objects and refs but no
       --  worktree as a bare repository (its own git dir).
       function Is_Bare_Git_Dir return Boolean is
-        (Ada.Directories.Exists
+        (Version.Files.Exists
            (Version.Files.To_Native_Path (Join (Root, "HEAD")))
-         and then Ada.Directories.Exists
+         and then Version.Files.Exists
                     (Version.Files.To_Native_Path (Join (Root, "objects")))
-         and then Ada.Directories.Exists
+         and then Version.Files.Exists
                     (Version.Files.To_Native_Path (Join (Root, "refs"))));
    begin
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Dot_Git)) then
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Dot_Git)) then
          if Is_Bare_Git_Dir then
             return Root;
          end if;
@@ -179,7 +179,7 @@ package body Version.Repository is
    function Common_Dir_For (Git_Dir : String) return String is
       Common_Path : constant String := Join (Git_Dir, "commondir");
    begin
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Common_Path))
+      if Version.Files.Exists (Version.Files.To_Native_Path (Common_Path))
         and then Ada.Directories.Kind (Version.Files.To_Native_Path (Common_Path)) =
           Ada.Directories.Ordinary_File
       then
@@ -191,7 +191,7 @@ package body Version.Repository is
                  Context       => "commondir",
                  Allow_Dot_Dot => True);
          begin
-            if not Ada.Directories.Exists (Version.Files.To_Native_Path (Resolved))
+            if not Version.Files.Exists (Version.Files.To_Native_Path (Resolved))
               or else Ada.Directories.Kind (Version.Files.To_Native_Path (Resolved)) /=
                 Ada.Directories.Directory
             then

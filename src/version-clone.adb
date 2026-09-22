@@ -231,7 +231,7 @@ package body Version.Clone is
 
       Prefix : constant String := "ref: refs/heads/";
    begin
-      if not Ada.Directories.Exists (Head_Path) then
+      if not Version.Files.Exists (Head_Path) then
          return "";
       end if;
 
@@ -475,7 +475,7 @@ package body Version.Clone is
       if Target'Length = 0 then
          raise Ada.IO_Exceptions.Data_Error with "clone target must not be empty";
       end if;
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Target)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Target)) then
          raise Ada.IO_Exceptions.Data_Error
            with "clone target already exists: " & Target;
       end if;
@@ -646,7 +646,7 @@ package body Version.Clone is
            with "clone target must not be empty";
       end if;
 
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Target)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Target)) then
          raise Ada.IO_Exceptions.Data_Error
            with "clone target already exists: " & Target;
       end if;
@@ -814,7 +814,7 @@ package body Version.Clone is
          raise Ada.IO_Exceptions.Data_Error
            with "clone source and target must not be empty";
       end if;
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Target)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Target)) then
          raise Ada.IO_Exceptions.Data_Error
            with "clone target already exists: " & Target;
       end if;

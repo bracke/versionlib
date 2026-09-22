@@ -5,6 +5,16 @@ package Version.Files is
       Right : String)
       return String;
 
+   function Exists
+     (Path : String)
+      return Boolean;
+   --  Whether Path names something on disk. Unlike Exists
+   --  this answers False for a name the host cannot spell rather than
+   --  raising: on Windows every character git allows in a pathspec or a
+   --  rev:path -- `*`, `?`, `:` -- makes the name malformed there, so the
+   --  plain test turned `show HEAD:nosuch` into "fatal: invalid path name"
+   --  and a `*.txt` pathspec into the same.
+
    function Relative_To_Prefix
      (Path   : String;
       Prefix : String)

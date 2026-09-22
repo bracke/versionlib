@@ -41,7 +41,7 @@ package body Version.Bisect is
    function Exists
      (Repo : Version.Repository.Repository_Handle; Name : String)
       return Boolean
-   is (Ada.Directories.Exists
+   is (Version.Files.Exists
          (Version.Files.To_Native_Path (Path (Repo, Name))));
 
    function Read (Repo : Version.Repository.Repository_Handle; Name : String)
@@ -125,7 +125,7 @@ package body Version.Bisect is
 
    function Has_Bad
      (Repo : Version.Repository.Repository_Handle) return Boolean
-   is (Ada.Directories.Exists
+   is (Version.Files.Exists
          (Version.Files.To_Native_Path
             (Version.Files.Join
                (Bisect_Refs_Dir (Repo),
@@ -148,7 +148,7 @@ package body Version.Bisect is
       Item   : Ada.Directories.Directory_Entry_Type;
       use Ada.Directories;
    begin
-      if not Ada.Directories.Exists (Dir) then
+      if not Version.Files.Exists (Dir) then
          return Result;
       end if;
       Start_Search (Search, Dir, "",

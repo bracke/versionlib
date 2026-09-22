@@ -396,7 +396,7 @@ package body Version.Reftable.Writer is
       Name : constant String :=
         "0x000000000001-0x000000000001-" & Hex8 (Crc32 (Image)) & ".ref";
    begin
-      if not Ada.Directories.Exists (RT_Dir) then
+      if not Version.Files.Exists (RT_Dir) then
          Ada.Directories.Create_Path (RT_Dir);
       end if;
       Version.Files.Write_Binary_File
@@ -451,7 +451,7 @@ package body Version.Reftable.Writer is
    begin
       --  Remember the current stack (before publishing overwrites the list) so
       --  we can drop the superseded tables afterwards.
-      if Ada.Directories.Exists (List_Path) then
+      if Version.Files.Exists (List_Path) then
          declare
             Content : constant String :=
               Version.Files.Read_Binary_File (List_Path);
@@ -487,7 +487,7 @@ package body Version.Reftable.Writer is
                   P : constant String :=
                     Version.Files.Join (RT_Dir, To_String (T.Name));
                begin
-                  if Ada.Directories.Exists (P) then
+                  if Version.Files.Exists (P) then
                      Ada.Directories.Delete_File (P);
                   end if;
                end;
@@ -521,7 +521,7 @@ package body Version.Reftable.Writer is
       List_Path : constant String :=
         Version.Files.Join (RT_Dir, "tables.list");
       Existing  : constant String :=
-        (if Ada.Directories.Exists (List_Path)
+        (if Version.Files.Exists (List_Path)
          then Version.Files.Read_Binary_File (List_Path) else "");
    begin
       Version.Files.Write_Binary_File
@@ -572,7 +572,7 @@ package body Version.Reftable.Writer is
          Image : constant String :=
            Serialize (Combined_Refs, Combined_Logs, New_Idx, RL);
       begin
-         if not Ada.Directories.Exists (RT_Dir) then
+         if not Version.Files.Exists (RT_Dir) then
             Ada.Directories.Create_Path (RT_Dir);
          end if;
          Version.Files.Write_Binary_File
@@ -686,7 +686,7 @@ package body Version.Reftable.Writer is
             procedure Del (S : String) is
                P : constant String := Version.Reftable.Table_Path (Repo, S);
             begin
-               if S /= New_Name and then Ada.Directories.Exists (P) then
+               if S /= New_Name and then Version.Files.Exists (P) then
                   Ada.Directories.Delete_File (P);
                end if;
             end Del;
@@ -704,7 +704,7 @@ package body Version.Reftable.Writer is
          P : constant String :=
            Version.Reftable.Table_Path (Repo, To_String (Name));
       begin
-         if Ada.Directories.Exists (P) then
+         if Version.Files.Exists (P) then
             return Long_Long_Integer (Ada.Directories.Size (P));
          end if;
          return 0;

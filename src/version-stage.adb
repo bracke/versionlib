@@ -88,7 +88,7 @@ package body Version.Stage is
 
       if Intent_To_Add then
          if Version.Staging.Find_Path (Entries, Safe_Path) = Natural'Last then
-            if not Ada.Directories.Exists (Full_Path) then
+            if not Version.Files.Exists (Full_Path) then
                raise Ada.IO_Exceptions.Data_Error with
                  "path does not exist: " & Safe_Path;
             end if;
@@ -123,7 +123,7 @@ package body Version.Stage is
              Stage => 0, Skip_Worktree => False, Assume_Valid => False, Intent_To_Add => False));
 
       else
-         if not Ada.Directories.Exists (Full_Path) then
+         if not Version.Files.Exists (Full_Path) then
             if Version.Sparse.Enabled (Repo)
               and then not Version.Sparse.Included (Repo, Safe_Path)
             then

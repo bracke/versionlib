@@ -220,7 +220,7 @@ package body Version.Fetch is
          Dir_Item : Ada.Directories.Directory_Entry_Type;
          Opened   : Boolean := False;
       begin
-         if not Ada.Directories.Exists (Source_Dir) then
+         if not Version.Files.Exists (Source_Dir) then
             return;
          end if;
 
@@ -387,7 +387,7 @@ package body Version.Fetch is
          Dir_Item : Ada.Directories.Directory_Entry_Type;
          Opened   : Boolean := False;
       begin
-         if not Ada.Directories.Exists (Source_Dir) then
+         if not Version.Files.Exists (Source_Dir) then
             return;
          end if;
 
@@ -890,7 +890,7 @@ package body Version.Fetch is
       Id   : Version.Objects.Hex_Object_Id) return Boolean
    is
    begin
-      return Ada.Directories.Exists (Version.Objects.Loose_Object_Path (Repo, Id))
+      return Version.Files.Exists (Version.Objects.Loose_Object_Path (Repo, Id))
         or else Version.Pack.Contains (Repo, Id);
    end Object_Available;
 
@@ -1142,7 +1142,7 @@ package body Version.Fetch is
             Search : Ada.Directories.Search_Type;
             Item   : Ada.Directories.Directory_Entry_Type;
          begin
-            if not Ada.Directories.Exists (Dir) then
+            if not Version.Files.Exists (Dir) then
                return;
             end if;
 
@@ -1180,7 +1180,7 @@ package body Version.Fetch is
       begin
          Walk (Version.Files.Join (Git_Dir, "refs"), "refs/");
 
-         if Ada.Directories.Exists (Packed) then
+         if Version.Files.Exists (Packed) then
             declare
                Text : constant String :=
                  Version.Files.Read_Binary_File (Packed);

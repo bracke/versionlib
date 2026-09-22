@@ -161,10 +161,21 @@ package body Version.Files is
       end if;
    end Join;
 
+   function Exists (Path : String) return Boolean is
+   begin
+      return Ada.Directories.Exists (Path);
+   exception
+      --  A name the host cannot spell is not a file that exists. GNAT
+      --  raises for a malformed path, and on Windows "malformed" covers
+      --  the pathspecs and rev:path forms git accepts everywhere else.
+      when Ada.Directories.Name_Error | Ada.Directories.Use_Error =>
+         return False;
+   end Exists;
+
    procedure Create_Directory_If_Missing (Path : String) is
       Native : constant String := To_Native_Path (Path);
    begin
-      if not Ada.Directories.Exists (Native) then
+      if not Exists (Native) then
          Ada.Directories.Create_Path (Native);
       elsif Ada.Directories.Kind (Native) /= Ada.Directories.Directory then
          raise Ada.IO_Exceptions.Data_Error
@@ -189,7 +200,7 @@ package body Version.Files is
               Normalized (Normalized'First .. Last_Slash - 1);
          begin
             if Dir'Length > 0 then
-               if not Ada.Directories.Exists (To_Native_Path (Dir)) then
+               if not Exists (To_Native_Path (Dir)) then
                   Ada.Directories.Create_Path (To_Native_Path (Dir));
                elsif Ada.Directories.Kind (To_Native_Path (Dir))
                  /= Ada.Directories.Directory
@@ -377,7 +388,7 @@ package body Version.Files is
    procedure Delete_File_If_Exists (Path : String) is
       Native : constant String := To_Native_Path (Path);
    begin
-      if Ada.Directories.Exists (Native)
+      if Exists (Native)
         and then Ada.Directories.Kind (Native) = Ada.Directories.Ordinary_File
       then
          Ada.Directories.Delete_File (Native);
@@ -388,14 +399,14 @@ package body Version.Files is
       Native_Source : constant String := To_Native_Path (Source);
       Native_Target : constant String := To_Native_Path (Target);
    begin
-      if not Ada.Directories.Exists (Native_Source) then
+      if not Exists (Native_Source) then
          raise Ada.IO_Exceptions.Name_Error
            with "directory rename source does not exist: " & Source;
       elsif Ada.Directories.Kind (Native_Source) /= Ada.Directories.Directory
       then
          raise Ada.IO_Exceptions.Data_Error
            with "directory rename source is not a directory: " & Source;
-      elsif Ada.Directories.Exists (Native_Target) then
+      elsif Exists (Native_Target) then
          raise Ada.IO_Exceptions.Data_Error
            with "directory rename target already exists: " & Target;
       end if;
@@ -407,7 +418,7 @@ package body Version.Files is
    procedure Delete_Directory_Tree_If_Exists (Path : String) is
       Native : constant String := To_Native_Path (Path);
    begin
-      if not Ada.Directories.Exists (Native) then
+      if not Exists (Native) then
          return;
       elsif Ada.Directories.Kind (Native) /= Ada.Directories.Directory then
          raise Ada.IO_Exceptions.Data_Error
@@ -430,7 +441,7 @@ package body Version.Files is
       Native_Target : constant String := To_Native_Path (Target);
    begin
       if Version.Platform.Current = Version.Platform.Windows_Platform
-        and then Ada.Directories.Exists (Native_Target)
+        and then Exists (Native_Target)
       then
          Version.Files.Rollback.Atomic_Replace_With_Backup_Rollback
            (Source_Temp => Source_Temp,
@@ -452,7 +463,7 @@ package body Version.Files is
       end if;
 
       return
-        Ada.Directories.Exists (To_Native_Path (Path))
+        Exists (To_Native_Path (Path))
         and then
           Ada.Directories.Kind (To_Native_Path (Path))
           = Ada.Directories.Ordinary_File;
@@ -461,7 +472,7 @@ package body Version.Files is
    function Is_Directory (Path : String) return Boolean is
    begin
       return
-        Ada.Directories.Exists (To_Native_Path (Path))
+        Exists (To_Native_Path (Path))
         and then
           Ada.Directories.Kind (To_Native_Path (Path))
           = Ada.Directories.Directory;

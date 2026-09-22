@@ -135,14 +135,14 @@ package body Version.Notes_Merge is
       Dir : constant String := Worktree_Dir (Repo);
    begin
       if Has_Worktree then
-         if not Ada.Directories.Exists (Dir) then
+         if not Version.Files.Exists (Dir) then
             raise Notes_Error with
               "missing '" & Dir & "'. This should not happen";
          end if;
          return;
       end if;
 
-      if Ada.Directories.Exists (Dir) then
+      if Version.Files.Exists (Dir) then
          declare
             Search : Ada.Directories.Search_Type;
             Empty  : Boolean := True;
@@ -176,7 +176,7 @@ package body Version.Notes_Merge is
    is
       Path : constant String := Version.Files.Join (Worktree_Dir (Repo), Object);
    begin
-      if Ada.Directories.Exists (Path) then
+      if Version.Files.Exists (Path) then
          raise Notes_Error with
            "unable to create '" & Path & "': File exists";
       end if;
@@ -557,7 +557,7 @@ package body Version.Notes_Merge is
    begin
       Version.Files.Write_Binary_File
         (State_File (Repo, Partial_Ref), To_String (Result_Id) & LF);
-      if Ada.Directories.Exists (Ref_File) then
+      if Version.Files.Exists (Ref_File) then
          declare
             Existing : constant String :=
               Trimmed (Version.Files.Read_Binary_File (Ref_File));
@@ -600,7 +600,7 @@ package body Version.Notes_Merge is
       if Options.Verbosity >= 3 then
          Say (Output, "Removing notes merge worktree at " & Dir & "/*");
       end if;
-      if not Ada.Directories.Exists (Dir) then
+      if not Version.Files.Exists (Dir) then
          Errors.Append ("failed to remove 'git notes merge' worktree");
          return;
       end if;
@@ -642,7 +642,7 @@ package body Version.Notes_Merge is
       Dir          : constant String := Worktree_Dir (Repo);
    begin
       Result_Id := Zero_Object_Id;
-      if not Ada.Directories.Exists (Partial_File) then
+      if not Version.Files.Exists (Partial_File) then
          raise Notes_Error with "failed to read ref " & Partial_Ref;
       end if;
 
@@ -669,7 +669,7 @@ package body Version.Notes_Merge is
             Tree    : Notes_Tree;
             Local_Ref : Unbounded_String;
          begin
-            if not Ada.Directories.Exists (Ref_File) then
+            if not Version.Files.Exists (Ref_File) then
                raise Notes_Error with "failed to resolve " & Merge_Ref;
             end if;
             declare
@@ -693,7 +693,7 @@ package body Version.Notes_Merge is
             if Message'Length = 0 then
                raise Notes_Error with "partial notes commit has empty message";
             end if;
-            if not Ada.Directories.Exists (Dir) then
+            if not Version.Files.Exists (Dir) then
                raise Notes_Error with
                  "could not open " & Dir & ": No such file or directory";
             end if;

@@ -103,7 +103,7 @@ package body Version.Reachability is
    begin
       --  Skip a missing path, or a non-directory (git's reftable backend
       --  leaves refs/heads etc. as stub files, not directories).
-      if not Ada.Directories.Exists (Base_Dir)
+      if not Version.Files.Exists (Base_Dir)
         or else not Version.Files.Is_Directory (Base_Dir)
       then
          return;
@@ -262,7 +262,7 @@ package body Version.Reachability is
    begin
       --  Skip a missing path, or a non-directory (git's reftable backend
       --  leaves refs/heads etc. as stub files, not directories).
-      if not Ada.Directories.Exists (Base_Dir)
+      if not Version.Files.Exists (Base_Dir)
         or else not Version.Files.Is_Directory (Base_Dir)
       then
          return;
@@ -344,7 +344,7 @@ package body Version.Reachability is
          end loop;
       end Scan_Line;
    begin
-      if not Ada.Directories.Exists (Path)
+      if not Version.Files.Exists (Path)
         or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
       then
          return;
@@ -397,7 +397,7 @@ package body Version.Reachability is
    is
       Log_Path : constant String := Join (Join (Git_Dir, "logs"), "HEAD");
    begin
-      if Ada.Directories.Exists (Log_Path)
+      if Version.Files.Exists (Log_Path)
         and then Ada.Directories.Kind (Log_Path) = Ada.Directories.Ordinary_File
       then
          Append_Reflog_File (Log_Path, Result);
@@ -414,7 +414,7 @@ package body Version.Reachability is
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Opened    : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Root) then
+      if not Version.Files.Exists (Root) then
          return;
       end if;
 
@@ -473,7 +473,7 @@ package body Version.Reachability is
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Opened    : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Root) then
+      if not Version.Files.Exists (Root) then
          return;
       end if;
 
@@ -497,7 +497,7 @@ package body Version.Reachability is
          begin
             if Name /= "."
               and then Name /= ".."
-              and then Ada.Directories.Exists (Head_Path)
+              and then Version.Files.Exists (Head_Path)
               and then
                 Ada.Directories.Kind (Head_Path)
                 = Ada.Directories.Ordinary_File
@@ -844,7 +844,7 @@ package body Version.Reachability is
       Dir_Entry   : Ada.Directories.Directory_Entry_Type;
       Opened      : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Objects_Dir) then
+      if not Version.Files.Exists (Objects_Dir) then
          return Result;
       end if;
 

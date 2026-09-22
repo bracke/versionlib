@@ -117,11 +117,11 @@ package body Version.Write is
       Obj_Path : constant String :=
         Join (Obj_Dir, To_String (Id) (3 .. To_String (Id)'Last));
    begin
-      if not Ada.Directories.Exists (Obj_Dir) then
+      if not Version.Files.Exists (Obj_Dir) then
          Ada.Directories.Create_Directory (Obj_Dir);
       end if;
 
-      if not Ada.Directories.Exists (Obj_Path) then
+      if not Version.Files.Exists (Obj_Path) then
          Write_String_File (Obj_Path, Compressed);
       end if;
    end Write_Loose_Object;
@@ -712,7 +712,7 @@ package body Version.Write is
       if not Success or else Status /= 0 then
          declare
             Captured : constant String :=
-              (if Ada.Directories.Exists (Error_Path)
+              (if Version.Files.Exists (Error_Path)
                then Version.Files.Read_Binary_File (Error_Path) else "");
          begin
             Version.Files.Delete_File_If_Exists (Input_Path);

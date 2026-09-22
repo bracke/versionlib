@@ -135,7 +135,7 @@ package body Version.Packed_Refs is
       Result : Packed_Ref_Vectors.Vector;
       Have_Previous_Ref : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return Result;
       end if;
 
@@ -280,7 +280,7 @@ package body Version.Packed_Refs is
             return "";
       end Peeled;
    begin
-      if Ada.Directories.Exists (Lock_Path) then
+      if Version.Files.Exists (Lock_Path) then
          raise Ada.IO_Exceptions.Data_Error with
            "lock file already exists: " & Lock_Path;
       end if;
@@ -326,7 +326,7 @@ package body Version.Packed_Refs is
       Item   : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Root_Dir) then
+      if not Version.Files.Exists (Root_Dir) then
          return;
       end if;
 

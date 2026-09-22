@@ -80,7 +80,7 @@ package body Version.Tags is
          raise Ada.IO_Exceptions.Data_Error with Invalid_Tag_Name_Diagnostic (Name);
       end if;
 
-      if Ada.Directories.Exists (Path)
+      if Version.Files.Exists (Path)
         or else Version.Refs.Ref_Exists (Repo => Repo, Name => "refs/tags/" & Name)
       then
          raise Ada.IO_Exceptions.Data_Error with Tag_Already_Exists_Diagnostic (Name);
@@ -342,7 +342,7 @@ package body Version.Tags is
       Dir_Item : Ada.Directories.Directory_Entry_Type;
       Opened   : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Directory_Path) then
+      if not Version.Files.Exists (Directory_Path) then
          return;
       end if;
 

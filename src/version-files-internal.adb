@@ -12,7 +12,7 @@ package body Version.Files.Internal is
       Target        : String)
    is
    begin
-      if not Ada.Directories.Exists (Native_Source) then
+      if not Exists (Native_Source) then
          raise Ada.IO_Exceptions.Name_Error
            with "atomic replace source does not exist: " & Source_Temp;
       elsif Ada.Directories.Kind (Native_Source)
@@ -25,7 +25,7 @@ package body Version.Files.Internal is
 
       Version.Files.Create_Parent_Directories (Target);
 
-      if Ada.Directories.Exists (Native_Target)
+      if Exists (Native_Target)
         and then Ada.Directories.Kind (Native_Target)
           /= Ada.Directories.Ordinary_File
       then
@@ -36,7 +36,7 @@ package body Version.Files.Internal is
 
    procedure Delete_Source_On_Failure (Native_Source : String) is
    begin
-      if Ada.Directories.Exists (Native_Source)
+      if Exists (Native_Source)
         and then Ada.Directories.Kind (Native_Source)
           = Ada.Directories.Ordinary_File
       then

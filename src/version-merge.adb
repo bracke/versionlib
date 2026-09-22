@@ -2224,7 +2224,7 @@ package body Version.Merge is
       Relative_Path : String;
       Result        : in out Merge_Attribute) is
    begin
-      if not Ada.Directories.Exists (Attr_Path)
+      if not Version.Files.Exists (Attr_Path)
         or else Ada.Directories.Kind (Attr_Path) /= Ada.Directories.Ordinary_File
       then
          return;
@@ -2416,7 +2416,7 @@ package body Version.Merge is
       Relative_Path : String;
       Result        : in out Unbounded_String) is
    begin
-      if not Ada.Directories.Exists (Attr_Path)
+      if not Version.Files.Exists (Attr_Path)
         or else Ada.Directories.Kind (Attr_Path) /= Ada.Directories.Ordinary_File
       then
          return;
@@ -2912,7 +2912,7 @@ package body Version.Merge is
    is
       MR       : constant String := Merge_RR_Path (Repo);
       Existing : constant String :=
-        (if Ada.Directories.Exists (MR)
+        (if Version.Files.Exists (MR)
          then Version.Files.Read_Binary_File (MR) else "");
    begin
       Version.Files.Write_Binary_File_Atomic
@@ -2954,7 +2954,7 @@ package body Version.Merge is
          Path : constant String := Rerere_Preimage_Path (Repo, Key);
       begin
          Ada.Directories.Create_Path (Dir);
-         if not Ada.Directories.Exists (Path) then
+         if not Version.Files.Exists (Path) then
             Version.Files.Write_Binary_File_Atomic
               (Path => Path, Content => To_String (Preimage_Text));
          end if;
@@ -2991,7 +2991,7 @@ package body Version.Merge is
         or else Key = ""
       then
          return False;
-      elsif Ada.Directories.Exists (Exact_Path)
+      elsif Version.Files.Exists (Exact_Path)
         and then Ada.Directories.Kind (Exact_Path) = Ada.Directories.Ordinary_File
       then
          Path := To_Unbounded_String (Exact_Path);
@@ -3031,7 +3031,7 @@ package body Version.Merge is
    begin
       Require_Safe_Path (Relative_Path);
 
-      if Ada.Directories.Exists (Absolute_Path) then
+      if Version.Files.Exists (Absolute_Path) then
          if Ada.Directories.Kind (Absolute_Path) = Ada.Directories.Ordinary_File then
             Version.Files.Remove_File_If_Safe
               (Repo_Root     => Version.Repository.Root_Path (Repo),
@@ -3063,7 +3063,7 @@ package body Version.Merge is
          return;
       end if;
 
-      if Ada.Directories.Exists (Absolute_Path)
+      if Version.Files.Exists (Absolute_Path)
         and then Ada.Directories.Kind (Absolute_Path) = Ada.Directories.Directory
       then
          raise Ada.IO_Exceptions.Data_Error with
@@ -3096,7 +3096,7 @@ package body Version.Merge is
                  "could not remove existing merge symlink: " & Relative_Path;
             end if;
          end;
-      elsif Ada.Directories.Exists (Native_Path) then
+      elsif Version.Files.Exists (Native_Path) then
          if Ada.Directories.Kind (Native_Path) = Ada.Directories.Ordinary_File then
             Version.Files.Delete_File_If_Exists (Absolute_Path);
          elsif Ada.Directories.Kind (Native_Path) = Ada.Directories.Directory then
@@ -3500,7 +3500,7 @@ package body Version.Merge is
          raise Ada.IO_Exceptions.Data_Error with
            "cannot update submodule worktree: " & Path_Text;
       elsif Behavior.Recurse_Submodules
-        and then Ada.Directories.Exists
+        and then Version.Files.Exists
           (Version.Files.Join (Sub_Worktree, ".gitmodules"))
         and then Git_Submodule_Update_Recursive_Status (Sub_Worktree) /= 0
       then
@@ -5878,7 +5878,7 @@ package body Version.Merge is
    begin
       if Conflicts.Is_Empty
         or else not Rerere_Enabled (Repo, Merge_Behavior'(others => <>))
-        or else not Ada.Directories.Exists (MR)
+        or else not Version.Files.Exists (MR)
       then
          return;
       end if;
@@ -5894,7 +5894,7 @@ package body Version.Merge is
                  Version.Files.Join (Version.Repository.Root_Path (Repo), Path);
             begin
                if Key'Length > 0
-                 and then Ada.Directories.Exists (Absolute_Path)
+                 and then Version.Files.Exists (Absolute_Path)
                  and then Ada.Directories.Kind (Absolute_Path)
                    = Ada.Directories.Ordinary_File
                then

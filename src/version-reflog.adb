@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Version.Config;
 with Version.Files;
@@ -142,7 +141,7 @@ package body Version.Reflog is
    is
       Lock_Path : constant String := Path (Repo, Ref) & ".lock";
    begin
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Lock_Path)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Lock_Path)) then
          case Error_Kind is
             when Data_Error_On_Lock =>
                raise Ada.IO_Exceptions.Data_Error
@@ -265,7 +264,7 @@ package body Version.Reflog is
          end;
       end if;
 
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Lock_Path)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Lock_Path)) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Lock_Path;
       end if;

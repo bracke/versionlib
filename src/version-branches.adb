@@ -490,7 +490,7 @@ package body Version.Branches is
 
                --  The reflog travels with the branch (git's rename_ref
                --  moves it, copy_existing_ref copies it) ...
-               if Ada.Directories.Exists (Old_Log) then
+               if Version.Files.Exists (Old_Log) then
                   Version.Files.Create_Parent_Directories (New_Log);
                   if Copy then
                      Version.Files.Write_Binary_File

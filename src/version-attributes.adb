@@ -2,7 +2,6 @@ with Ada.Characters.Latin_1;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Strings.Hash;
 with Ada.Containers.Indefinite_Vectors;
-with Ada.Directories;
 with Ada.Strings.Fixed;
 
 with Version.Config;
@@ -105,7 +104,7 @@ package body Version.Attributes is
       Content : Unbounded_String;
       First   : Natural;
    begin
-      if not Ada.Directories.Exists (File_Path) then
+      if not Version.Files.Exists (File_Path) then
          return;
       end if;
 

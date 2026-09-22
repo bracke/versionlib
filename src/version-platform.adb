@@ -1,11 +1,17 @@
 with Ada.Characters.Handling;
+with Ada.Command_Line;
+with Ada.Directories;
 with Ada.Environment_Variables;
 
 with GNAT.OS_Lib;
 
+with Interfaces.C_Streams;
+
 with Hostkit.FS;
 
 package body Version.Platform is
+
+   use type GNAT.OS_Lib.String_Access;
 
    function Lower (Value : String) return String is
       Result : String := Value;
@@ -140,7 +146,6 @@ package body Version.Platform is
    function Shell_Program return String is
       Found : GNAT.OS_Lib.String_Access :=
         GNAT.OS_Lib.Locate_Exec_On_Path ("sh");
-      use type GNAT.OS_Lib.String_Access;
    begin
       if Found = null then
          return "/bin/sh";
@@ -161,5 +166,52 @@ package body Version.Platform is
       when others =>
          return Path;
    end Canonical_Path;
+
+   procedure Use_Byte_Exact_Standard_Streams is
+   begin
+      Interfaces.C_Streams.set_binary_mode
+        (Interfaces.C_Streams.fileno (Interfaces.C_Streams.stdout));
+      Interfaces.C_Streams.set_binary_mode
+        (Interfaces.C_Streams.fileno (Interfaces.C_Streams.stderr));
+   end Use_Byte_Exact_Standard_Streams;
+
+   function Self_Program return String is
+      Name : constant String := Ada.Command_Line.Command_Name;
+
+      function Absolute return String is
+      begin
+         for Ch of Name loop
+            if Ch in '/' | '\' then
+               return Ada.Directories.Full_Name (Name);
+            end if;
+         end loop;
+
+         declare
+            Found : GNAT.OS_Lib.String_Access :=
+              GNAT.OS_Lib.Locate_Exec_On_Path (Name);
+         begin
+            if Found = null then
+               return Name;
+            end if;
+
+            return Result : constant String := Found.all do
+               GNAT.OS_Lib.Free (Found);
+            end return;
+         end;
+      end Absolute;
+
+      Path : String := Absolute;
+   begin
+      for Ch of Path loop
+         if Ch = '\' then
+            Ch := '/';
+         end if;
+      end loop;
+
+      return Path;
+   exception
+      when others =>
+         return Name;
+   end Self_Program;
 
 end Version.Platform;

@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 
@@ -147,7 +146,7 @@ package body Version.Gitmodules is
       end Finish_Section;
 
    begin
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Path)) then
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Path)) then
          return Result;
       end if;
 

@@ -161,7 +161,7 @@ package body Version.Maintenance is
         Join (Version.Repository.Common_Git_Dir (Repo), "objects/info");
       Content : Unbounded_String;
    begin
-      if not Ada.Directories.Exists (Pack_Dir) then
+      if not Version.Files.Exists (Pack_Dir) then
          return;
       end if;
 

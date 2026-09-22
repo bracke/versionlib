@@ -161,7 +161,7 @@ package body Version.Sparse is
          return False;
       end if;
 
-      if not Ada.Directories.Exists (Path)
+      if not Version.Files.Exists (Path)
         or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
       then
          return False;
@@ -183,7 +183,7 @@ package body Version.Sparse is
       File   : Ada.Text_IO.File_Type;
       Result : String_Vectors.Vector;
    begin
-      if not Ada.Directories.Exists (Path)
+      if not Version.Files.Exists (Path)
         or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
       then
          return Result;
@@ -351,8 +351,11 @@ package body Version.Sparse is
       Require_Usable_Pattern_Set (Unique);
 
       Version.Files.Create_Parent_Directories (Temp_Path);
+      --  Text_Translation=No: git's files are LF on every host, and GNAT's
+      --  Text_IO would otherwise write the host's own terminator.
       Ada.Text_IO.Create
-        (File, Ada.Text_IO.Out_File, Version.Files.To_Native_Path (Temp_Path));
+        (File, Ada.Text_IO.Out_File, Version.Files.To_Native_Path (Temp_Path),
+         Form => "Text_Translation=No");
 
       for I in Unique.First_Index .. Unique.Last_Index loop
          Ada.Text_IO.Put_Line (File, Unique.Element (I));
@@ -602,8 +605,11 @@ package body Version.Sparse is
       Patterns := Cone_Patterns (Directories);
 
       Version.Files.Create_Parent_Directories (Temp_Path);
+      --  Text_Translation=No: git's files are LF on every host, and GNAT's
+      --  Text_IO would otherwise write the host's own terminator.
       Ada.Text_IO.Create
-        (File, Ada.Text_IO.Out_File, Version.Files.To_Native_Path (Temp_Path));
+        (File, Ada.Text_IO.Out_File, Version.Files.To_Native_Path (Temp_Path),
+         Form => "Text_Translation=No");
       for I in Patterns.First_Index .. Patterns.Last_Index loop
          Ada.Text_IO.Put_Line (File, Patterns.Element (I));
       end loop;

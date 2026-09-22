@@ -1,6 +1,5 @@
 with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Ordered_Sets;
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Unchecked_Deallocation;
@@ -2276,7 +2275,7 @@ package body Version.Blame is
          MH : constant String :=
            Version.Files.Join (Version.Repository.Git_Dir (SB.Repo), "MERGE_HEAD");
       begin
-         if Ada.Directories.Exists (MH) then
+         if Version.Files.Exists (MH) then
             declare
                Text  : constant String := Version.Files.Read_Binary_File (MH);
                Start : Positive := Text'First;

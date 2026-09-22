@@ -648,7 +648,7 @@ package body Version.Receive_Pack is
            Version.Files.Join
              (Version.Repository.Common_Git_Dir (Repo), "refs/heads/" & Name);
       begin
-         if not Ada.Directories.Exists (Path) then
+         if not Version.Files.Exists (Path) then
             raise Ada.IO_Exceptions.Data_Error
               with "local branch does not exist: " & Name;
          end if;

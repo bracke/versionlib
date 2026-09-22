@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Version.Test_Support;
 with Ada.Streams; use Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -91,13 +92,13 @@ package body Version.LFS.Tests is
            & "Connection: close" & CR & LF & CR & LF;
       begin
          --  Batch POST.
-         GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+         Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
          GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
          Send (Client, To_Stream (Batch_Response));
          GNAT.Sockets.Close_Socket (Client);
 
          --  Object PUT.
-         GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+         Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
          GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
          Send (Client, To_Stream (Ok_Empty));
          GNAT.Sockets.Close_Socket (Client);
@@ -192,7 +193,7 @@ package body Version.LFS.Tests is
            & CR & LF & CR & LF;
       begin
          while not Done loop
-            GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+            Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
             GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
             if Contains (Request, Request_End,
                          "Authorization: Basic dXNlcjpwYXNz")
@@ -275,7 +276,7 @@ package body Version.LFS.Tests is
       end Ready;
 
       while not Done loop
-         GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+         Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
          GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
          if Contains (Request, Request_End, "/unlock") then
             Send (Client, To_Stream (Response ("200 OK", "{""lock"":" & Lock & "}")));

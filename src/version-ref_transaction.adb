@@ -220,7 +220,7 @@ package body Version.Ref_Transaction is
                  Ref  => To_String (Item.Ops.Element (I).Ref_Name));
             Lock_Path : constant String := Ref_Path & ".lock";
          begin
-            if Ada.Directories.Exists (Lock_Path) then
+            if Version.Files.Exists (Lock_Path) then
                raise Ada.IO_Exceptions.Data_Error with
                  "lock file already exists: " & Lock_Path;
             end if;
@@ -340,7 +340,7 @@ package body Version.Ref_Transaction is
             Candidate : constant String :=
               Rollback_Backup_Path (Ref_Path, Attempt);
          begin
-            if not Ada.Directories.Exists (Candidate) then
+            if not Version.Files.Exists (Candidate) then
                return Candidate;
             end if;
          end;
@@ -438,7 +438,7 @@ package body Version.Ref_Transaction is
          begin
             Version.Files.Delete_File_If_Exists (Legacy_Path);
 
-            if Ada.Directories.Exists (Ref_Path)
+            if Version.Files.Exists (Ref_Path)
               and then Ada.Directories.Kind (Ref_Path)
                        /= Ada.Directories.Ordinary_File
             then
@@ -457,7 +457,7 @@ package body Version.Ref_Transaction is
                  Ref  => To_String (Op.Ref_Name));
             Backup_Path : constant String := Allocate_Rollback_Backup_Path (Ref_Path);
          begin
-            if Ada.Directories.Exists (Ref_Path) then
+            if Version.Files.Exists (Ref_Path) then
                Ada.Directories.Rename (Ref_Path, Backup_Path);
                Op.Backup_Path := To_Unbounded_String (Backup_Path);
                Op.Had_Backup := True;
@@ -631,7 +631,7 @@ package body Version.Ref_Transaction is
                Lock_Path : constant String := To_String (Item.Ops.Element (I).Lock_Path);
             begin
                if Lock_Path'Length > 0
-                 and then Ada.Directories.Exists (Lock_Path)
+                 and then Version.Files.Exists (Lock_Path)
                then
                   Version.Files.Delete_File_If_Exists (Lock_Path);
                end if;

@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with GNAT.OS_Lib;
@@ -144,7 +143,7 @@ package body Version.Doctor is
       Args   : GNAT.OS_Lib.Argument_List (1 .. 0);
       Status : Integer := 0;
    begin
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Program)) then
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Program)) then
          return False;
       end if;
 

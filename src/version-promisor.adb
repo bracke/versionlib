@@ -22,7 +22,7 @@ package body Version.Promisor is
       Item   : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Pack_Dir) then
+      if not Version.Files.Exists (Pack_Dir) then
          return False;
       end if;
 

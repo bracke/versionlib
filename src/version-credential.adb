@@ -1,6 +1,5 @@
 with Ada.Characters.Handling;
 with Version.Platform;
-with Ada.Directories;
 with Ada.Strings.Fixed;
 with GNAT.OS_Lib;
 
@@ -131,7 +130,7 @@ package body Version.Credential is
 
       declare
          Output : constant String :=
-           (if Ada.Directories.Exists (Out_Path)
+           (if Version.Files.Exists (Out_Path)
             then Read_Binary_File (Out_Path) else "");
       begin
          Delete_File_If_Exists (In_Path);

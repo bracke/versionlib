@@ -155,7 +155,7 @@ package body Version.Push is
              (Version.Repository.Common_Git_Dir (Repo),
               "refs/heads/" & Name);
       begin
-         if not Ada.Directories.Exists (Path) then
+         if not Version.Files.Exists (Path) then
             raise Ada.IO_Exceptions.Data_Error with
               "local branch does not exist: " & Name;
          end if;
@@ -221,7 +221,7 @@ package body Version.Push is
       Path : constant String :=
         Remote_Branch_Path (Remote_Git_Dir, Branch_Name);
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return "";
       end if;
 
@@ -405,7 +405,7 @@ package body Version.Push is
           (Remote_Git_Dir => Remote_Git_Dir,
            Tag_Name       => Tag_Name);
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return "";
       end if;
 

@@ -159,7 +159,7 @@ package body Version.Worktrees is
            with "invalid worktree name: " & Base;
       end if;
 
-      if not Ada.Directories.Exists (Native (Join (Root, Base))) then
+      if not Version.Files.Exists (Native (Join (Root, Base))) then
          return Base;
       end if;
 
@@ -170,7 +170,7 @@ package body Version.Worktrees is
               & "-"
               & Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Left);
          begin
-            if not Ada.Directories.Exists (Native (Join (Root, Candidate)))
+            if not Version.Files.Exists (Native (Join (Root, Candidate)))
             then
                return Candidate;
             end if;
@@ -303,7 +303,7 @@ package body Version.Worktrees is
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Opened    : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Native (Root)) then
+      if not Version.Files.Exists (Native (Root)) then
          return;
       end if;
 
@@ -583,7 +583,7 @@ package body Version.Worktrees is
    procedure Prepare_Target_Directory (Path : String; Given : String) is
    begin
       Require_Safe_Path_Text (Path, "worktree path");
-      if Ada.Directories.Exists (Native (Path)) then
+      if Version.Files.Exists (Native (Path)) then
          if Ada.Directories.Kind (Native (Path)) /= Ada.Directories.Directory
            or else not Is_Empty_Directory (Path)
          then
@@ -604,7 +604,7 @@ package body Version.Worktrees is
       Admin_Existed  : Boolean) is
    begin
       if not Admin_Existed
-        and then Ada.Directories.Exists (Native (Admin_Path))
+        and then Version.Files.Exists (Native (Admin_Path))
       then
          begin
             Version.Files.Delete_Directory_Tree_If_Exists (Admin_Path);
@@ -614,7 +614,7 @@ package body Version.Worktrees is
          end;
       end if;
 
-      if Ada.Directories.Exists (Native (Work_Path)) then
+      if Version.Files.Exists (Native (Work_Path)) then
          begin
             if Existed_Before then
                Version.Files.Delete_File_If_Exists (Join (Work_Path, ".git"));
@@ -638,12 +638,12 @@ package body Version.Worktrees is
         Version.Repository.Open;
       Work_Path      : constant String := Abs_Path (Path);
       Existed_Before : constant Boolean :=
-        Ada.Directories.Exists (Native (Work_Path));
+        Version.Files.Exists (Native (Work_Path));
       Admin_Name     : constant String := Unique_Admin_Name (Repo, Work_Path);
       Admin_Path     : constant String :=
         Join (Worktrees_Dir (Repo), Admin_Name);
       Admin_Existed  : constant Boolean :=
-        Ada.Directories.Exists (Native (Admin_Path));
+        Version.Files.Exists (Native (Admin_Path));
       --  Nothing has been created until the target directory is accepted, so
       --  a refusal before that must leave an existing worktree there alone.
       Started        : Boolean := False;
@@ -706,12 +706,12 @@ package body Version.Worktrees is
         Version.Repository.Open;
       Work_Path      : constant String := Abs_Path (Path);
       Existed_Before : constant Boolean :=
-        Ada.Directories.Exists (Native (Work_Path));
+        Version.Files.Exists (Native (Work_Path));
       Admin_Name     : constant String := Unique_Admin_Name (Repo, Work_Path);
       Admin_Path     : constant String :=
         Join (Worktrees_Dir (Repo), Admin_Name);
       Admin_Existed  : constant Boolean :=
-        Ada.Directories.Exists (Native (Admin_Path));
+        Version.Files.Exists (Native (Admin_Path));
       --  Nothing has been created until the target directory is accepted, so
       --  a refusal before that must leave an existing worktree there alone.
       Started        : Boolean := False;
@@ -752,12 +752,12 @@ package body Version.Worktrees is
         Version.Repository.Open;
       Work_Path      : constant String := Abs_Path (Path);
       Existed_Before : constant Boolean :=
-        Ada.Directories.Exists (Native (Work_Path));
+        Version.Files.Exists (Native (Work_Path));
       Admin_Name     : constant String := Unique_Admin_Name (Repo, Work_Path);
       Admin_Path     : constant String :=
         Join (Worktrees_Dir (Repo), Admin_Name);
       Admin_Existed  : constant Boolean :=
-        Ada.Directories.Exists (Native (Admin_Path));
+        Version.Files.Exists (Native (Admin_Path));
       --  Nothing has been created until the target directory is accepted, so
       --  a refusal before that must leave an existing worktree there alone.
       Started        : Boolean := False;
@@ -938,7 +938,7 @@ package body Version.Worktrees is
          end;
       end if;
 
-      if not Ada.Directories.Exists (Native (Src)) then
+      if not Version.Files.Exists (Native (Src)) then
          raise Worktree_Error with
            "validation failed, cannot move working tree: '" & From
            & "' does not exist";
@@ -948,13 +948,13 @@ package body Version.Worktrees is
          --  Like `mv`, an existing-directory destination receives the worktree
          --  under its own name rather than being an error.
          Final_Dst : constant String :=
-           (if Ada.Directories.Exists (Native (Dst))
+           (if Version.Files.Exists (Native (Dst))
               and then Ada.Directories.Kind (Native (Dst))
                        = Ada.Directories.Directory
             then Join (Dst, Ada.Directories.Simple_Name (Native (Src)))
             else Dst);
       begin
-         if Ada.Directories.Exists (Native (Final_Dst)) then
+         if Version.Files.Exists (Native (Final_Dst)) then
             raise Worktree_Error with "'" & To & "' already exists";
          end if;
 
@@ -1003,7 +1003,7 @@ package body Version.Worktrees is
          return;
       end if;
 
-      if not Ada.Directories.Exists (Native (Work))
+      if not Version.Files.Exists (Native (Work))
         or else Ada.Directories.Kind (Native (Work))
                 /= Ada.Directories.Directory
       then
@@ -1012,7 +1012,7 @@ package body Version.Worktrees is
       end if;
 
       if not Version.Files.Is_Ordinary_File (Dot) then
-         if Ada.Directories.Exists (Native (Dot)) then
+         if Version.Files.Exists (Native (Dot)) then
             Errors.Append
               ("unable to locate repository; .git is not a file: " & Dot);
          else
@@ -1028,7 +1028,7 @@ package body Version.Worktrees is
       declare
          Admin : constant String := Gitdir_Target (Dot);
       begin
-         if Admin'Length = 0 or else not Ada.Directories.Exists (Native (Admin))
+         if Admin'Length = 0 or else not Version.Files.Exists (Native (Admin))
          then
             Errors.Append
               ("unable to locate repository; .git file does not reference a "
@@ -1066,7 +1066,7 @@ package body Version.Worktrees is
       Search    : Ada.Directories.Search_Type;
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
    begin
-      if not Ada.Directories.Exists (Native (Root)) then
+      if not Version.Files.Exists (Native (Root)) then
          return;
       end if;
 
@@ -1101,7 +1101,7 @@ package body Version.Worktrees is
                begin
                   --  A worktree whose directory is gone is prune's business,
                   --  not repair's.
-                  if Ada.Directories.Exists (Native (Work))
+                  if Version.Files.Exists (Native (Work))
                     and then (not Version.Files.Is_Ordinary_File (Dot)
                               or else not Same_Path
                                             (Gitdir_Target (Dot), Admin))
@@ -1193,7 +1193,7 @@ package body Version.Worktrees is
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Opened    : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Native (Root)) then
+      if not Version.Files.Exists (Native (Root)) then
          return Result;
       end if;
 
@@ -1233,7 +1233,7 @@ package body Version.Worktrees is
                                (Gitdir_File),
                              Ada.Strings.Both);
                      begin
-                        if not Ada.Directories.Exists (Native (Dot_Git_Path))
+                        if not Version.Files.Exists (Native (Dot_Git_Path))
                         then
                            Result.Append
                              (Prunable_Entry'
@@ -1287,7 +1287,7 @@ package body Version.Worktrees is
          --  The directory is gone. Its admin entry is still there holding the
          --  branch checked out, and neither remove nor prune could clear it,
          --  so the only way back was to delete .git/worktrees/<name> by hand.
-         if not Ada.Directories.Exists (Native (Work_Path)) then
+         if not Version.Files.Exists (Native (Work_Path)) then
             declare
                Root  : constant String := Worktrees_Dir (Caller);
                Found : Boolean := False;
@@ -1363,7 +1363,7 @@ package body Version.Worktrees is
          Require_Clean (Work_Path, Path);
       end if;
       Version.Files.Delete_Directory_Tree_If_Exists (Work_Path);
-      if Ada.Directories.Exists (Native (To_String (Git_Dir_Value))) then
+      if Version.Files.Exists (Native (To_String (Git_Dir_Value))) then
          Version.Files.Delete_Directory_Tree_If_Exists
            (To_String (Git_Dir_Value));
       end if;

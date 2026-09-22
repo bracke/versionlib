@@ -493,7 +493,7 @@ package body Version.Pack is
       E      : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Pack_Dir) then
+      if not Version.Files.Exists (Pack_Dir) then
          return
            (Found      => False,
             Pack_Path  => Null_Unbounded_String,
@@ -1776,7 +1776,7 @@ package body Version.Pack is
       E      : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Pack_Dir) then
+      if not Version.Files.Exists (Pack_Dir) then
          return Result;
       end if;
 

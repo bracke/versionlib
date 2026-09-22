@@ -873,7 +873,7 @@ package body Version.Status is
                         --  only once its directory is gone entirely.
                         if To_String (Index_Entries.Element (I).Mode)
                              = "160000"
-                          and then Ada.Directories.Exists
+                          and then Version.Files.Exists
                                      (Version.Files.To_Native_Path
                                         (Version.Files.Join
                                            (Version.Repository.Root_Path (Repo),
@@ -2166,7 +2166,7 @@ package body Version.Status is
         Initial or else Version.Refs.Current_Commit_Id (Repo) = "";
 
       Merging : constant Boolean :=
-        Ada.Directories.Exists
+        Version.Files.Exists
           (Version.Files.Join
              (Version.Repository.Git_Dir (Repo), "MERGE_HEAD"));
 

@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded;
 
@@ -93,7 +92,7 @@ package body Version.Remove is
               Version.Files.Join
                 (Version.Repository.Root_Path (Repo), Normalized);
          begin
-            if Ada.Directories.Exists
+            if Version.Files.Exists
                  (Version.Files.To_Native_Path (Full_Path))
             then
                if Version.Files.Is_Ordinary_File (Full_Path) then

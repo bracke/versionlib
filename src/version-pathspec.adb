@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
@@ -831,7 +830,7 @@ package body Version.Pathspec is
    is
       File : Ada.Text_IO.File_Type;
    begin
-      if not Ada.Directories.Exists (File_Path) then
+      if not Version.Files.Exists (File_Path) then
          return;
       end if;
 

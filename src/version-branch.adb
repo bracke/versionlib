@@ -209,7 +209,7 @@ package body Version.Branch is
    procedure Create_Merge_Autostash
      (Repo : Version.Repository.Repository_Handle) is
    begin
-      if Ada.Directories.Exists (Merge_Autostash_Path (Repo)) then
+      if Version.Files.Exists (Merge_Autostash_Path (Repo)) then
          raise Ada.IO_Exceptions.Data_Error with
            "cannot merge: MERGE_AUTOSTASH already exists";
       end if;
@@ -232,7 +232,7 @@ package body Version.Branch is
    procedure Store_Merge_Autostash
      (Repo : Version.Repository.Repository_Handle) is
    begin
-      if Ada.Directories.Exists (Merge_Autostash_Path (Repo)) then
+      if Version.Files.Exists (Merge_Autostash_Path (Repo)) then
          declare
             Stash_Id : constant Version.Objects.Hex_Object_Id :=
               Read_Merge_Autostash_Id (Repo);
@@ -246,7 +246,7 @@ package body Version.Branch is
    procedure Apply_Merge_Autostash
      (Repo : Version.Repository.Repository_Handle) is
    begin
-      if Ada.Directories.Exists (Merge_Autostash_Path (Repo)) then
+      if Version.Files.Exists (Merge_Autostash_Path (Repo)) then
          declare
             Stash_Id : constant Version.Objects.Hex_Object_Id :=
               Read_Merge_Autostash_Id (Repo);
@@ -382,7 +382,7 @@ package body Version.Branch is
 
    procedure Require_No_Lock (Path : String) is
    begin
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Path)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Path)) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Path;
       end if;
@@ -417,7 +417,7 @@ package body Version.Branch is
          return;
       end if;
 
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Lock_Path)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Lock_Path)) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Lock_Path;
       end if;
@@ -497,7 +497,7 @@ package body Version.Branch is
    is
       Path : constant String := Branch_Reflog_Path (Repo, Name);
    begin
-      if Ada.Directories.Exists (Path)
+      if Version.Files.Exists (Path)
         and then Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
       then
          raise Ada.IO_Exceptions.Data_Error
@@ -511,7 +511,7 @@ package body Version.Branch is
    is
       Lock_Path : constant String := Branch_Ref_Path (Repo, Name) & ".lock";
    begin
-      if Ada.Directories.Exists (Lock_Path) then
+      if Version.Files.Exists (Lock_Path) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Lock_Path;
       end if;
@@ -523,7 +523,7 @@ package body Version.Branch is
    is
       Path : constant String := Branch_Reflog_Path (Repo, Name);
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return;
       end if;
 
@@ -3628,7 +3628,7 @@ package body Version.Branch is
    function File_Contains_Conflict_Marker (Path : String) return Boolean is
       File : Ada.Text_IO.File_Type;
    begin
-      if not Ada.Directories.Exists (Path)
+      if not Version.Files.Exists (Path)
         or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
       then
          return False;
@@ -3820,7 +3820,7 @@ package body Version.Branch is
    begin
       Version.Merge.Require_Safe_Path (Path);
 
-      if not Ada.Directories.Exists (Absolute_Path) then
+      if not Version.Files.Exists (Absolute_Path) then
          return True;
       end if;
 
@@ -4132,7 +4132,7 @@ package body Version.Branch is
            (Repo => Repo, Target_Ids => Target_Ids);
       end;
 
-      if Ada.Directories.Exists (Git_State_Path (Repo, "ORIG_HEAD")) then
+      if Version.Files.Exists (Git_State_Path (Repo, "ORIG_HEAD")) then
          Current_Id := Read_Git_State_Id (Repo, "ORIG_HEAD");
       else
          Current_Id :=
@@ -4233,7 +4233,7 @@ package body Version.Branch is
                Target_Ids : Version.Objects.Object_Id_Vectors.Vector;
             begin
                if (not Squash_Mode)
-                 and then Ada.Directories.Exists (Git_State_Path (Repo, "MERGE_HEAD"))
+                 and then Version.Files.Exists (Git_State_Path (Repo, "MERGE_HEAD"))
                then
                   Target_Ids := Read_Git_State_Ids (Repo, "MERGE_HEAD");
                end if;
@@ -4311,7 +4311,7 @@ package body Version.Branch is
    begin
       Version.Merge.Require_Safe_Path (Relative_Path);
 
-      if Ada.Directories.Exists (Absolute_Path) then
+      if Version.Files.Exists (Absolute_Path) then
          if Ada.Directories.Kind (Absolute_Path) = Ada.Directories.Ordinary_File then
             Version.Files.Remove_File_If_Safe
               (Repo_Root     => Version.Repository.Root_Path (Repo),

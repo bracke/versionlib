@@ -341,7 +341,7 @@ package body Version.Pack_Index_Cache is
 
       Item.Locations.Clear;
 
-      if not Ada.Directories.Exists (Pack_Dir) then
+      if not Version.Files.Exists (Pack_Dir) then
          Item.Loaded := True;
          return;
       end if;
@@ -365,7 +365,7 @@ package body Version.Pack_Index_Cache is
             Pack_Path  : constant String :=
               Index_Path (Index_Path'First .. Index_Path'Last - 3) & "pack";
          begin
-            if Ada.Directories.Exists (Pack_Path) then
+            if Version.Files.Exists (Pack_Path) then
                Load_Index
                  (Item       => Item,
                   Index_Path => Index_Path,

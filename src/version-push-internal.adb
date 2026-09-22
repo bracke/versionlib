@@ -58,7 +58,7 @@ package body Version.Push.Internal is
    is
       Path : constant String := Remote_Branch_Path (Remote_Git_Dir, Branch_Name);
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return "";
       end if;
 
@@ -73,7 +73,7 @@ package body Version.Push.Internal is
    is
       Path : constant String := Remote_Tag_Path (Remote_Git_Dir, Tag_Name);
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return "";
       end if;
 

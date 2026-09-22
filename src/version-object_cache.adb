@@ -1,8 +1,8 @@
-with Ada.Directories;
 with Ada.IO_Exceptions;
 
 with Version.Pack;
 with Version.Promisor;
+with Version.Files;
 
 package body Version.Object_Cache is
    use Version.Objects;
@@ -45,7 +45,7 @@ package body Version.Object_Cache is
          Path : constant String :=
            Version.Objects.Loose_Object_Path (Repo, Eff);
       begin
-         if Ada.Directories.Exists (Path) then
+         if Version.Files.Exists (Path) then
             declare
                Obj : constant Version.Objects.Git_Object :=
                  Version.Objects.Read_Loose_Object (Repo, Eff);
@@ -81,7 +81,7 @@ package body Version.Object_Cache is
          declare
             Path : constant String := Version.Objects.Loose_Object_Path (Repo, Eff);
          begin
-            if Ada.Directories.Exists (Path) then
+            if Version.Files.Exists (Path) then
                declare
                   Obj : constant Version.Objects.Git_Object :=
                     Version.Objects.Read_Loose_Object (Repo, Eff);

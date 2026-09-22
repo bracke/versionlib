@@ -2,7 +2,6 @@ with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
-with Ada.Directories;
 with Ada.Environment_Variables;
 
 with Version.Files;
@@ -273,7 +272,7 @@ package body Version.Objects is
                              "refs"), "replace"),
                  To_String (Current));
          begin
-            exit when not Ada.Directories.Exists (Ref_Path);
+            exit when not Version.Files.Exists (Ref_Path);
             declare
                Raw  : constant String :=
                  Version.Files.Read_Binary_File (Ref_Path);
@@ -301,7 +300,7 @@ package body Version.Objects is
       Eff  : constant Hex_Object_Id := Replacement_Of (Repo, Id);
       Path : constant String := Loose_Object_Path (Repo, Eff);
    begin
-      if Ada.Directories.Exists (Path) then
+      if Version.Files.Exists (Path) then
          return Read_Loose_Object (Repo, Eff);
       end if;
 
@@ -310,7 +309,7 @@ package body Version.Objects is
       end if;
 
       if Version.Promisor.Fetch_Promised_Object (Repo, To_String (Eff)) then
-         if Ada.Directories.Exists (Path) then
+         if Version.Files.Exists (Path) then
             return Read_Loose_Object (Repo, Eff);
          end if;
 

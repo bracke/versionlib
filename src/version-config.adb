@@ -802,8 +802,11 @@ package body Version.Config is
       Last_Section : Unbounded_String;
    begin
       Version.Files.Create_Parent_Directories (Temp_Path);
+      --  Text_Translation=No: git's files are LF on every host, and GNAT's
+      --  Text_IO would otherwise write the host's own terminator.
       Ada.Text_IO.Create
-        (File, Ada.Text_IO.Out_File, Version.Files.To_Native_Path (Temp_Path));
+        (File, Ada.Text_IO.Out_File, Version.Files.To_Native_Path (Temp_Path),
+         Form => "Text_Translation=No");
 
       if not Entries.Is_Empty then
          for I in Entries.First_Index .. Entries.Last_Index loop

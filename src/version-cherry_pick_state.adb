@@ -1,5 +1,4 @@
 with Ada.Containers; use Ada.Containers;
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -220,7 +219,7 @@ package body Version.Cherry_Pick_State is
       S     : State;
       Total : Natural;
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          raise Ada.IO_Exceptions.Data_Error with "no cherry-pick in progress";
       elsif not Version.Files.Is_Ordinary_File (Path) then
          raise Ada.IO_Exceptions.Data_Error with

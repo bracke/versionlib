@@ -279,7 +279,7 @@ package body Version.Staging is
       RL : constant Stream_Element_Offset :=
         Stream_Element_Offset (Raw_Length);
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return Result;
       end if;
 
@@ -694,7 +694,7 @@ package body Version.Staging is
                (Version.Repository.Algorithm (Repo), Body_Text));
          Final_Text : constant String := Body_Text & To_Raw (Checksum);
       begin
-         if Ada.Directories.Exists (Lock_Path) then
+         if Version.Files.Exists (Lock_Path) then
             raise Ada.IO_Exceptions.Data_Error with
               "lock file already exists: " & Lock_Path;
          end if;
@@ -726,7 +726,7 @@ package body Version.Staging is
       return Natural
    is
    begin
-      if Ada.Directories.Exists (Path) then
+      if Version.Files.Exists (Path) then
          return Unix_Time (Ada.Directories.Modification_Time (Path));
       else
          return Unix_Time (Ada.Calendar.Clock);
@@ -745,7 +745,7 @@ package body Version.Staging is
          --  Gitlinks/submodules point at commits from another repository.
          --  That object is not expected to exist in this object database.
          return 0;
-      elsif Ada.Directories.Exists (Path)
+      elsif Version.Files.Exists (Path)
         and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File
       then
          return File_Size_Natural (Path);

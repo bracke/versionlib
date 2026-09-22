@@ -6723,7 +6723,7 @@ package body Version.Branch.Tests is
          --  final restore), so it issues the batch+media exchange twice; a
          --  real LFS server serves repeated requests, so serve both rounds.
          for Round in 1 .. 2 loop
-            GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+            Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
             GNAT.Sockets.Receive_Socket (Client, Request, Last);
             if Contains (Request, Last, "POST /repo.git/info/lfs/objects/batch HTTP/")
               and then Contains (Request, Last, "Content-Type: application/vnd.git-lfs+json")
@@ -6741,7 +6741,7 @@ package body Version.Branch.Tests is
             end if;
             GNAT.Sockets.Close_Socket (Client);
 
-            GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+            Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
             GNAT.Sockets.Receive_Socket (Client, Request, Last);
             if Contains (Request, Last, "GET /media/" & Oid & " HTTP/") then
                Send_Text_Response (LFS_Media, "application/octet-stream");

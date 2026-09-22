@@ -1,6 +1,7 @@
 with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
+with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 with GNAT.OS_Lib;
 with GNAT.Strings;
@@ -114,6 +115,92 @@ package body Version.Hooks is
         GNAT.OS_Lib.Is_Executable_File (Version.Files.To_Native_Path (Path));
    end POSIX_Executable;
 
+   --  Git for Windows counts a file as runnable when the host itself would
+   --  run it (.exe/.bat/.cmd) *or* when it starts with "#!", and then runs
+   --  it through the interpreter that line names -- CreateProcess cannot
+   --  execute a script on its own. Both halves are mirrored here, so a plain
+   --  `#!/bin/sh` hook runs on Windows the way it runs everywhere else.
+   function Shebang_Interpreter (Path : String) return String;
+
+   function Shebang_Interpreter (Path : String) return String is
+      File : Ada.Streams.Stream_IO.File_Type;
+      Line : String (1 .. 256);
+      Last : Natural := 0;
+      Byte : Character;
+   begin
+      Ada.Streams.Stream_IO.Open
+        (File, Ada.Streams.Stream_IO.In_File,
+         Version.Files.To_Native_Path (Path));
+
+      while Last < Line'Last
+        and then not Ada.Streams.Stream_IO.End_Of_File (File)
+      loop
+         Character'Read (Ada.Streams.Stream_IO.Stream (File), Byte);
+         exit when Byte = Character'Val (10) or else Byte = Character'Val (13);
+         Last := Last + 1;
+         Line (Last) := Byte;
+      end loop;
+
+      Ada.Streams.Stream_IO.Close (File);
+
+      if Last < 3 or else Line (1 .. 2) /= "#!" then
+         return "";
+      end if;
+
+      declare
+         Rest  : constant String := Line (3 .. Last);
+         First : Natural := Rest'First;
+         Stop  : Natural;
+      begin
+         while First <= Rest'Last and then Rest (First) = ' ' loop
+            First := First + 1;
+         end loop;
+
+         Stop := First;
+         while Stop <= Rest'Last and then Rest (Stop) /= ' ' loop
+            Stop := Stop + 1;
+         end loop;
+
+         if Stop = First then
+            return "";
+         end if;
+
+         declare
+            Named : constant String := Rest (First .. Stop - 1);
+            Base  : Natural := Named'First;
+         begin
+            if Version.Files.Exists (Named) then
+               return Named;
+            end if;
+
+            --  The spelling in the file is a POSIX path that need not exist
+            --  on this host (there is no /bin/sh on Windows); fall back to
+            --  the same name on PATH, as Git for Windows does.
+            for I in Named'Range loop
+               if Named (I) in '/' | '\' then
+                  Base := I + 1;
+               end if;
+            end loop;
+
+            declare
+               Found : GNAT.OS_Lib.String_Access :=
+                 GNAT.OS_Lib.Locate_Exec_On_Path (Named (Base .. Named'Last));
+            begin
+               if Found = null then
+                  return Named;
+               end if;
+
+               return Result : constant String := Found.all do
+                  GNAT.OS_Lib.Free (Found);
+               end return;
+            end;
+         end;
+      end;
+   exception
+      when others =>
+         return "";
+   end Shebang_Interpreter;
+
    function Hook_Is_Executable (Path : String) return Boolean is
       Native : constant String := Version.Files.To_Native_Path (Path);
    begin
@@ -130,7 +217,9 @@ package body Version.Hooks is
             return POSIX_Executable (Path);
 
          when Version.Platform.Windows_Platform =>
-            return Has_Windows_Hook_Extension (Path);
+            return
+              Has_Windows_Hook_Extension (Path)
+              or else Shebang_Interpreter (Path) /= "";
 
          when Version.Platform.Unknown_Platform =>
             return False;
@@ -323,30 +412,61 @@ package body Version.Hooks is
            (Version.Files.To_Native_Path
               (Version.Repository.Root_Path (Repo)));
 
-         if Blocking then
-            --  git connects a hook's stdout to its own stderr, so hook chatter
-            --  never contaminates porcelain output on stdout; mirror that by
-            --  pointing the child's stdout at our stderr (fd 2). The child's
-            --  stderr is left inheriting our stderr unchanged.
-            Ada.Text_IO.Flush;
-            GNAT.OS_Lib.Spawn
-              (Program_Name           => Version.Files.To_Native_Path (Path),
-               Args                   => Args,
-               Output_File_Descriptor => GNAT.OS_Lib.Standerr,
-               Return_Code            => Status,
-               Err_To_Out             => False);
-         else
-            Pid :=
-              GNAT.OS_Lib.Non_Blocking_Spawn
-                (Program_Name => Version.Files.To_Native_Path (Path),
-                 Args         => Args);
+         declare
+            Native : constant String := Version.Files.To_Native_Path (Path);
 
-            if Pid = GNAT.OS_Lib.Invalid_Pid then
-               Status := 1;
+            --  A host with no executable bit cannot start a script; run it
+            --  through the interpreter its "#!" line names, the way Git for
+            --  Windows does. Elsewhere the kernel does this for us.
+            Interp : constant String :=
+              (if Version.Platform.Supports_Executable_Bit then ""
+               else Shebang_Interpreter (Path));
+
+            Program : constant String :=
+              (if Interp = "" then Native else Interp);
+
+            --  The script itself becomes the interpreter's first argument.
+            --  Its elements past the first alias Args, so only that one is
+            --  freed here.
+            Full : GNAT.OS_Lib.Argument_List
+                     (1 .. Arg_Count + (if Interp = "" then 0 else 1));
+         begin
+            if Interp = "" then
+               Full := Args;
             else
-               Status := 0;
+               Full (1) := new String'(Native);
+               Full (2 .. Full'Last) := Args;
             end if;
-         end if;
+
+            if Blocking then
+               --  git connects a hook's stdout to its own stderr, so hook
+               --  chatter never contaminates porcelain output on stdout;
+               --  mirror that by pointing the child's stdout at our stderr
+               --  (fd 2). The child's stderr inherits ours unchanged.
+               Ada.Text_IO.Flush;
+               GNAT.OS_Lib.Spawn
+                 (Program_Name           => Program,
+                  Args                   => Full,
+                  Output_File_Descriptor => GNAT.OS_Lib.Standerr,
+                  Return_Code            => Status,
+                  Err_To_Out             => False);
+            else
+               Pid :=
+                 GNAT.OS_Lib.Non_Blocking_Spawn
+                   (Program_Name => Program,
+                    Args         => Full);
+
+               if Pid = GNAT.OS_Lib.Invalid_Pid then
+                  Status := 1;
+               else
+                  Status := 0;
+               end if;
+            end if;
+
+            if Interp /= "" then
+               GNAT.OS_Lib.Free (Full (1));
+            end if;
+         end;
       end;
 
       Ada.Directories.Set_Directory (Old_Dir);

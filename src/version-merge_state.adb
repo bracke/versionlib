@@ -30,14 +30,14 @@ package body Version.Merge_State is
    function State_Exists
      (Repo : Version.Repository.Repository_Handle) return Boolean is
    begin
-      return Ada.Directories.Exists (Merge_State_Path (Repo));
+      return Version.Files.Exists (Merge_State_Path (Repo));
    end State_Exists;
 
    function Git_State_Exists
      (Repo : Version.Repository.Repository_Handle) return Boolean is
    begin
-      return Ada.Directories.Exists (Git_State_Path (Repo, "MERGE_HEAD"))
-        or else Ada.Directories.Exists (Git_State_Path (Repo, "SQUASH_MSG"));
+      return Version.Files.Exists (Git_State_Path (Repo, "MERGE_HEAD"))
+        or else Version.Files.Exists (Git_State_Path (Repo, "SQUASH_MSG"));
    end Git_State_Exists;
 
    function Merge_Heads
@@ -47,7 +47,7 @@ package body Version.Merge_State is
       Path   : constant String := Git_State_Path (Repo, "MERGE_HEAD");
       Result : Version.Objects.Object_Id_Vectors.Vector;
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return Result;
       end if;
       declare
@@ -150,7 +150,7 @@ package body Version.Merge_State is
    is
       Path : constant String := Git_State_Path (Repo, "MERGE_MSG");
    begin
-      if Ada.Directories.Exists (Path)
+      if Version.Files.Exists (Path)
         and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File
       then
          return Version.Files.Read_Binary_File (Path);
@@ -164,7 +164,7 @@ package body Version.Merge_State is
    is
       Path : constant String := Git_State_Path (Repo, "MERGE_MODE");
    begin
-      if Ada.Directories.Exists (Path)
+      if Version.Files.Exists (Path)
         and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File
       then
          return Version.Files.Read_Binary_File (Path);
@@ -279,7 +279,7 @@ package body Version.Merge_State is
          & "base " & To_String (Base_Id) & Character'Val (10)
          & "branch " & Target_Branch & Character'Val (10));
 
-      if Ada.Directories.Exists (Path) then
+      if Version.Files.Exists (Path) then
          raise Ada.IO_Exceptions.Data_Error with "merge state already exists";
       end if;
 
@@ -411,7 +411,7 @@ package body Version.Merge_State is
       Path : constant String := Merge_State_Path (Repo);
       File : Ada.Text_IO.File_Type;
    begin
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          raise Ada.IO_Exceptions.Data_Error with "no integration to finalize";
       end if;
 
@@ -460,15 +460,15 @@ package body Version.Merge_State is
    function Git_Pick_In_Progress
      (Repo : Version.Repository.Repository_Handle) return Boolean is
    begin
-      return Ada.Directories.Exists
+      return Version.Files.Exists
                (Git_State_Path (Repo, "CHERRY_PICK_HEAD"))
-        or else Ada.Directories.Exists (Git_State_Path (Repo, "REVERT_HEAD"));
+        or else Version.Files.Exists (Git_State_Path (Repo, "REVERT_HEAD"));
    end Git_Pick_In_Progress;
 
    function Git_Pick_Is_Revert
      (Repo : Version.Repository.Repository_Handle) return Boolean is
    begin
-      return Ada.Directories.Exists (Git_State_Path (Repo, "REVERT_HEAD"));
+      return Version.Files.Exists (Git_State_Path (Repo, "REVERT_HEAD"));
    end Git_Pick_Is_Revert;
 
    function Git_Pick_Head

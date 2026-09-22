@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Version.Test_Support;
 with Ada.IO_Exceptions;
 with Ada.Streams; use Ada.Streams;
 with Ada.Strings.Fixed;
@@ -171,7 +172,7 @@ package body Version.Transport.Http.Tests is
          Port := Bound.Port;
       end Ready;
 
-      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+      Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
       GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
 
       case Operation is
@@ -341,13 +342,13 @@ package body Version.Transport.Http.Tests is
       end Ready;
 
       --  First request: anonymous -> 401.
-      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+      Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
       GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
       GNAT.Sockets.Send_Socket (Client, Unauthorized, Last_Sent);
       GNAT.Sockets.Close_Socket (Client);
 
       --  Retry: must carry the correct Basic authorization.
-      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+      Version.Test_Support.Accept_With_Timeout (Server, Client, Peer);
       GNAT.Sockets.Receive_Socket (Client, Request, Request_End);
       if Contains
            (Request, Request_End, "Authorization: Basic dXNlcjpwYXNz")

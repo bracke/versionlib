@@ -258,7 +258,7 @@ package body Version.Archive is
            Unsupported_Output_Format_Text (Output);
       end if;
 
-      if Ada.Directories.Exists (Native)
+      if Version.Files.Exists (Native)
         and then Ada.Directories.Kind (Native) = Ada.Directories.Directory
       then
          raise Ada.IO_Exceptions.Data_Error with
@@ -269,7 +269,7 @@ package body Version.Archive is
    procedure Remove_Partial_Output (Output : String) is
       Native : constant String := Version.Files.To_Native_Path (Output);
    begin
-      if Output'Length > 0 and then Ada.Directories.Exists (Native)
+      if Output'Length > 0 and then Version.Files.Exists (Native)
         and then Ada.Directories.Kind (Native) = Ada.Directories.Ordinary_File
       then
          Ada.Directories.Delete_File (Native);
@@ -293,7 +293,7 @@ package body Version.Archive is
       --  the device node. Write straight to those, as git does.
       Native : constant String := Version.Files.To_Native_Path (Output);
    begin
-      return Ada.Directories.Exists (Native)
+      return Version.Files.Exists (Native)
         and then Ada.Directories.Kind (Native) /= Ada.Directories.Ordinary_File;
    exception
       when others =>

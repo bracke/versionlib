@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Containers.Indefinite_Ordered_Maps;
 with Interfaces;              use Interfaces;
@@ -357,7 +356,7 @@ package body Version.Reftable is
    function Is_Reftable
      (Repo : Version.Repository.Repository_Handle) return Boolean is
    begin
-      return Ada.Directories.Exists
+      return Version.Files.Exists
         (Version.Files.Join (Reftable_Dir (Repo), "tables.list"));
    end Is_Reftable;
 
@@ -380,7 +379,7 @@ package body Version.Reftable is
       RL : constant Positive := Raw_Length_Of (Repo);
    begin
       Map := Name_Maps.Empty_Map;
-      if not Ada.Directories.Exists (List_Path) then
+      if not Version.Files.Exists (List_Path) then
          return;
       end if;
 
@@ -412,7 +411,7 @@ package body Version.Reftable is
                  Version.Files.Join
                    (Reftable_Dir (Repo), To_String (Files.Element (Idx).Name));
             begin
-               if Ada.Directories.Exists (Table_Path) then
+               if Version.Files.Exists (Table_Path) then
                   for R of Parse_Table
                     (Version.Files.Read_Binary_File (Table_Path), RL)
                   loop
@@ -495,7 +494,7 @@ package body Version.Reftable is
         Version.Files.Join (Reftable_Dir (Repo), "tables.list");
       Files : Ref_Record_Vectors.Vector;
    begin
-      if not Ada.Directories.Exists (List_Path) then
+      if not Version.Files.Exists (List_Path) then
          return Files;
       end if;
       declare
@@ -549,7 +548,7 @@ package body Version.Reftable is
             Path : constant String :=
               Table_Path (Repo, To_String (T.Name));
          begin
-            if Ada.Directories.Exists (Path) then
+            if Version.Files.Exists (Path) then
                declare
                   Bytes : constant String :=
                     Version.Files.Read_Binary_File (Path);
@@ -586,7 +585,7 @@ package body Version.Reftable is
               Version.Files.Join
                 (Reftable_Dir (Repo), To_String (Tables.Element (Idx).Name));
          begin
-            if Ada.Directories.Exists (Table_Path) then
+            if Version.Files.Exists (Table_Path) then
                for L of Parse_Log_Records
                  (Version.Files.Read_Binary_File (Table_Path), RL)
                loop

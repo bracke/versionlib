@@ -109,4 +109,35 @@ package body Version.Test_Support is
       end;
    end Shell_Program;
 
+   procedure Accept_With_Timeout
+     (Server  : GNAT.Sockets.Socket_Type;
+      Client  : out GNAT.Sockets.Socket_Type;
+      Peer    : out GNAT.Sockets.Sock_Addr_Type;
+      Timeout : Duration := 60.0)
+   is
+      use type GNAT.Sockets.Selector_Status;
+
+      Selector : GNAT.Sockets.Selector_Type;
+      Readable : GNAT.Sockets.Socket_Set_Type;
+      Writable : GNAT.Sockets.Socket_Set_Type;
+      Status   : GNAT.Sockets.Selector_Status;
+   begin
+      GNAT.Sockets.Create_Selector (Selector);
+      GNAT.Sockets.Set (Readable, Server);
+      GNAT.Sockets.Empty (Writable);
+
+      GNAT.Sockets.Check_Selector
+        (Selector, Readable, Writable, Status, Timeout);
+      GNAT.Sockets.Close_Selector (Selector);
+
+      if Status /= GNAT.Sockets.Completed then
+         raise Program_Error with
+           "mock server: no connection within"
+           & Duration'Image (Timeout) & "s (status "
+           & GNAT.Sockets.Selector_Status'Image (Status) & ")";
+      end if;
+
+      GNAT.Sockets.Accept_Socket (Server, Client, Peer);
+   end Accept_With_Timeout;
+
 end Version.Test_Support;

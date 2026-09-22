@@ -1,4 +1,5 @@
 with Ada.Command_Line;
+with Version.Platform;
 with AUnit;
 with Ada.Environment_Variables;
 with AUnit.Reporter.Text;
@@ -15,6 +16,10 @@ procedure Tests is
    Reporter : AUnit.Reporter.Text.Text_Reporter;
    Status   : AUnit.Status;
 begin
+   --  Byte-exact output, the way bin/main sets it up: the suite prints
+   --  captured transcripts, and a host terminator in the report would
+   --  differ from the LF the tools wrote.
+   Version.Platform.Use_Byte_Exact_Standard_Streams;
    --  Run hermetically: now that Version.Config reads git's full system/global
    --  config stack, keep the developer's ambient ~/.gitconfig and
    --  /etc/gitconfig out of the picture so config-dependent behaviour is
@@ -29,6 +34,14 @@ begin
    Ada.Environment_Variables.Set ("GIT_CONFIG_COUNT", "1");
    Ada.Environment_Variables.Set ("GIT_CONFIG_KEY_0", "init.defaultBranch");
    Ada.Environment_Variables.Set ("GIT_CONFIG_VALUE_0", "main");
+   --  Git for Windows runs its shell on the MSYS runtime, which rewrites
+   --  arguments that look like POSIX paths ("/TWO/,+2", "/dev/null") into
+   --  Windows paths before handing them to a native program -- so `blame
+   --  -L /re/,+2` reached both tools mangled and both answered with usage.
+   --  Turn the rewriting off; on other hosts these are inert variables.
+   Ada.Environment_Variables.Set ("MSYS_NO_PATHCONV", "1");
+   Ada.Environment_Variables.Set ("MSYS2_ARG_CONV_EXCL", "*");
+
    Status := Runner (Reporter);
 
    if Status /= AUnit.Success then

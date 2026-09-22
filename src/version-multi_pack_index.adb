@@ -89,7 +89,7 @@ package body Version.Multi_Pack_Index is
       Search : Ada.Directories.Search_Type;
       Item   : Ada.Directories.Directory_Entry_Type;
    begin
-      if not Ada.Directories.Exists (Dir) then
+      if not Version.Files.Exists (Dir) then
          return Result;
       end if;
 
@@ -146,7 +146,7 @@ package body Version.Multi_Pack_Index is
         Path (Path'First .. Path'Last - 4) & ".pack";
 
       Mtime : constant Ada.Calendar.Time :=
-        (if Ada.Directories.Exists (Pack_File)
+        (if Version.Files.Exists (Pack_File)
          then Ada.Directories.Modification_Time (Pack_File)
          else Ada.Directories.Modification_Time (Path));
 
@@ -376,7 +376,7 @@ package body Version.Multi_Pack_Index is
 
             Path : constant String := Midx_Path (Repo);
          begin
-            if Ada.Directories.Exists (Path) then
+            if Version.Files.Exists (Path) then
                Ada.Directories.Delete_File (Path);
             end if;
 
@@ -407,7 +407,7 @@ package body Version.Multi_Pack_Index is
    begin
       Last := 0;
 
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          return True;
       end if;
 

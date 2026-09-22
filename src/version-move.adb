@@ -79,13 +79,13 @@ package body Version.Move is
            "destination exists: " & Dst_Norm;
       end if;
 
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Src_Full))
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Src_Full))
       then
          raise Ada.IO_Exceptions.Data_Error with
            "source does not exist in the working tree: " & Src_Norm;
       end if;
 
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Dst_Full)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Dst_Full)) then
          if Force then
             Version.Files.Delete_File_If_Exists (Dst_Full);
          else
@@ -106,7 +106,7 @@ package body Version.Move is
               Ada.Directories.Containing_Directory
                 (Version.Files.To_Native_Path (Dst_Full));
          begin
-            if not Ada.Directories.Exists (Parent) then
+            if not Version.Files.Exists (Parent) then
                raise Ada.IO_Exceptions.Data_Error with
                  "renaming '" & Src_Norm
                  & "' failed: No such file or directory";

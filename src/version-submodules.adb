@@ -242,7 +242,7 @@ package body Version.Submodules is
       Dot_Git   : constant String := Join (Work_Path, ".git");
       Modules   : constant String := Submodule_Admin_Root (Repo);
    begin
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Dot_Git))
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Dot_Git))
         or else
           Ada.Directories.Kind (Version.Files.To_Native_Path (Dot_Git))
           /= Ada.Directories.Ordinary_File
@@ -259,7 +259,7 @@ package body Version.Submodules is
               with "submodule gitdir escapes modules directory: " & Path;
          end if;
 
-         if not Ada.Directories.Exists
+         if not Version.Files.Exists
                   (Version.Files.To_Native_Path (Resolved))
            or else
              Ada.Directories.Kind (Version.Files.To_Native_Path (Resolved))
@@ -790,7 +790,7 @@ package body Version.Submodules is
         Version.Files.To_Native_Path (Dot_Git);
       Native_Admin   : constant String := Version.Files.To_Native_Path (Admin);
    begin
-      if not Ada.Directories.Exists (Native_Dot_Git) then
+      if not Version.Files.Exists (Native_Dot_Git) then
          return;
       end if;
 
@@ -799,7 +799,7 @@ package body Version.Submodules is
          return;
       end if;
 
-      if Ada.Directories.Exists (Native_Admin) then
+      if Version.Files.Exists (Native_Admin) then
          return;
       end if;
 
@@ -817,7 +817,7 @@ package body Version.Submodules is
       Work_Path : constant String := Submodule_Worktree_Path (Repo, Path);
       Dot_Git   : constant String := Join (Work_Path, ".git");
    begin
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Dot_Git))
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Dot_Git))
       then
          raise Ada.IO_Exceptions.Data_Error
            with "submodule worktree is not a repository: " & Path;
@@ -875,12 +875,12 @@ package body Version.Submodules is
       Dot_Git   : constant String := Join (Work_Path, ".git");
       Modules   : constant String := Submodule_Admin_Root (Repo);
    begin
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Work_Path))
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Work_Path))
       then
          return "";
       end if;
 
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Dot_Git))
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Dot_Git))
       then
          return "";
       end if;
@@ -900,7 +900,7 @@ package body Version.Submodules is
               with "submodule gitdir escapes modules directory: " & Path;
          end if;
 
-         if not Ada.Directories.Exists
+         if not Version.Files.Exists
                   (Version.Files.To_Native_Path (Resolved))
            or else
              Ada.Directories.Kind (Version.Files.To_Native_Path (Resolved))
@@ -947,7 +947,7 @@ package body Version.Submodules is
       declare
          Head_Path : constant String := Join (Sub_Git_Dir, "HEAD");
       begin
-         if not Ada.Directories.Exists
+         if not Version.Files.Exists
                   (Version.Files.To_Native_Path (Head_Path))
          then
             return "";
@@ -980,7 +980,7 @@ package body Version.Submodules is
                   Version.Path_Safety.Require_Safe_Relative_Path
                     (Ref_Name, "submodule HEAD ref");
 
-                  if Ada.Directories.Exists
+                  if Version.Files.Exists
                        (Version.Files.To_Native_Path (Ref_Path))
                   then
                      declare
@@ -1107,7 +1107,7 @@ package body Version.Submodules is
          if not Populated then
             --  A deinitialised submodule leaves an empty directory in the way;
             --  clear it so the clone can create the worktree afresh.
-            if Ada.Directories.Exists
+            if Version.Files.Exists
                  (Version.Files.To_Native_Path (Work_Path))
             then
                Version.Files.Delete_Directory_Tree_If_Exists (Work_Path);
@@ -1876,7 +1876,7 @@ package body Version.Submodules is
                   Work : constant String :=
                     Submodule_Worktree_Path (Repo, Path);
                begin
-                  if Ada.Directories.Exists
+                  if Version.Files.Exists
                        (Version.Files.To_Native_Path (Work))
                   then
                      Version.Files.Delete_Directory_Tree_If_Exists (Work);
@@ -1985,14 +1985,14 @@ package body Version.Submodules is
            Version.Gitmodules.Find_By_Path (Items, Safe_Path) /= Natural'Last;
          Native_Work : constant String :=
            Version.Files.To_Native_Path (Work_Path);
-         Present : constant Boolean := Ada.Directories.Exists (Native_Work);
+         Present : constant Boolean := Version.Files.Exists (Native_Work);
          --  A directory that is already a repository is not an obstacle: git
          --  adopts it ("Adding existing repo at ... to the index") instead of
          --  cloning over it, which is how a clone-first-register-later
          --  workflow gets recorded. Only a non-repository directory is fatal.
          Adopt : constant Boolean :=
            Present
-             and then Ada.Directories.Exists
+             and then Version.Files.Exists
                         (Version.Files.To_Native_Path
                            (Join (Work_Path, ".git")));
       begin

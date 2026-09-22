@@ -288,7 +288,7 @@ package body Version.Repository_Format is
          raise Ada.IO_Exceptions.Data_Error with "repository git dir must not be empty";
       end if;
 
-      if not Ada.Directories.Exists (Version.Files.To_Native_Path (Path)) then
+      if not Version.Files.Exists (Version.Files.To_Native_Path (Path)) then
          return Info;
       end if;
 

@@ -157,7 +157,7 @@ package body Version.Restore is
         Version.Files.To_Native_Path (Absolute_Path);
    begin
       return
-        Ada.Directories.Exists (Native_Path)
+        Version.Files.Exists (Native_Path)
         and then
           Ada.Directories.Kind (Native_Path) = Ada.Directories.Directory;
    end Working_Path_Is_Directory;
@@ -198,7 +198,7 @@ package body Version.Restore is
                  with "could not remove existing symlink: " & Path;
             end if;
          end;
-      elsif Ada.Directories.Exists (Native_Path) then
+      elsif Version.Files.Exists (Native_Path) then
          if Ada.Directories.Kind (Native_Path) = Ada.Directories.Ordinary_File then
             Version.Files.Delete_File_If_Exists (Absolute_Path);
          elsif Ada.Directories.Kind (Native_Path) = Ada.Directories.Directory then
@@ -274,7 +274,7 @@ package body Version.Restore is
       Version.Path_Safety.Require_Safe_Relative_Path
         (Normalized, "working-tree delete path");
 
-      if Ada.Directories.Exists (Native_Path) then
+      if Version.Files.Exists (Native_Path) then
          if Ada.Directories.Kind (Native_Path) = Ada.Directories.Ordinary_File
          then
             Version.Filesystem_Guard.Require_Safe_Delete_Target
@@ -282,7 +282,7 @@ package body Version.Restore is
                Relative_Path => Normalized);
          elsif Ada.Directories.Kind (Native_Path) = Ada.Directories.Directory
            and then
-             Ada.Directories.Exists
+             Version.Files.Exists
                (Version.Files.To_Native_Path
                   (Version.Files.Join (Absolute_Path, ".git")))
          then
@@ -338,7 +338,7 @@ package body Version.Restore is
             Rel_Str : constant String := Ada.Strings.Unbounded.To_String (Rel);
             Abs_Dir : constant String := Version.Files.Join (Root, Rel_Str);
          begin
-            exit when not Ada.Directories.Exists (Abs_Dir);
+            exit when not Version.Files.Exists (Abs_Dir);
             exit when Ada.Directories.Kind (Abs_Dir) /= Ada.Directories.Directory;
             begin
                Ada.Directories.Delete_Directory (Abs_Dir);
@@ -362,7 +362,7 @@ package body Version.Restore is
          Absolute_Path : constant String :=
            Version.Files.Join (Version.Repository.Root_Path (Repo), Path);
       begin
-         if Ada.Directories.Exists (Absolute_Path) then
+         if Version.Files.Exists (Absolute_Path) then
             if Ada.Directories.Kind (Absolute_Path)
               = Ada.Directories.Ordinary_File
             then
@@ -370,7 +370,7 @@ package body Version.Restore is
                  (Repo_Root     => Version.Repository.Root_Path (Repo),
                   Relative_Path => Path);
                Prune_Empty_Parent_Directories (Repo, Path);
-            elsif Ada.Directories.Exists
+            elsif Version.Files.Exists
                     (Version.Files.Join (Absolute_Path, ".git"))
             then
                Version.Files.Delete_Directory_Tree_If_Exists (Absolute_Path);
@@ -1376,7 +1376,7 @@ package body Version.Restore is
       Changed : Boolean := False;
 
       function Present (Rel : String) return Boolean is
-        (Ada.Directories.Exists (Version.Files.Join (Root, Rel)));
+        (Version.Files.Exists (Version.Files.Join (Root, Rel)));
 
       --  The working copy still matches what the index records: safe to remove
       --  when the path becomes excluded. A modified (or vanished) file does
@@ -1386,7 +1386,7 @@ package body Version.Restore is
       is
          Abs_Path : constant String := Version.Files.Join (Root, Rel);
       begin
-         if not Ada.Directories.Exists (Abs_Path)
+         if not Version.Files.Exists (Abs_Path)
            or else Ada.Directories.Kind (Abs_Path)
                    /= Ada.Directories.Ordinary_File
          then

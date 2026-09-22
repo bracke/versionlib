@@ -38,4 +38,23 @@ package Version.Platform is
    --  notion of a canonical form).
    function Canonical_Path (Path : String) return String;
 
+   --  Put standard output and standard error into binary mode, once, so that
+   --  a line terminator written through Ada.Text_IO is a single LF.
+   --
+   --  git writes LF on every host; GNAT's Text_IO writes the host's own
+   --  terminator, so on Windows every Put_Line reached the caller as CRLF
+   --  while Version.Console.Put (raw bytes) reached it as LF -- one stream
+   --  carrying two spellings, and neither matching git. A no-op on a host
+   --  with no text translation, so POSIX output is unchanged.
+   procedure Use_Byte_Exact_Standard_Streams;
+
+   --  The running executable, as one absolute path that a child process and
+   --  a shell both accept. git re-runs itself for the subcommands it
+   --  delegates (`stash list` is a `log`, `for-each-repo` runs a git command
+   --  per repository); argv[0] alone is relative on a POSIX host and
+   --  backslash-separated on Windows, where a shell reads each backslash as
+   --  an escape and answers "command not found". Separators come back as
+   --  forward slashes, which every host accepts.
+   function Self_Program return String;
+
 end Version.Platform;

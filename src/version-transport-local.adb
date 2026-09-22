@@ -114,7 +114,7 @@ package body Version.Transport.Local is
              (Root => Root,
               Text => Line (Line'First + Prefix'Length .. Line'Last));
       begin
-         if not Ada.Directories.Exists (Version.Files.To_Native_Path (Resolved))
+         if not Version.Files.Exists (Version.Files.To_Native_Path (Resolved))
            or else Ada.Directories.Kind (Version.Files.To_Native_Path (Resolved))
              /= Ada.Directories.Directory
          then
@@ -137,7 +137,7 @@ package body Version.Transport.Local is
       Objects : constant String :=
         Version.Files.Join (Root, "objects");
    begin
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Dot_Git)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Dot_Git)) then
          case Ada.Directories.Kind (Version.Files.To_Native_Path (Dot_Git)) is
             when Ada.Directories.Directory =>
                return Dot_Git;
@@ -151,7 +151,7 @@ package body Version.Transport.Local is
          end case;
       end if;
 
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Objects))
+      if Version.Files.Exists (Version.Files.To_Native_Path (Objects))
         and then Ada.Directories.Kind (Version.Files.To_Native_Path (Objects))
           = Ada.Directories.Directory
       then
@@ -197,7 +197,7 @@ package body Version.Transport.Local is
    is
       Source_Content : constant String := Version.Files.Read_Binary_File (Source);
    begin
-      if Ada.Directories.Exists (Target) then
+      if Version.Files.Exists (Target) then
          if Version.Files.Read_Binary_File (Target) /= Source_Content then
             raise Ada.IO_Exceptions.Data_Error with
               "local object collision while copying object store: " & Target;
@@ -211,7 +211,7 @@ package body Version.Transport.Local is
       Copied_Targets : in out Copied_Object_Vectors.Vector)
    is
    begin
-      if Ada.Directories.Exists (Target) then
+      if Version.Files.Exists (Target) then
          return;
       end if;
 
@@ -283,7 +283,7 @@ package body Version.Transport.Local is
       Dir_Item : Ada.Directories.Directory_Entry_Type;
       Opened   : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Source_Dir) then
+      if not Version.Files.Exists (Source_Dir) then
          return;
       end if;
 

@@ -519,7 +519,7 @@ package body Version.Remotes is
       E      : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Base_Dir) then
+      if not Version.Files.Exists (Base_Dir) then
          return;
       end if;
 
@@ -641,7 +641,7 @@ package body Version.Remotes is
       Dir_Entry : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
    begin
-      if not Ada.Directories.Exists (Base_Dir) then
+      if not Version.Files.Exists (Base_Dir) then
          return;
       end if;
 
@@ -926,7 +926,7 @@ package body Version.Remotes is
            "refs/remotes/" & Name);
       Native : constant String := Version.Files.To_Native_Path (Dir);
    begin
-      if Ada.Directories.Exists (Native)
+      if Version.Files.Exists (Native)
         and then Ada.Directories.Kind (Native) = Ada.Directories.Directory
       then
          --  Only when nothing is left in it; a partial delete must not take

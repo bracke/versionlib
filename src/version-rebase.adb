@@ -393,11 +393,11 @@ package body Version.Rebase is
            To_String (Id) (1 .. 2));
       Obj_Path : constant String := Join (Obj_Dir, To_String (Id) (3 .. To_String (Id)'Last));
    begin
-      if not Ada.Directories.Exists (Obj_Dir) then
+      if not Version.Files.Exists (Obj_Dir) then
          Ada.Directories.Create_Directory (Obj_Dir);
       end if;
 
-      if not Ada.Directories.Exists (Obj_Path) then
+      if not Version.Files.Exists (Obj_Path) then
          Write_String_File (Obj_Path, Version.Compression.Deflate_Zlib (Raw));
       end if;
    end Write_Loose_Commit;
@@ -609,7 +609,7 @@ package body Version.Rebase is
    function File_Contains_Conflict_Marker (Path : String) return Boolean is
       File : Ada.Text_IO.File_Type;
    begin
-      if not Ada.Directories.Exists (Path)
+      if not Version.Files.Exists (Path)
         or else Ada.Directories.Kind (Path) /= Ada.Directories.Ordinary_File
       then
          return False;

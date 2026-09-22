@@ -1,4 +1,3 @@
-with Ada.Directories;
 with Ada.Strings.Unbounded;
 with Ada.IO_Exceptions;
 with Version.Objects; use Version.Objects;
@@ -169,7 +168,7 @@ package body Version.Checkout is
 
    procedure Require_No_Lock (Path : String) is
    begin
-      if Ada.Directories.Exists (Version.Files.To_Native_Path (Path)) then
+      if Version.Files.Exists (Version.Files.To_Native_Path (Path)) then
          raise Ada.IO_Exceptions.Data_Error
            with "lock file already exists: " & Path;
       end if;

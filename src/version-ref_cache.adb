@@ -45,7 +45,7 @@ package body Version.Ref_Cache is
       Ref_Path : constant String :=
         Join (Version.Repository.Common_Git_Dir (Repo), Name);
    begin
-      if Ada.Directories.Exists (Ref_Path)
+      if Version.Files.Exists (Ref_Path)
         and then Ada.Directories.Kind (Ref_Path) = Ada.Directories.Ordinary_File
       then
          declare

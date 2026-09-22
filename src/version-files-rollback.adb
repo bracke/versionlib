@@ -33,7 +33,7 @@ package body Version.Files.Rollback is
             Candidate : constant String :=
               Rollback_Backup_Path (Native_Target, Attempt);
          begin
-            if not Ada.Directories.Exists (Candidate) then
+            if not Exists (Candidate) then
                return Candidate;
             end if;
          end;
@@ -62,7 +62,7 @@ package body Version.Files.Rollback is
          Replaced := True;
       exception
          when others =>
-            if Backup_Ready and then not Ada.Directories.Exists (Native_Target) then
+            if Backup_Ready and then not Exists (Native_Target) then
                Ada.Directories.Rename (Backup, Native_Target);
                Backup_Ready := False;
             end if;
@@ -81,7 +81,7 @@ package body Version.Files.Rollback is
 
    exception
       when others =>
-         if Backup_Ready and then not Ada.Directories.Exists (Native_Target) then
+         if Backup_Ready and then not Exists (Native_Target) then
             begin
                Ada.Directories.Rename (Backup, Native_Target);
             exception
@@ -108,7 +108,7 @@ package body Version.Files.Rollback is
          Source_Temp   => Source_Temp,
          Target        => Target);
 
-      if Ada.Directories.Exists (Native_Target) then
+      if Exists (Native_Target) then
          Replace_With_Rollback
            (Native_Source => Native_Source,
             Native_Target => Native_Target,

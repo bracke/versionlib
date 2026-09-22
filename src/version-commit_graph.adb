@@ -61,7 +61,7 @@ package body Version.Commit_Graph is
 
    function Exists (Repo : Version.Repository.Repository_Handle)
      return Boolean
-   is (Ada.Directories.Exists (Graph_Path (Repo)));
+   is (Version.Files.Exists (Graph_Path (Repo)));
 
    --  Big-endian, as everything in the file is.
    function BE32 (Value : Interfaces.Unsigned_32) return String is
@@ -483,7 +483,7 @@ package body Version.Commit_Graph is
 
             --  git leaves the file read-only; replace it rather than write
             --  through it.
-            if Ada.Directories.Exists (Path) then
+            if Version.Files.Exists (Path) then
                Ada.Directories.Delete_File (Path);
             end if;
 
@@ -517,7 +517,7 @@ package body Version.Commit_Graph is
    begin
       Last := 0;
 
-      if not Ada.Directories.Exists (Path) then
+      if not Version.Files.Exists (Path) then
          --  No graph is not a broken graph.
          return True;
       end if;

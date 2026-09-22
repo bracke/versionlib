@@ -271,7 +271,7 @@ package body Version.Filesystem_Guard is
       Native : constant String := Version.Files.To_Native_Path (Absolute_Path);
    begin
       if GNAT.OS_Lib.Is_Symbolic_Link (Native)
-        or else (Ada.Directories.Exists (Native)
+        or else (Version.Files.Exists (Native)
                  and then Ada.Directories.Kind (Native) = Ada.Directories.Special_File)
       then
          raise Ada.IO_Exceptions.Data_Error with
@@ -299,7 +299,7 @@ package body Version.Filesystem_Guard is
                   if GNAT.OS_Lib.Is_Symbolic_Link (Native) then
                      raise Ada.IO_Exceptions.Data_Error with
                        "unsafe parent path: special or symbolic path: " & Parent_Rel;
-                  elsif Ada.Directories.Exists (Native) then
+                  elsif Version.Files.Exists (Native) then
                      if Ada.Directories.Kind (Native) = Ada.Directories.Special_File then
                         raise Ada.IO_Exceptions.Data_Error with
                           "unsafe parent path: special or symbolic path: " & Parent_Rel;
@@ -331,7 +331,7 @@ package body Version.Filesystem_Guard is
          Require_Existing_Path_Not_Special (Absolute_Path, "write target");
       end if;
 
-      if Ada.Directories.Exists (Native) then
+      if Version.Files.Exists (Native) then
          if Is_Directory then
             if Ada.Directories.Kind (Native) /= Ada.Directories.Directory then
                raise Ada.IO_Exceptions.Data_Error with
@@ -372,7 +372,7 @@ package body Version.Filesystem_Guard is
 
       Require_Existing_Path_Not_Special (Absolute_Path, "delete target");
 
-      if Ada.Directories.Exists (Native) then
+      if Version.Files.Exists (Native) then
          if Ada.Directories.Kind (Native) /= Ada.Directories.Ordinary_File then
             raise Ada.IO_Exceptions.Data_Error with
               "unsafe delete target: not an ordinary file: " & Normalized;
