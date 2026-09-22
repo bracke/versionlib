@@ -43,15 +43,30 @@ package Version.Platform is
    --  notion of a canonical form).
    function Canonical_Path (Path : String) return String;
 
-   --  Put standard output and standard error into binary mode, once, so that
-   --  a line terminator written through Ada.Text_IO is a single LF.
+   --  Put the three standard streams into binary mode, once, so that what
+   --  is written is what the caller gets and what is read is what the
+   --  caller sent.
    --
-   --  git writes LF on every host; GNAT's Text_IO writes the host's own
-   --  terminator, so on Windows every Put_Line reached the caller as CRLF
-   --  while Version.Console.Put (raw bytes) reached it as LF -- one stream
-   --  carrying two spellings, and neither matching git. A no-op on a host
-   --  with no text translation, so POSIX output is unchanged.
+   --  git does this on every host (its stdin/stdout are binary) and writes
+   --  LF everywhere; GNAT's Text_IO writes the host's own terminator, so on
+   --  Windows every Put_Line reached the caller as CRLF while
+   --  Version.Console.Put (raw bytes) reached it as LF -- one stream
+   --  carrying two spellings, and neither matching git. On input the same
+   --  translation ate the CR out of a pack, a mailbox and a patch fed
+   --  through a pipe. A no-op on a host with no text translation, so POSIX
+   --  behaviour is unchanged.
    procedure Use_Byte_Exact_Standard_Streams;
+
+   --  Whether the standard input / standard output is a terminal.
+   --
+   --  git asks this before reading a revision list from a pipe and before
+   --  colouring its output. The C runtime's isatty is not the question on
+   --  Windows: it answers yes for NUL as well, so `< /dev/null` looked like
+   --  a console there and a command read the repository instead of its
+   --  standard input. git's own mingw_isatty asks whether the handle is a
+   --  console, which is what these do.
+   function Stdin_Is_A_Terminal return Boolean;
+   function Stdout_Is_A_Terminal return Boolean;
 
    --  The running executable, as one absolute path that a child process and
    --  a shell both accept. git re-runs itself for the subcommands it

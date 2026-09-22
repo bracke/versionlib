@@ -7,6 +7,7 @@ with GNAT.OS_Lib;
 
 with Interfaces.C_Streams;
 
+with Hostkit.Descriptors;
 with Hostkit.FS;
 
 package body Version.Platform is
@@ -175,10 +176,20 @@ package body Version.Platform is
    procedure Use_Byte_Exact_Standard_Streams is
    begin
       Interfaces.C_Streams.set_binary_mode
+        (Interfaces.C_Streams.fileno (Interfaces.C_Streams.stdin));
+      Interfaces.C_Streams.set_binary_mode
         (Interfaces.C_Streams.fileno (Interfaces.C_Streams.stdout));
       Interfaces.C_Streams.set_binary_mode
         (Interfaces.C_Streams.fileno (Interfaces.C_Streams.stderr));
    end Use_Byte_Exact_Standard_Streams;
+
+   function Stdin_Is_A_Terminal return Boolean is
+     (Hostkit.Descriptors.Is_Terminal
+        (Hostkit.Descriptors.Standard_Input));
+
+   function Stdout_Is_A_Terminal return Boolean is
+     (Hostkit.Descriptors.Is_Terminal
+        (Hostkit.Descriptors.Standard_Output));
 
    function Self_Program return String is
       Name : constant String := Ada.Command_Line.Command_Name;
