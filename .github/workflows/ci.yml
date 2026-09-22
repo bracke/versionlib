@@ -77,6 +77,10 @@ jobs:
       - name: Build and run the AUnit suite
         working-directory: versionlib
         shell: bash
+        # A suite that blocks (an editor, a prompt, a spawn that never
+        # returns) otherwise sits here until the six-hour job timeout; fail
+        # while the log is still worth reading.
+        timeout-minutes: 75
         env:
           # A merge fixture runs `git commit` without -m: with no editor
           # configured git opens one and blocks on stdin, which on a runner is
