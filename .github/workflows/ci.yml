@@ -74,13 +74,18 @@ jobs:
         working-directory: versionlib
         shell: bash
         run: alr --non-interactive build
-      - name: Build and run the AUnit suite
+      - name: Build the AUnit suite
+        working-directory: versionlib/tests
+        shell: bash
+        # Building this graph on a Windows runner is slow but bounded; time
+        # it separately from the run so a timeout says which one stalled.
+        timeout-minutes: 75
+        run: alr --non-interactive build
+
+      - name: Run the AUnit suite
         working-directory: versionlib
         shell: bash
-        # A suite that blocks (an editor, a prompt, a spawn that never
-        # returns) otherwise sits here until the six-hour job timeout; fail
-        # while the log is still worth reading.
-        timeout-minutes: 75
+        timeout-minutes: 45
         env:
           # A merge fixture runs `git commit` without -m: with no editor
           # configured git opens one and blocks on stdin, which on a runner is
@@ -88,5 +93,4 @@ jobs:
           GIT_EDITOR: "true"
           EDITOR: "true"
         run: |
-          (cd tests && alr --non-interactive build)
           if [ -f ./tests/bin/tests.exe ]; then ./tests/bin/tests.exe; else ./tests/bin/tests; fi
