@@ -8,6 +8,7 @@ with Version.Config;
 with Version.Files;
 with Version.Platform;
 with Version.Refs;
+with Ada.Characters.Handling;
 
 package body Version.Ignore is
 
@@ -542,6 +543,19 @@ package body Version.Ignore is
         (Pattern, Path (Start .. Path'Last), Case_Insensitive);
    end Basename_Matches;
 
+   --  Two spellings of the same directory, as the host would judge them.
+   function Same_Base (Left, Right : String) return Boolean;
+
+   function Same_Base (Left, Right : String) return Boolean is
+   begin
+      if not Version.Platform.Is_Case_Insensitive_Default then
+         return Left = Right;
+      end if;
+
+      return Ada.Characters.Handling.To_Lower (Left)
+             = Ada.Characters.Handling.To_Lower (Right);
+   end Same_Base;
+
    function Rule_Applies_To_Path
      (Item : Rule; Path : String; Local_Path : out Unbounded_String)
       return Boolean
@@ -559,7 +573,14 @@ package body Version.Ignore is
          return False;
       end if;
 
-      if Path (Path'First .. Path'First + Base'Length - 1) /= Base then
+      --  The base is a directory on disk, and git reaches a nested
+      --  .gitignore by opening <dir>/.gitignore along the queried path -- so
+      --  on a host that folds case, `SUB/` finds `sub/.gitignore` and the
+      --  rules in it apply. Where the host distinguishes case, git's open
+      --  fails and so must this comparison.
+      if not Same_Base
+               (Path (Path'First .. Path'First + Base'Length - 1), Base)
+      then
          return False;
       end if;
 
