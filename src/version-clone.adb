@@ -758,10 +758,15 @@ package body Version.Clone is
    procedure Clone_Bare
      (Source : String; Target : String; Mirror : Boolean := False)
    is
+      --  Forward slashes, the way git records a local clone's URL on every
+      --  host: Full_Name answers in the host's own separator, and the config
+      --  writer then escapes each backslash -- so the remote read back
+      --  C:\\Users\\... where git had written C:/Users/... .
       Norm : constant String :=
-        Ada.Directories.Full_Name
-          (Version.Files.To_Native_Path
-             (Version.Transport.Strip_File_Scheme (Source)));
+        Version.Files.Normalize_Separators
+          (Ada.Directories.Full_Name
+             (Version.Files.To_Native_Path
+                (Version.Transport.Strip_File_Scheme (Source))));
       Object_Format : constant Version.Hash.Hash_Algorithm :=
         Version.Fetch.Remote_Object_Format (Source);
 
