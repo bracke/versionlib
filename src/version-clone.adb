@@ -345,9 +345,12 @@ package body Version.Clone is
    --  as `origin`, materialize the bundle's refs as remote-tracking refs (and
    --  tags), then check out the default branch. Matches `git clone <bundle>`.
    procedure Clone_From_Bundle (Bundle_Path : String; Target : String) is
+      --  Forward slashes: this is recorded as the remote's URL, and git
+      --  spells one that way on every host.
       Full_Bundle : constant String :=
-        Ada.Directories.Full_Name
-          (Version.Files.To_Native_Path (Bundle_Path));
+        Version.Files.Normalize_Separators
+          (Ada.Directories.Full_Name
+             (Version.Files.To_Native_Path (Bundle_Path)));
       Header      : constant Version.Bundle.Bundle_Info :=
         Version.Bundle.Read_Header (Full_Bundle);
       Object_Format : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
@@ -522,11 +525,15 @@ package body Version.Clone is
       --  negotiated from the ref advertisement.)
       Object_Format : Version.Hash.Hash_Algorithm := Version.Hash.Sha1;
 
+      --  Forward slashes, the way git records a local clone's URL on every
+      --  host: Full_Name answers in the host's own separator, and the config
+      --  writer then escapes each backslash.
       function Normalized_Local_Source (Url : String) return String is
          Local_Path : constant String := Version.Transport.Strip_File_Scheme (Url);
       begin
-         return Ada.Directories.Full_Name
-           (Version.Files.To_Native_Path (Local_Path));
+         return Version.Files.Normalize_Separators
+           (Ada.Directories.Full_Name
+              (Version.Files.To_Native_Path (Local_Path)));
       end Normalized_Local_Source;
 
       procedure Populate_Target is
