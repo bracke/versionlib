@@ -7,6 +7,7 @@ with GNAT.OS_Lib;
 
 with Interfaces.C_Streams;
 
+with Hostkit.Command_Line;
 with Hostkit.Descriptors;
 with Hostkit.FS;
 
@@ -195,6 +196,12 @@ package body Version.Platform is
    function Stdout_Is_A_Terminal return Boolean is
      (Hostkit.Descriptors.Is_Terminal
         (Hostkit.Descriptors.Standard_Output));
+
+   function Argument_Count return Natural is
+     (Hostkit.Command_Line.Argument_Count);
+
+   function Argument (Index : Positive) return String is
+     (Hostkit.Command_Line.Argument (Index));
 
    function Self_Program return String is
       Name : constant String := Ada.Command_Line.Command_Name;

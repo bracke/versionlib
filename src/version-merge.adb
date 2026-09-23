@@ -12,6 +12,7 @@ with GNAT.OS_Lib;
 
 with Hostkit.FS;
 
+with Version.Text_Filter;
 with Version.Config;
 with Version.Console;
 with Version.Files;
@@ -3011,10 +3012,16 @@ package body Version.Merge is
               Kind => Result_Item.Kind,
               Mode => Result_Item.Mode);
       begin
+         --  Through the checkout filter, as git's update_file does: a merge
+         --  result lands in the working tree, so it gets the end-of-line
+         --  conversion a checkout of it would.
          Version.Files.Write_Binary_File_Atomic
            (Path    => Version.Files.Join
               (Version.Repository.Root_Path (Repo), Path_Text),
-            Content => Content);
+            Content => Version.Text_Filter.Smudge_Content
+              (Repo          => Repo,
+               Relative_Path => Path_Text,
+               Content       => Content));
          Apply_Worktree_File_Mode
            (Version.Files.Join (Version.Repository.Root_Path (Repo), Path_Text),
             To_String (Item.Mode));
@@ -3070,12 +3077,19 @@ package body Version.Merge is
            "cannot write merge file over directory: " & Relative_Path;
       end if;
 
+      --  Both checkout filters, in the order Version.Restore applies them:
+      --  the end-of-line conversion on the stored bytes, then LFS on the
+      --  result. This is a working-tree file like any other a checkout
+      --  writes.
       Version.Files.Write_Binary_File_Atomic
         (Path    => Absolute_Path,
          Content => Version.LFS.Smudge_Content
            (Repo          => Repo,
             Relative_Path => Relative_Path,
-            Content       => Version.Objects.Content (Obj)));
+            Content       => Version.Text_Filter.Smudge_Content
+              (Repo          => Repo,
+               Relative_Path => Relative_Path,
+               Content       => Version.Objects.Content (Obj))));
       Apply_Worktree_File_Mode (Absolute_Path, Mode);
    end Write_File_From_Object;
 
@@ -3995,10 +4009,16 @@ package body Version.Merge is
               Mode => Current_Item.Mode);
       begin
          if Behavior.Update_Worktree then
+            --  Through the checkout filter, as git's update_file does: a
+            --  merge result lands in the working tree, so it gets the
+            --  end-of-line conversion a checkout of it would.
             Version.Files.Write_Binary_File_Atomic
               (Path    => Version.Files.Join
                  (Version.Repository.Root_Path (Repo), Path_Text),
-               Content => Content);
+               Content => Version.Text_Filter.Smudge_Content
+                 (Repo          => Repo,
+                  Relative_Path => Path_Text,
+                  Content       => Content));
             Apply_Worktree_File_Mode
               (Version.Files.Join (Version.Repository.Root_Path (Repo), Path_Text),
                To_String (Merged_Item.Mode));
@@ -4224,8 +4244,17 @@ package body Version.Merge is
             else "0000000000000000000000000000000000000000");
       begin
          if Behavior.Update_Worktree then
+            --  Through the checkout filter, as git's update_file does: a
+            --  conflicted file lands in the working tree, markers and all,
+            --  so it gets the end-of-line conversion a checkout of that
+            --  path would. Only the working-tree copy is converted -- the
+            --  stages, and the rerere preimage below, stay as merged.
             Version.Files.Write_Binary_File_Atomic
-              (Path => Absolute_Path, Content => Conflict_Content);
+              (Path    => Absolute_Path,
+               Content => Version.Text_Filter.Smudge_Content
+                 (Repo          => Repo,
+                  Relative_Path => Relative_Path,
+                  Content       => Conflict_Content));
             Apply_Worktree_File_Mode
               (Absolute_Path, To_String (Current_Item.Mode));
          end if;
@@ -4446,10 +4475,16 @@ package body Version.Merge is
                        Target_Item  => Target_Item));
             begin
                if Behavior.Update_Worktree then
+                  --  Through the checkout filter, as git's update_file
+                  --  does: a merge result lands in the working tree, so it
+                  --  gets the conversion a checkout of it would.
                   Version.Files.Write_Binary_File_Atomic
                     (Path    => Version.Files.Join
                        (Version.Repository.Root_Path (Repo), Path_Text),
-                     Content => Content);
+                     Content => Version.Text_Filter.Smudge_Content
+                       (Repo          => Repo,
+                        Relative_Path => Path_Text,
+                        Content       => Content));
                   Apply_Worktree_File_Mode
                     (Version.Files.Join
                        (Version.Repository.Root_Path (Repo), Path_Text),

@@ -74,6 +74,19 @@ package Version.Platform is
    function Stdin_Is_A_Terminal return Boolean;
    function Stdout_Is_A_Terminal return Boolean;
 
+   --  The arguments this process was started with, counted from 1 as
+   --  Ada.Command_Line counts them.
+   --
+   --  Not Ada.Command_Line: on Windows the vector a program receives has
+   --  already been through a C runtime that parses one command-line string
+   --  back into arguments and, depending on how it was built, expands a
+   --  wildcard in it against the current directory first -- so `grep foo
+   --  "*.txt"` arrived as the names of that directory's .txt files, where
+   --  git matches the pathspec across directories. These ask the operating
+   --  system for the command line instead (Hostkit.Command_Line).
+   function Argument_Count return Natural;
+   function Argument (Index : Positive) return String;
+
    --  The running executable, as one absolute path that a child process and
    --  a shell both accept. git re-runs itself for the subcommands it
    --  delegates (`stash list` is a `log`, `for-each-repo` runs a git command
