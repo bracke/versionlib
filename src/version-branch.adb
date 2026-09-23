@@ -10,6 +10,7 @@ with Ada.Containers; use type Ada.Containers.Count_Type;
 use type Ada.Directories.File_Kind;
 with Ada.Containers.Indefinite_Ordered_Sets;
 
+with Version.Editor;
 with Version.Working_Tree;
 with Version.Restore;
 with Version.Path_Safety;
@@ -318,32 +319,24 @@ package body Version.Branch is
    is
       Path : constant String := Git_State_File (Repo, "MERGE_MSG");
       Editor : constant String := Configured_Editor;
-      Args : GNAT.OS_Lib.Argument_List (1 .. 1) := [others => null];
-      Status : Integer;
    begin
       if Editor'Length = 0 then
          raise Ada.IO_Exceptions.Data_Error with
            "cannot edit merge message: no editor configured";
       end if;
 
-      Version.Files.Write_Binary_File_Atomic
-        (Path => Path, Content => Message & Character'Val (10));
-      Args (1) := new String'(Path);
-      Status := GNAT.OS_Lib.Spawn (Program_Name => Editor, Args => Args);
-      GNAT.OS_Lib.Free (Args (1));
-
-      if Status /= 0 then
-         raise Ada.IO_Exceptions.Data_Error with
-           "cannot edit merge message: editor failed";
-      end if;
-
-      return Version.Files.Read_Binary_File (Path);
-   exception
-      when others =>
-         if Args (1) /= null then
-            GNAT.OS_Lib.Free (Args (1));
-         end if;
-         raise;
+      --  Through git's launch_editor, not a direct spawn: the editor string
+      --  may carry its own arguments, and a host whose CreateProcess cannot
+      --  start a `#!` script needs the shell to do it -- which is where a
+      --  plain `editor.sh` reported "editor failed" and nothing else.
+      begin
+         return Version.Editor.Edit_File
+           (Repo, Path, Message & Character'Val (10));
+      exception
+         when Ada.IO_Exceptions.Data_Error =>
+            raise Ada.IO_Exceptions.Data_Error with
+              "cannot edit merge message: editor failed";
+      end;
    end Edit_Merge_Message;
 
    procedure Require_Attached_HEAD

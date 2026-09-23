@@ -115,6 +115,11 @@ package body Version.Platform is
       return Current = POSIX_Platform;
    end Supports_Symbolic_Links;
 
+   function Native_Eol_Is_CRLF return Boolean is
+   begin
+      return Current = Windows_Platform;
+   end Native_Eol_Is_CRLF;
+
    function Is_Windows_Drive_Path
      (Path : String)
       return Boolean

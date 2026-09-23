@@ -18,6 +18,12 @@ package Version.Platform is
    --  cannot, which a stock Windows install cannot.
    function Supports_Symbolic_Links return Boolean;
 
+   --  Whether this host's "native" line ending is CRLF. git's core.eol
+   --  defaults to `native`, which its NATIVE_CRLF build sets to CRLF, so a
+   --  `text` file is checked out with CRLF on Windows and LF everywhere
+   --  else.
+   function Native_Eol_Is_CRLF return Boolean;
+
    function Is_Windows_Drive_Path
      (Path : String)
       return Boolean;

@@ -1,6 +1,7 @@
 with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;   use Ada.Strings.Unbounded;
+with Version.Platform;
 with Version.Config;
 with Version.Files;
 with Version.Objects;
@@ -147,9 +148,23 @@ package body Version.Text_Filter is
       end if;
    end Autocrlf;
 
-   --  core.eol default checkout ending for text files (native = LF here).
+   --  core.eol: the checkout ending for a `text` file. git's default is
+   --  `native`, which is CRLF on a host whose NATIVE_CRLF it builds with,
+   --  so an unset (or explicitly `native`) core.eol is the host's own
+   --  ending -- not LF everywhere.
    function Core_Eol_Is_CRLF (Repo : Version.Repository.Repository_Handle)
-     return Boolean is (Get (Repo, "core.eol") = "crlf");
+     return Boolean
+   is
+      Value : constant String := Get (Repo, "core.eol");
+   begin
+      if Value = "crlf" then
+         return True;
+      elsif Value = "lf" then
+         return False;
+      else
+         return Version.Platform.Native_Eol_Is_CRLF;
+      end if;
+   end Core_Eol_Is_CRLF;
 
    ----------------------------------------------------------------------
    --  .gitattributes
