@@ -22,6 +22,28 @@ jobs:
         uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
           root: versionlib
+      - name: Align sibling branches with this one where they exist
+        # versionlib and the crates it pins change together, so a feature
+        # branch here must build against the same branch there -- the siblings
+        # are cloned at their default branch, which does not carry work this
+        # branch depends on.
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}"
+          [ -n "$branch" ] || exit 0
+          # $PWD, not $GITHUB_WORKSPACE: on the Windows runner the latter is a
+          # backslash path whose separators bash would eat as escapes when the
+          # glob below expands. The step starts in the workspace root either way.
+          for dir in "$PWD"/*/; do
+            name=$(basename "$dir")
+            [ "$name" = versionlib ] && continue
+            [ -d "$dir/.git" ] || continue
+            git -C "$dir" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 || continue
+            git -C "$dir" fetch -q --depth 1 origin "$branch"
+            git -C "$dir" checkout -q FETCH_HEAD
+            echo "aligned $name to $branch"
+          done
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
         with:
@@ -59,6 +81,28 @@ jobs:
         uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
           root: versionlib
+      - name: Align sibling branches with this one where they exist
+        # versionlib and the crates it pins change together, so a feature
+        # branch here must build against the same branch there -- the siblings
+        # are cloned at their default branch, which does not carry work this
+        # branch depends on.
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-}}"
+          [ -n "$branch" ] || exit 0
+          # $PWD, not $GITHUB_WORKSPACE: on the Windows runner the latter is a
+          # backslash path whose separators bash would eat as escapes when the
+          # glob below expands. The step starts in the workspace root either way.
+          for dir in "$PWD"/*/; do
+            name=$(basename "$dir")
+            [ "$name" = versionlib ] && continue
+            [ -d "$dir/.git" ] || continue
+            git -C "$dir" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 || continue
+            git -C "$dir" fetch -q --depth 1 origin "$branch"
+            git -C "$dir" checkout -q FETCH_HEAD
+            echo "aligned $name to $branch"
+          done
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
         with:
