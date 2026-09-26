@@ -119,15 +119,23 @@ package body Version.Grep is
            Integer'Min (Content'Last, Content'First + 7999)
          => Content (K) = Character'Val (0));
 
-      function Hit (Line : String) return Boolean is
+      Last_Line_Matched : Boolean := False;
+
+      function Raw_Match (Line : String) return Boolean is
          Found : constant Regexp.Match_Result :=
            Regexp.Find_First (Expr, Line, M_Opts);
       begin
-         return (Found.Status = Regexp.Match_Ok) xor Invert;
+         return Found.Status = Regexp.Match_Ok;
+      end Raw_Match;
+
+      function Hit (Line : String) return Boolean is
+      begin
+         return Raw_Match (Line) xor Invert;
       end Hit;
 
       procedure Emit (Line : String) is
       begin
+         Last_Line_Matched := Raw_Match (Line);
          if Hit (Line) then
             Result.Append
               (Match'
@@ -147,6 +155,23 @@ package body Version.Grep is
       end loop;
       if Start <= Content'Last then
          Emit (Content (Start .. Content'Last));
+      elsif Content'Length > 0
+        and then not Invert
+        and then not Last_Line_Matched
+        and then Raw_Match ("")
+      then
+         --  git scans the last line as far as end-of-buffer, the trailing
+         --  newline included, so a pattern that can only match the empty
+         --  string matches just past that newline and is reported one line
+         --  beyond the file: `grep -n '^$'` on "a\n" answers line 2. The
+         --  position is only reached when the line itself did not match --
+         --  git takes the leftmost match in a line and stops.
+         Result.Append
+           (Match'
+              (Path    => To_Unbounded_String (Path),
+               Line_No => Line_No,
+               Text    => Null_Unbounded_String,
+               Binary  => Is_Bin));
       end if;
    end Scan_Content;
 
@@ -699,7 +724,27 @@ package body Version.Grep is
       Starts : Nat_Vectors.Vector;
       N      : Natural := 0;
 
+      Trailing_Newline : constant Boolean :=
+        Content'Length > 0 and then Content (Content'Last) = LF;
+
+      function Line_Of (L : Positive) return String;
+      function Line_Body (L : Positive) return String;
+
       function Line_Of (L : Positive) return String is
+      begin
+         --  One line past the file: the position just after the final
+         --  newline, which git's scan of the last line reaches. It is the
+         --  empty string, spelled so rather than sliced -- a null slice
+         --  whose 'First is 'Last + 2 is legal Ada, and the matcher
+         --  reasonably reads it as being past the end.
+         if L > N then
+            return "";
+         end if;
+
+         return Line_Body (L);
+      end Line_Of;
+
+      function Line_Body (L : Positive) return String is
          First : constant Natural := Starts (L);
          Next  : constant Natural := Starts (L + 1);
       begin
@@ -709,7 +754,7 @@ package body Version.Grep is
             return Content (First .. Next - 2 - 1);
          end if;
          return Content (First .. Natural'Min (Next - 2, Content'Last));
-      end Line_Of;
+      end Line_Body;
 
       procedure Emit (S : String) is
       begin
@@ -1032,6 +1077,7 @@ package body Version.Grep is
 
       --  grep_source_1
       function Source_1 (Collect : Boolean) return Boolean is
+         Last_Line_Matched : Boolean := False;
          Last_Hit      : Natural := 0;
          Count         : Natural := 0;
          Show_Function : Boolean := False;
@@ -1058,14 +1104,38 @@ package body Version.Grep is
                null;
          end case;
 
-         for L in 1 .. N loop
+         --  git scans the *last* line as far as end-of-buffer, the trailing
+         --  newline included, so a pattern that can only match the empty
+         --  string matches just past that newline and is reported one line
+         --  beyond the file: `grep -n '^$'` on "a\n" answers line 2.
+         for L in 1 .. N + (if Trailing_Newline then 1 else 0) loop
             declare
                Line : constant String := Line_Of (L);
                Col  : Integer := -1;
                Icol : Integer := -1;
-               Hit  : Boolean := Match_Line (Line, Col, Icol, Collect);
+               Raw  : constant Boolean := Match_Line (Line, Col, Icol, Collect);
+               Hit  : Boolean := Raw;
                Handled : Boolean := False;
             begin
+               --  The position past the final newline is only reached when
+               --  the last line itself did not match (git takes the leftmost
+               --  match in a line and stops) and was not already spoken for
+               --  as post-context. It is never a non-match to report either,
+               --  so `-v` never shows it.
+               if L > N
+                 and then (Opts.Invert
+                           or else Last_Line_Matched
+                           or else Show_Function
+                           or else (Last_Hit > 0
+                                    and then N <= Last_Hit + Opts.Post_Context))
+               then
+                  goto Next_Line;
+               end if;
+
+               if L <= N then
+                  Last_Line_Matched := Raw;
+               end if;
+
                if not Collect then
                   if Opts.Invert then
                      Hit := not Hit;
@@ -1133,6 +1203,8 @@ package body Version.Grep is
                   end if;
                end if;
             end;
+            <<Next_Line>>
+            null;
          end loop;
 
          if Collect then
