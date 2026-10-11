@@ -30,6 +30,16 @@ package Version.Working_Tree is
    --  Scan's paths, every file and link of the tree, without reading one:
    --  each Id is the zero id. For a caller that wants the names only.
 
+   function Scan_Ignored_Paths
+     (Repo          : Version.Repository.Repository_Handle;
+      Ignore_Rules  : Version.Ignore.Ignore_Rules;
+      Tracked_Paths : Version.Staging.Index_Entry_Vectors.Vector)
+      return Working_File_Vectors.Vector;
+   --  Scan_Paths for listing what is ignored a directory at a time, as
+   --  git's status does without -uall: an ignored directory with nothing
+   --  tracked under it is not entered but listed once, as its path and a
+   --  slash; every other file and link is listed, ignored or not.
+
    function Scan
      (Repo          : Version.Repository.Repository_Handle;
       Ignore_Rules  : Version.Ignore.Ignore_Rules;

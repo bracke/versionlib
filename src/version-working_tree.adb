@@ -325,7 +325,11 @@ package body Version.Working_Tree is
       --  parents matched again for each entry.
       Dir_Ignored   : Boolean := False;
       --  The paths alone: no file read, each Id the zero id.
-      Paths_Only    : Boolean := False)
+      Paths_Only    : Boolean := False;
+      --  For listing what is ignored: ignored files kept, not dropped, and
+      --  an ignored directory with nothing tracked under it not entered but
+      --  given one entry, its path with a slash after it.
+      Mark_Ignored  : Boolean := False)
    is
       use type Hostkit.Directory_Listing.Entry_Kind;
       Listed : Hostkit.Directory_Listing.Entry_Vectors.Vector;
@@ -378,6 +382,7 @@ package body Version.Working_Tree is
                             Parent_Ignored => Dir_Ignored);
                   begin
                      if ((not Ignored)
+                         or else Mark_Ignored
                          or else Is_Tracked_Path (Tracked_Index, Rel_File))
                        and then
                          ((not Use_Pathspec)
@@ -453,7 +458,13 @@ package body Version.Working_Tree is
                               Algorithm     => Algorithm,
                               Result        => Result,
                               Dir_Ignored   => Ignored,
-                              Paths_Only    => Paths_Only);
+                              Paths_Only    => Paths_Only,
+                              Mark_Ignored  => Mark_Ignored);
+                        elsif Mark_Ignored then
+                           Result.Append
+                             (Version.Working_Tree.Working_File'
+                                (Path => To_Unbounded_String (Rel_Dir & "/"),
+                                 Id   => Version.Objects.Zero_Object_Id));
                         end if;
                      end;
                   end if;
@@ -471,6 +482,7 @@ package body Version.Working_Tree is
                             Parent_Ignored => Dir_Ignored);
                   begin
                      if ((not Ignored)
+                         or else Mark_Ignored
                          or else Is_Tracked_Path (Tracked_Index, Rel_File))
                        and then
                          ((not Use_Pathspec)
@@ -543,6 +555,32 @@ package body Version.Working_Tree is
          Paths_Only    => True);
       return Result;
    end Scan_Paths;
+
+   function Scan_Ignored_Paths
+     (Repo          : Version.Repository.Repository_Handle;
+      Ignore_Rules  : Version.Ignore.Ignore_Rules;
+      Tracked_Paths : Version.Staging.Index_Entry_Vectors.Vector)
+      return Working_File_Vectors.Vector
+   is
+      Result          : Working_File_Vectors.Vector;
+      Empty_Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
+   begin
+      Scan_Directory
+        (Repo          => Repo,
+         Filter_Active => False,
+         Root          => Version.Repository.Root_Path (Repo),
+         Dir           => Version.Repository.Root_Path (Repo),
+         Ignore_Rules  => Ignore_Rules,
+         Tracked_Index => Build_Tracked_Path_Index (Tracked_Paths),
+         Use_Ignore    => True,
+         Use_Pathspec  => False,
+         Pathspecs     => Empty_Pathspecs,
+         Algorithm     => Version.Repository.Algorithm (Repo),
+         Result        => Result,
+         Paths_Only    => True,
+         Mark_Ignored  => True);
+      return Result;
+   end Scan_Ignored_Paths;
 
    function Scan
      (Repo : Version.Repository.Repository_Handle)

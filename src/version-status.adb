@@ -1335,7 +1335,10 @@ package body Version.Status is
          declare
             Path : constant String := To_String (Working_Files.Element (I).Path);
          begin
-            if not Index_Pos.Contains (Path) then
+            if Path (Path'Last) = '/' then
+               --  A directory the walk did not enter: ignored, all of it.
+               Ignored (I) := True;
+            elsif not Index_Pos.Contains (Path) then
                Ignored (I) := File_Ignored (Path);
                if not Ignored (I) then
                   Block_Parents (Path);
@@ -1349,10 +1352,17 @@ package body Version.Status is
             Path : constant String := To_String (Working_Files.Element (I).Path);
          begin
             if Ignored (I)
-              and then (not Sparse or else Version.Sparse.Included (Repo, Path))
+              and then (not Sparse
+                        or else (if Path (Path'Last) = '/'
+                                 then Version.Sparse.Included
+                                        (Repo, Path (Path'First .. Path'Last - 1), Is_Directory => True)
+                                 else Version.Sparse.Included (Repo, Path)))
               and then
                 (Pathspecs.Is_Empty
-                 or else Version.Pathspec.Matches_Any (Pathspecs, Path))
+                 or else (if Path (Path'Last) = '/'
+                          then Version.Pathspec.Matches_Any
+                                 (Pathspecs, Path (Path'First .. Path'Last - 1), Is_Directory => True)
+                          else Version.Pathspec.Matches_Any (Pathspecs, Path)))
             then
                Add_Ignored (Path);
             end if;
@@ -1892,7 +1902,10 @@ package body Version.Status is
       --  Names only: what is ignored is listed, never read.
       Working_Files : constant Version.Working_Tree.Working_File_Vectors.Vector :=
         (if Mode = Ignored_Matching then Version.Working_Tree.Working_File_Vectors.Empty_Vector
-         else Version.Working_Tree.Scan_Paths (Repo));
+         elsif All_Untracked then Version.Working_Tree.Scan_Paths (Repo)
+         --  Without -uall an ignored directory is reported whole, so it
+         --  need not be entered.
+         else Version.Working_Tree.Scan_Ignored_Paths (Repo, Ignore_Rules, Index_Entries));
       Result        : Status_Result :=
         Current_Status (Pathspecs, All_Untracked);
    begin
