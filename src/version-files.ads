@@ -117,6 +117,8 @@ package Version.Files is
       return Boolean;
 
    function Current_Directory return String;
+   --  The directory a command runs from: the calling task's own, where
+   --  In_Directory set one, else the process's.
 
    procedure Set_Current_Directory
      (Path : String);
@@ -124,5 +126,22 @@ package Version.Files is
    procedure With_Directory
      (Path   : String;
       Action : not null access procedure);
+   --  Inside In_Directory it moves the task's own directory, not the
+   --  process's.
+
+   procedure In_Directory
+     (Path   : String;
+      Action : not null access procedure);
+   --  Run Action as if the process stood in Path, without changing the
+   --  process's directory: the repository is found from Path, and a nested
+   --  With_Directory moves only this task's directory. For a program that
+   --  embeds the library and has more than one task, where a change of
+   --  the process's directory would move every task's. Hooks do not run
+   --  within it -- running one changes the process's directory and
+   --  environment -- as with VERSION_NO_HOOKS=1. Calls in it must still not
+   --  overlap another task's: the library's caches are not shared safely.
+
+   function In_Own_Directory return Boolean;
+   --  Whether the calling task is within In_Directory.
 
 end Version.Files;

@@ -4,6 +4,8 @@ with Ada.Streams; use Ada.Streams;
 with Ada.Streams.Stream_IO; use Ada.Streams.Stream_IO;
 with Ada.IO_Exceptions;
 with Ada.Unchecked_Deallocation;
+with Ada.Strings.Unbounded;
+with Ada.Task_Attributes;
 with Interfaces; use type Interfaces.Unsigned_32;
 with Interfaces.C;
 with Hostkit.FS;
@@ -554,10 +556,51 @@ package body Version.Files is
           = Ada.Directories.Directory;
    end Is_Directory;
 
+   --  The calling task's own directory, where In_Directory set one; "" for
+   --  the process's.
+   package Own_Directories is new Ada.Task_Attributes
+     (Attribute     => Ada.Strings.Unbounded.Unbounded_String,
+      Initial_Value => Ada.Strings.Unbounded.Null_Unbounded_String);
+
+   function In_Own_Directory return Boolean is
+     (Ada.Strings.Unbounded.Length (Own_Directories.Value) > 0);
+
    function Current_Directory return String is
    begin
+      if In_Own_Directory then
+         return Ada.Strings.Unbounded.To_String (Own_Directories.Value);
+      end if;
       return Normalize_Separators (Ada.Directories.Current_Directory);
    end Current_Directory;
+
+   procedure In_Directory
+     (Path   : String;
+      Action : not null access procedure)
+   is
+      Old : constant Ada.Strings.Unbounded.Unbounded_String := Own_Directories.Value;
+      --  A relative Path is from where the task stands now.
+      Full : constant String :=
+        Normalize_Separators
+          (Ada.Directories.Full_Name
+             (To_Native_Path
+                (if Path'Length > 0
+                   and then (Path (Path'First) = '/' or else Is_Windows_Drive_Path (Path))
+                 then Path
+                 else Current_Directory & "/" & Path)));
+   begin
+      if not Is_Directory (Full) then
+         raise Ada.IO_Exceptions.Name_Error with "not a directory: " & Path;
+      end if;
+      Own_Directories.Set_Value (Ada.Strings.Unbounded.To_Unbounded_String (Full));
+      begin
+         Action.all;
+      exception
+         when others =>
+            Own_Directories.Set_Value (Old);
+            raise;
+      end;
+      Own_Directories.Set_Value (Old);
+   end In_Directory;
 
    procedure Set_Current_Directory (Path : String) is
    begin
@@ -568,6 +611,10 @@ package body Version.Files is
    is
       Old_Dir : constant String := Ada.Directories.Current_Directory;
    begin
+      if In_Own_Directory then
+         In_Directory (Path, Action);
+         return;
+      end if;
       Ada.Directories.Set_Directory (To_Native_Path (Path));
 
       begin

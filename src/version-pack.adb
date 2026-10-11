@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Vectors;
 with Ada.Directories;
@@ -103,6 +104,16 @@ package body Version.Pack is
      (Key_Type => String, Element_Type => Stream_Array_Access);
 
    Data_Cache : Data_Maps.Map;
+
+   procedure Free is new Ada.Unchecked_Deallocation (Stream_Element_Array, Stream_Array_Access);
+
+   procedure Release_Cached_Files is
+   begin
+      for Held of Data_Cache loop
+         Free (Held);
+      end loop;
+      Data_Cache.Clear;
+   end Release_Cached_Files;
 
    function Cached_File (Path : String) return Stream_Array_Access is
       C : constant Data_Maps.Cursor := Data_Cache.Find (Path);

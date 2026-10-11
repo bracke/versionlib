@@ -88,6 +88,64 @@ package body Version.Worktrees.Tests is
          "remove should delete linked working tree");
    end Add_List_And_Remove_Linked_Worktree;
 
+   --  A program with several tasks reaches a repository from where it
+   --  says, not from the process's directory, which no call moves; real
+   --  git reads the worktree it made, and no hook runs.
+   procedure Worktree_In_Own_Directory
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root    : constant String := Prepare_Repo (T);
+      Work    : constant String := Root & "-apart";
+      Listing : constant String := Root & "-list.txt";
+      Hook    : constant String := Version.Files.Join (Root, ".git/hooks/post-checkout");
+      Marker  : constant String := Root & "-hook-ran";
+      Away    : constant String := Ada.Directories.Containing_Directory (Root);
+      Seen    : Unbounded_String;
+
+      procedure Make is
+         Repo : constant Version.Repository.Repository_Handle := Version.Repository.Open;
+      begin
+         Seen := To_Unbounded_String (Version.Files.Current_Directory);
+         Version.Worktrees.Add_Detached
+           (Path => Work, Rev => Version.Refs.Current_Commit_Id (Repo));
+      end Make;
+
+      procedure Take_Away is
+      begin
+         Version.Worktrees.Remove (Work);
+      end Take_Away;
+   begin
+      Create_File (Root, ".git/hooks/post-checkout", "#!/bin/sh" & Character'Val (10)
+                   & "touch '" & Marker & "'" & Character'Val (10));
+      Version.Git_Fixtures.Run (Root, "chmod +x '" & Hook & "'");
+      Ada.Directories.Set_Directory (Away);
+      Version.Files.In_Directory (Root, Make'Access);
+      Assert (Version.Files.Normalize_Separators (Ada.Directories.Current_Directory)
+              = Version.Files.Normalize_Separators (Away),
+              "the process's directory was moved");
+      Assert (To_String (Seen) = Version.Files.Normalize_Separators (Root),
+              "the task's own directory was not the one given: " & To_String (Seen));
+      Assert (not Version.Files.In_Own_Directory, "the task's own directory outlived the call");
+      Assert (Version.Files.Is_Ordinary_File (Version.Files.Join (Work, "a.txt")),
+              "the worktree was not checked out");
+      Assert (not Ada.Directories.Exists (Marker), "a hook ran within a task's own directory");
+      Version.Git_Fixtures.Run (Root, "git worktree list --porcelain > '" & Listing & "'");
+      Assert (Ada.Strings.Unbounded.Index
+                (To_Unbounded_String (Version.Test_Support.Read_Text_File (Listing)),
+                 "worktree " & Work) > 0,
+              "git does not list the worktree");
+      Version.Git_Fixtures.Run (Work, "git status --porcelain > '" & Listing & "'");
+      Assert (Version.Test_Support.Read_Text_File (Listing) = "",
+              "git sees the new worktree as changed");
+      Version.Files.In_Directory (Root, Take_Away'Access);
+      Assert (not Ada.Directories.Exists (Work), "the worktree was not removed");
+      Version.Git_Fixtures.Run (Root, "git worktree list --porcelain > '" & Listing & "'");
+      Assert (Ada.Strings.Unbounded.Index
+                (To_Unbounded_String (Version.Test_Support.Read_Text_File (Listing)),
+                 "worktree " & Work) = 0,
+              "git still lists the removed worktree");
+   end Worktree_In_Own_Directory;
+
    procedure Branch_Occupancy_Is_Rejected
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -577,6 +635,10 @@ package body Version.Worktrees.Tests is
         (T,
          List_Reports_Mismatched_Admin_Backlink'Access,
          "Worktree: list reports a mismatched admin backlink as prunable");
+      Register_Routine
+        (T,
+         Worktree_In_Own_Directory'Access,
+         "Worktree: made and removed from a task's own directory");
       Register_Routine
         (T,
          Malformed_Git_File_Is_Rejected'Access,

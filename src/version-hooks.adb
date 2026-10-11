@@ -629,9 +629,12 @@ package body Version.Hooks is
 
    function Hooks_Disabled return Boolean is
    begin
+      --  Within a task's own directory a hook would move the process's
+      --  directory and environment under every other task.
       return
-        Ada.Environment_Variables.Exists ("VERSION_NO_HOOKS")
-        and then Ada.Environment_Variables.Value ("VERSION_NO_HOOKS") = "1";
+        Version.Files.In_Own_Directory
+        or else (Ada.Environment_Variables.Exists ("VERSION_NO_HOOKS")
+                 and then Ada.Environment_Variables.Value ("VERSION_NO_HOOKS") = "1");
    exception
       when others =>
          return False;
