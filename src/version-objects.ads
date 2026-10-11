@@ -178,6 +178,16 @@ package Version.Objects is
    --  Parse a single level of Tree_Id (non-recursive): subtrees are returned
    --  as Tree_Directory entries (paths are entry names, not full paths).
 
+   procedure Find_Tree_Entry
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Hex_Object_Id;
+      Name    : String;
+      Found   : out Boolean;
+      Result  : out Tree_Entry);
+   --  One entry of a tree, by its name, found in the tree's bytes without
+   --  parsing the rest -- what a path-limited walk asks of each level of
+   --  every commit's tree. Result.Path is Name.
+
    function Parse_Tree
      (Algorithm : Version.Hash.Hash_Algorithm;
       Data      : String)

@@ -301,12 +301,15 @@ package body Version.Objects is
       Eff  : constant Hex_Object_Id := Replacement_Of (Repo, Id);
       Path : constant String := Loose_Object_Path (Repo, Eff);
    begin
-      if Version.Files.Exists (Path) then
-         return Read_Loose_Object (Repo, Eff);
-      end if;
-
+      --  The packs first: asked in memory once their indexes are read, where
+      --  a loose object costs the disk a look for every object. One both
+      --  loose and packed is the same object.
       if Version.Pack.Contains (Repo, Eff) then
          return Version.Pack.Read_Object (Repo, Eff);
+      end if;
+
+      if Version.Files.Exists (Path) then
+         return Read_Loose_Object (Repo, Eff);
       end if;
 
       if Version.Promisor.Fetch_Promised_Object (Repo, To_String (Eff)) then
@@ -878,6 +881,55 @@ package body Version.Objects is
 
       return Result;
    end Flatten_Tree;
+
+   procedure Find_Tree_Entry
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Hex_Object_Id;
+      Name    : String;
+      Found   : out Boolean;
+      Result  : out Tree_Entry)
+   is
+      Obj        : constant Git_Object := Read_Object (Repo, Tree_Id);
+      Data       : constant String := To_String (Obj.Content_Value);
+      Raw_Length : constant Natural := Version.Hash.Raw_Length (Version.Repository.Algorithm (Repo));
+      Pos        : Natural := Data'First;
+   begin
+      Found := False;
+      Result := (Path => Null_Unbounded_String, Id => Zero_Object_Id, Kind => Tree_Blob,
+                 Mode => Null_Unbounded_String);
+      if Obj.Kind_Value /= Tree_Object then
+         raise Ada.IO_Exceptions.Data_Error with "object is not a tree";
+      end if;
+      while Pos <= Data'Last loop
+         declare
+            Space : constant Natural := Ada.Strings.Fixed.Index (Data (Pos .. Data'Last), " ");
+            Nul   : constant Natural :=
+              (if Space = 0 then 0
+               else Ada.Strings.Fixed.Index (Data (Space + 1 .. Data'Last), [1 => Character'Val (0)]));
+         begin
+            if Space = 0 or else Nul = 0 or else Nul + Raw_Length > Data'Last then
+               raise Ada.IO_Exceptions.Data_Error with "corrupt tree entry";
+            end if;
+            if Data (Space + 1 .. Nul - 1) = Name then
+               Version.Path_Safety.Require_Safe_Relative_Path (Name, "tree entry path", Allow_Control => True);
+               declare
+                  Mode_Text : constant String := Data (Pos .. Space - 1);
+               begin
+                  Result :=
+                    (Path => To_Unbounded_String (Name),
+                     Id   => To_Hex (Data (Nul + 1 .. Nul + Raw_Length)),
+                     Kind => (if Mode_Text = "40000" then Tree_Directory
+                              elsif Mode_Text = "160000" then Tree_Gitlink
+                              else Tree_Blob),
+                     Mode => To_Unbounded_String (Mode_Text));
+               end;
+               Found := True;
+               return;
+            end if;
+            Pos := Nul + Raw_Length + 1;
+         end;
+      end loop;
+   end Find_Tree_Entry;
 
    function Parse_Tree
      (Algorithm : Version.Hash.Hash_Algorithm;

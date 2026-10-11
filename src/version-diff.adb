@@ -11,6 +11,7 @@ with GNAT.OS_Lib;
 with GNAT.Regpat;
 
 with Version.Files;
+with Version.Path_Safety;
 with Version.Ignore;
 with Version.Platform;
 with Version.Staging;
@@ -3919,6 +3920,122 @@ package body Version.Diff is
            Opts            => Options);
    end Diff_Trees;
 
+   --  The files that differ between two commits' trees, each side's: the
+   --  trees walked together, a subtree the same on both sides passed over
+   --  whole, as git's tree diff passes it. Flattened whole, two trees of
+   --  two thousand files were compared entry by entry for every commit of
+   --  a log, where most commits change a directory or two.
+   procedure Changed_Entries
+     (Repo     : Version.Repository.Repository_Handle;
+      Objects  : in out Version.Object_Cache.Object_Cache;
+      Old_Tree : Version.Objects.Hex_Object_Id;
+      New_Tree : Version.Objects.Hex_Object_Id;
+      Old_Out  : in out Version.Objects.Tree_Entry_Vectors.Vector;
+      New_Out  : in out Version.Objects.Tree_Entry_Vectors.Vector)
+   is
+      Algorithm : constant Version.Hash.Hash_Algorithm := Version.Repository.Algorithm (Repo);
+
+      package Entry_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (String, Version.Objects.Tree_Entry, "<", Version.Objects."=");
+
+      function Level (Tree : Version.Objects.Hex_Object_Id) return Entry_Maps.Map is
+         Result : Entry_Maps.Map;
+      begin
+         for One of Version.Objects.Parse_Tree
+                      (Algorithm,
+                       Version.Objects.Content (Version.Object_Cache.Read_Object (Repo, Objects, Tree)))
+         loop
+            Result.Include (To_String (One.Path), One);
+         end loop;
+         return Result;
+      end Level;
+
+      function Joined (Base, Name : String) return String is
+        (if Base = "" then Name else Base & "/" & Name);
+
+      --  One side's entry, all of it: a directory flattened.
+      procedure Whole
+        (One  : Version.Objects.Tree_Entry;
+         Base : String;
+         Into : in out Version.Objects.Tree_Entry_Vectors.Vector)
+      is
+         Path : constant String := Joined (Base, To_String (One.Path));
+      begin
+         Version.Path_Safety.Require_Safe_Relative_Path (Path, "tree entry path", Allow_Control => True);
+         if One.Kind = Version.Objects.Tree_Directory then
+            for Inner of Version.Objects.Flatten_Tree (Repo, One.Id) loop
+               Into.Append
+                 (Version.Objects.Tree_Entry'
+                    (Path => To_Unbounded_String (Path & "/" & To_String (Inner.Path)),
+                     Id   => Inner.Id, Kind => Inner.Kind, Mode => Inner.Mode));
+            end loop;
+         else
+            Into.Append
+              (Version.Objects.Tree_Entry'
+                 (Path => To_Unbounded_String (Path), Id => One.Id, Kind => One.Kind, Mode => One.Mode));
+         end if;
+      end Whole;
+
+      procedure Walk (Old_Id, New_Id : Version.Objects.Hex_Object_Id; Base : String) is
+         Old_Level : constant Entry_Maps.Map := Level (Old_Id);
+         New_Level : constant Entry_Maps.Map := Level (New_Id);
+      begin
+         for Position in Old_Level.Iterate loop
+            declare
+               Name : constant String := Entry_Maps.Key (Position);
+               Was  : constant Version.Objects.Tree_Entry := Entry_Maps.Element (Position);
+            begin
+               if not New_Level.Contains (Name) then
+                  Whole (Was, Base, Old_Out);
+               else
+                  declare
+                     Now : constant Version.Objects.Tree_Entry := New_Level.Element (Name);
+                  begin
+                     if Was.Id = Now.Id and then Was.Mode = Now.Mode then
+                        null;
+                     elsif Was.Kind = Version.Objects.Tree_Directory
+                       and then Now.Kind = Version.Objects.Tree_Directory
+                     then
+                        Version.Path_Safety.Require_Safe_Relative_Path
+                          (Joined (Base, Name), "tree entry path", Allow_Control => True);
+                        Walk (Was.Id, Now.Id, Joined (Base, Name));
+                     else
+                        Whole (Was, Base, Old_Out);
+                        Whole (Now, Base, New_Out);
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         for Position in New_Level.Iterate loop
+            if not Old_Level.Contains (Entry_Maps.Key (Position)) then
+               Whole (Entry_Maps.Element (Position), Base, New_Out);
+            end if;
+         end loop;
+      end Walk;
+   begin
+      if Old_Tree /= New_Tree then
+         Walk (Old_Tree, New_Tree, "");
+      end if;
+   end Changed_Entries;
+
+   --  Both commits' sides, only what differs between them.
+   procedure Changed_Sides
+     (Repo     : Version.Repository.Repository_Handle;
+      Objects  : in out Version.Object_Cache.Object_Cache;
+      Old_Id   : Version.Objects.Hex_Object_Id;
+      New_Id   : Version.Objects.Hex_Object_Id;
+      Old_Side : out Version.Objects.Tree_Entry_Vectors.Vector;
+      New_Side : out Version.Objects.Tree_Entry_Vectors.Vector)
+   is
+      function Tree_Of (Commit : Version.Objects.Hex_Object_Id) return Version.Objects.Hex_Object_Id is
+        (Version.Objects.Commit_Tree_Id (Version.Object_Cache.Read_Object (Repo, Objects, Commit)));
+   begin
+      Old_Side.Clear;
+      New_Side.Clear;
+      Changed_Entries (Repo, Objects, Tree_Of (Old_Id), Tree_Of (New_Id), Old_Side, New_Side);
+   end Changed_Sides;
+
    function Diff_Commits
      (Repo    : Version.Repository.Repository_Handle;
       Old_Id  : Version.Objects.Hex_Object_Id;
@@ -3928,26 +4045,15 @@ package body Version.Diff is
    begin
       declare
          Objects : Version.Object_Cache.Object_Cache;
-         Trees   : Version.Tree_Cache.Tree_Cache;
+         Old_Changed, New_Changed : Version.Objects.Tree_Entry_Vectors.Vector;
       begin
+         Changed_Sides (Repo, Objects, Old_Id, New_Id, Old_Changed, New_Changed);
          return
            Diff_Sides
              (Repo        => Repo,
               Objects     => Objects,
-              Old_Side    =>
-                From_Tree
-                  (Tree_For_Commit
-                     (Repo      => Repo,
-                      Objects   => Objects,
-                      Trees     => Trees,
-                      Commit_Id => Old_Id)),
-              New_Side    =>
-                From_Tree
-                  (Tree_For_Commit
-                     (Repo      => Repo,
-                      Objects   => Objects,
-                      Trees     => Trees,
-                      Commit_Id => New_Id)),
+              Old_Side    => From_Tree (Old_Changed),
+              New_Side    => From_Tree (New_Changed),
               New_Working => False,
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,
@@ -3986,30 +4092,15 @@ package body Version.Diff is
 
       declare
          Objects : Version.Object_Cache.Object_Cache;
-         Trees   : Version.Tree_Cache.Tree_Cache;
+         Old_Changed, New_Changed : Version.Objects.Tree_Entry_Vectors.Vector;
       begin
+         Changed_Sides (Repo, Objects, Old_Id, New_Id, Old_Changed, New_Changed);
          return
            Diff_Sides
              (Repo        => Repo,
               Objects     => Objects,
-              Old_Side    =>
-                Filter_Side
-                  (From_Tree
-                     (Tree_For_Commit
-                        (Repo      => Repo,
-                         Objects   => Objects,
-                         Trees     => Trees,
-                         Commit_Id => Old_Id)),
-                   Pathspecs),
-              New_Side    =>
-                Filter_Side
-                  (From_Tree
-                     (Tree_For_Commit
-                        (Repo      => Repo,
-                         Objects   => Objects,
-                         Trees     => Trees,
-                         Commit_Id => New_Id)),
-                   Pathspecs),
+              Old_Side    => Filter_Side (From_Tree (Old_Changed), Pathspecs),
+              New_Side    => Filter_Side (From_Tree (New_Changed), Pathspecs),
               New_Working => False,
               Context => Options.Context_Lines,
               Stat => Options.Stat, Summary => Options.Summary,

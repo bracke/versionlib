@@ -66,7 +66,7 @@ package body Version.Working_Tree is
          if Now.Available
            and then Held.Size = Long_Long_Integer (Now.Size) mod 2 ** 32
            and then Held.Mtime_S = S mod 2 ** 32
-           and then (Held.Mtime_Ns = 0 or else Held.Mtime_Ns = Ns)
+           and then Held.Mtime_Ns /= 0 and then Held.Mtime_Ns = Ns
            and then (S < Index.Index_S or else (S = Index.Index_S and then Ns < Index.Index_Ns))
          then
             Id := Held.Id;
@@ -592,5 +592,20 @@ package body Version.Working_Tree is
 
       return Result;
    end Scan;
+
+   function Working_Blob_Id
+     (Repo          : Version.Repository.Repository_Handle;
+      Relative_Path : String)
+      return Version.Objects.Object_Id_Storage
+   is
+      Full : constant String := Version.Files.Join (Version.Repository.Root_Path (Repo), Relative_Path);
+   begin
+      return Blob_Id_For_Content
+        ((if Version.Text_Filter.Is_Active (Repo)
+          then Version.Text_Filter.Clean_Content
+                 (Repo => Repo, Relative_Path => Relative_Path, Content => Read_File_As_String (Full))
+          else Read_File_As_String (Full)),
+         Version.Repository.Algorithm (Repo));
+   end Working_Blob_Id;
 
 end Version.Working_Tree;

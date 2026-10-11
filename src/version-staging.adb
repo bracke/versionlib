@@ -1,7 +1,6 @@
 with Ada.Directories;
 with Ada.Environment_Variables; use Ada.Directories;
 with Ada.IO_Exceptions;
-with Ada.Calendar;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Containers; use Ada.Containers;
@@ -10,7 +9,9 @@ with Version.Hash;
 with Version.Path_Safety;
 with Version.Files;
 with Version.Platform;
-with Version.Timestamps;
+with Version.Working_Tree;
+with Hostkit.Metadata;
+with Interfaces;
 
 package body Version.Staging is
 
@@ -415,8 +416,14 @@ package body Version.Staging is
                            Stats.Include
                              (Name,
                               (Id       => Id,
+                               Ctime_S  => Field (Data, E_Start),
+                               Ctime_Ns => Field (Data, E_Start + 4),
                                Mtime_S  => Field (Data, E_Start + 8),
                                Mtime_Ns => Field (Data, E_Start + 12),
+                               Dev      => Field (Data, E_Start + 16),
+                               Ino      => Field (Data, E_Start + 20),
+                               Uid      => Field (Data, E_Start + 28),
+                               Gid      => Field (Data, E_Start + 32),
                                Size     => Field (Data, E_Start + 36)));
                         end if;
                      end;
@@ -544,13 +551,6 @@ package body Version.Staging is
          raise;
    end Write_String_File;
 
-   function Unix_Time
-   (T : Ada.Calendar.Time)
-      return Natural
-   is
-   begin
-      return Natural (Version.Timestamps.To_Unix (T));
-   end Unix_Time;
    function File_Size_Natural
    (Path : String)
       return Natural
@@ -562,10 +562,6 @@ package body Version.Staging is
    function Blob_Size_Natural
      (Repo : Version.Repository.Repository_Handle;
       Id   : Version.Objects.Hex_Object_Id)
-      return Natural;
-
-   function Entry_Mtime
-     (Path : String)
       return Natural;
 
    function Entry_File_Size
@@ -585,6 +581,74 @@ package body Version.Staging is
       Index_Path : constant String := Index_File_Path (Repo);
 
       Lock_Path : constant String := Index_Path & ".lock";
+
+      --  What the index held of each file, kept where the entry holds the
+      --  same object: stat data is the file as it was staged, not as it is
+      --  when some later change rewrites the index.
+      function Previous_Stats return Stat_Maps.Map is
+      begin
+         return Load_Stats (Repo);
+      exception
+         when others =>
+            return Stat_Maps.Empty_Map;
+      end Previous_Stats;
+
+      Previous : constant Stat_Maps.Map := Previous_Stats;
+
+      --  An entry's stat data: kept from before for the same object; taken
+      --  now for a regular file that holds the entry's object as it stands
+      --  -- stat first, then read, so a write between is seen later; zero
+      --  otherwise, which no reader believes, as git writes an entry it
+      --  has not checked against its file.
+      function Stat_For (Path : String; Item : Index_Entry; Mode : String) return Stat_Entry is
+         Kept : constant Stat_Maps.Cursor := Previous.Find (Path);
+         None : constant Stat_Entry := (Id => Item.Id, others => <>);
+      begin
+         if Mode not in "100644" | "100755" or else Item.Stage /= 0 then
+            return None;
+         end if;
+         if Stat_Maps.Has_Element (Kept)
+           and then Stat_Maps.Element (Kept).Id = Item.Id
+           and then Stat_Maps.Element (Kept).Mtime_Ns /= 0
+         then
+            return Stat_Maps.Element (Kept);
+         end if;
+         declare
+            Full     : constant String := Join (Version.Repository.Root_Path (Repo), Path);
+            Now      : constant Hostkit.Metadata.Entry_Revision := Hostkit.Metadata.Entry_Revision_Of (Full);
+            Identity : constant Hostkit.Metadata.Entry_Identity := Hostkit.Metadata.Entry_Identity_Of (Full);
+            use type Interfaces.Unsigned_64;
+            Wrap     : constant Interfaces.Unsigned_64 := 2 ** 32;
+         begin
+            if not Now.Available or else Now.Modified_Nanoseconds = 0
+              or else Version.Working_Tree.Working_Blob_Id (Repo, Path) /= Item.Id
+            then
+               return None;
+            end if;
+            return
+              (Id       => Item.Id,
+               Ctime_S  => Long_Long_Integer (Now.Changed_Seconds mod Wrap),
+               Ctime_Ns => Long_Long_Integer (Now.Changed_Nanoseconds mod Wrap),
+               Mtime_S  => Long_Long_Integer (Now.Modified_Seconds mod Wrap),
+               Mtime_Ns => Long_Long_Integer (Now.Modified_Nanoseconds mod Wrap),
+               Dev      => (if Identity.Available then Long_Long_Integer (Identity.Volume mod Wrap) else 0),
+               Ino      => (if Identity.Available then Long_Long_Integer (Identity.File_Number mod Wrap) else 0),
+               Uid      => Long_Long_Integer (Now.User_Id mod Wrap),
+               Gid      => Long_Long_Integer (Now.Group_Id mod Wrap),
+               Size     => Long_Long_Integer (Now.Size mod Wrap));
+         end;
+      exception
+         when others =>
+            return None;
+      end Stat_For;
+
+      procedure Append_Field (Value : Long_Long_Integer) is
+      begin
+         Append (Buffer, Character'Val ((Value / 16#1000000#) mod 256));
+         Append (Buffer, Character'Val ((Value / 16#10000#) mod 256));
+         Append (Buffer, Character'Val ((Value / 16#100#) mod 256));
+         Append (Buffer, Character'Val (Value mod 256));
+      end Append_Field;
    begin
       Sort_By_Path (Items);
 
@@ -633,11 +697,11 @@ package body Version.Staging is
                Work_Path : constant String :=
                  Join (Version.Repository.Root_Path (Repo), Path_Text);
 
-               Mtime : constant Natural :=
-                 Entry_Mtime (Work_Path);
+               Stat : constant Stat_Entry := Stat_For (Path_Text, Index_Item, Mode_Text);
 
                File_Size : constant Natural :=
-                 Entry_File_Size (Repo, Work_Path, Index_Item.Id, Mode_Text);
+                 (if Stat.Mtime_Ns /= 0 then Natural (Stat.Size mod 2 ** 31)
+                  else Entry_File_Size (Repo, Work_Path, Index_Item.Id, Mode_Text));
                Entry_Start_Length : constant Natural := Length (Buffer);
 
                Name_Len : constant Natural :=
@@ -645,27 +709,22 @@ package body Version.Staging is
                   then 16#FFF#
                   else Path_Text'Length);
             begin
-               --  Ctime seconds/nanoseconds
-               --  Ada does not expose ctime portably; use mtime.
-               Append_U32_BE (Buffer, Mtime);
-               Append_U32_BE (Buffer, 0);
-
-               --  Mtime seconds/nanoseconds
-               Append_U32_BE (Buffer, Mtime);
-               Append_U32_BE (Buffer, 0);
-
-               --  Dev, ino
-               --  Ada does not expose these portably; zero is acceptable.
-               Append_U32_BE (Buffer, 0);
-               Append_U32_BE (Buffer, 0);
+               --  Ctime, mtime (seconds and nanoseconds), dev and ino: the
+               --  file as it was when it held this entry's object, or zero.
+               Append_Field (Stat.Ctime_S);
+               Append_Field (Stat.Ctime_Ns);
+               Append_Field (Stat.Mtime_S);
+               Append_Field (Stat.Mtime_Ns);
+               Append_Field (Stat.Dev);
+               Append_Field (Stat.Ino);
 
                --  Mode
                Append_U32_BE (Buffer, Mode_Value (Mode_Text));
 
                --  Uid, gid, file size
-               Append_U32_BE (Buffer, 0);
-               Append_U32_BE (Buffer, 0);
-               Append_U32_BE (Buffer, File_Size);
+               Append_Field (Stat.Uid);
+               Append_Field (Stat.Gid);
+               Append_Field ((if Stat.Mtime_Ns /= 0 then Stat.Size else Long_Long_Integer (File_Size)));
 
                --  Object id
                Append (Buffer, To_Raw (Index_Item.Id));
@@ -751,18 +810,6 @@ package body Version.Staging is
 
       return Version.Objects.Content (Obj)'Length;
    end Blob_Size_Natural;
-
-   function Entry_Mtime
-     (Path : String)
-      return Natural
-   is
-   begin
-      if Version.Files.Exists (Path) then
-         return Unix_Time (Ada.Directories.Modification_Time (Path));
-      else
-         return Unix_Time (Ada.Calendar.Clock);
-      end if;
-   end Entry_Mtime;
 
    function Entry_File_Size
      (Repo : Version.Repository.Repository_Handle;

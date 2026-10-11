@@ -36,26 +36,6 @@ package body Version.Tree_Cache is
       end;
    end Flatten_Tree;
 
-   function Level
-     (Repo    : Version.Repository.Repository_Handle;
-      Cache   : in out Tree_Cache;
-      Tree_Id : Version.Objects.Hex_Object_Id)
-      return Version.Objects.Tree_Entry_Vectors.Vector
-   is
-      Pos : constant Tree_Maps.Cursor := Cache.Levels.Find (Tree_Id);
-   begin
-      if Tree_Maps.Has_Element (Pos) then
-         return Tree_Maps.Element (Pos);
-      end if;
-      declare
-         Entries : constant Version.Objects.Tree_Entry_Vectors.Vector :=
-           Version.Objects.Tree_Entries (Repo => Repo, Tree_Id => Tree_Id);
-      begin
-         Cache.Levels.Include (Tree_Id, Entries);
-         return Entries;
-      end;
-   end Level;
-
    function Entries_Under
      (Repo    : Version.Repository.Repository_Handle;
       Cache   : in out Tree_Cache;
@@ -85,43 +65,40 @@ package body Version.Tree_Cache is
             end loop;
             declare
                Name  : constant String := Limit (Start .. Stop - 1);
-               Here  : constant Version.Objects.Tree_Entry_Vectors.Vector :=
-                 Level (Repo, Cache, Tree);
                Found : Boolean := False;
+               E     : Version.Objects.Tree_Entry;
             begin
-               for E of Here loop
-                  if To_String (E.Path) = Name then
-                     Found := True;
-                     if Stop > Limit'Last then
-                        --  The limit itself: a file, or a whole subtree.
-                        if E.Kind = Version.Objects.Tree_Directory then
-                           for Sub of Flatten_Tree (Repo, Cache, E.Id) loop
-                              Result.Append
-                                (Version.Objects.Tree_Entry'
-                                   (Path => To_Unbounded_String
-                                              (Limit & "/" & To_String (Sub.Path)),
-                                    Id   => Sub.Id,
-                                    Kind => Sub.Kind,
-                                    Mode => Sub.Mode));
-                           end loop;
-                        else
+               --  One entry of each level, found where it is.
+               Version.Objects.Find_Tree_Entry (Repo, Tree, Name, Found, E);
+               if Found then
+                  if Stop > Limit'Last then
+                     --  The limit itself: a file, or a whole subtree.
+                     if E.Kind = Version.Objects.Tree_Directory then
+                        for Sub of Flatten_Tree (Repo, Cache, E.Id) loop
                            Result.Append
                              (Version.Objects.Tree_Entry'
-                                (Path => To_Unbounded_String (Limit),
-                                 Id   => E.Id,
-                                 Kind => E.Kind,
-                                 Mode => E.Mode));
-                        end if;
-                        return Result;
-                     elsif E.Kind = Version.Objects.Tree_Directory then
-                        Tree := E.Id;
+                                (Path => To_Unbounded_String
+                                           (Limit & "/" & To_String (Sub.Path)),
+                                 Id   => Sub.Id,
+                                 Kind => Sub.Kind,
+                                 Mode => Sub.Mode));
+                        end loop;
                      else
-                        --  A file where the limit expects a directory.
-                        return Result;
+                        Result.Append
+                          (Version.Objects.Tree_Entry'
+                             (Path => To_Unbounded_String (Limit),
+                              Id   => E.Id,
+                              Kind => E.Kind,
+                              Mode => E.Mode));
                      end if;
-                     exit;
+                     return Result;
+                  elsif E.Kind = Version.Objects.Tree_Directory then
+                     Tree := E.Id;
+                  else
+                     --  A file where the limit expects a directory.
+                     return Result;
                   end if;
-               end loop;
+               end if;
                if not Found then
                   return Result;
                end if;

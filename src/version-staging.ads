@@ -44,10 +44,18 @@ package Version.Staging is
    --  object without being read.
    type Stat_Entry is record
       Id       : Version.Objects.Object_Id_Storage;
+      Ctime_S  : Long_Long_Integer := 0;
+      Ctime_Ns : Long_Long_Integer := 0;
       Mtime_S  : Long_Long_Integer := 0;
-      --  Zero where the writer kept whole seconds only, as this library's
-      --  writer does: then the seconds alone are compared.
+      --  Zero where the writer kept whole seconds only -- this library's
+      --  writer did, and recorded the file as it was when the index was
+      --  written, not as it was staged -- or zeroed it as unchecked: such
+      --  an entry is never believed.
       Mtime_Ns : Long_Long_Integer := 0;
+      Dev      : Long_Long_Integer := 0;
+      Ino      : Long_Long_Integer := 0;
+      Uid      : Long_Long_Integer := 0;
+      Gid      : Long_Long_Integer := 0;
       --  The size modulo 2**32, as the index holds it.
       Size     : Long_Long_Integer := 0;
    end record;

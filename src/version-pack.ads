@@ -84,9 +84,12 @@ package Version.Pack is
    --  Every object id listed in the repository's pack index (`*.idx`) files.
    --  Used by `cat-file --batch-all-objects` together with the loose objects.
 
-   procedure Release_Cached_Files;
+   procedure Release_Cached_Files (Above : Natural := 0);
    --  Let go of the pack and index files read so far, which are otherwise
    --  kept for the life of the process: for a program that embeds the
-   --  library and runs on long after a command. Not while a command runs.
+   --  library and runs on long after a command. Only where they come to
+   --  more than Above bytes: a program can keep a small repository's packs
+   --  between commands and still not hold a large one's. Not while a
+   --  command runs.
 
 end Version.Pack;

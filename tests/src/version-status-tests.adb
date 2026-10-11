@@ -203,6 +203,58 @@ package body Version.Status.Tests is
          raise;
    end Modified_Unstaged_File;
 
+   --  A file changed and not staged stays changed when the index is
+   --  written for another: the index keeps the stat data of the file as
+   --  it was staged, so the stat cache cannot take the change for the
+   --  staged content -- and git, reading the index this library wrote,
+   --  sees the same.
+   procedure Unstaged_Change_Survives_Index_Write
+   (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      Root : constant String :=
+      Version.Temp_Fixture.Root
+         (Version.Temp_Fixture.Test_Case (T));
+      Listing : constant String := Root & "-status.txt";
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+
+      --  What git wrote, its last line end or none alike.
+      function Said return String is
+         Text : constant String := Version.Test_Support.Read_Text_File (Listing);
+      begin
+         return (if Text'Length > 0 and then Text (Text'Last) = Character'Val (10)
+                 then Text (Text'First .. Text'Last - 1) else Text);
+      end Said;
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "a.txt"), "changed but not staged" & Character'Val (10));
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, "b.txt"), "new" & Character'Val (10));
+      Ada.Directories.Set_Directory (Root);
+      Version.Stage.Stage_Path ("b.txt");
+      for Round in 1 .. 2 loop
+         declare
+            Result : constant Version.Status.Status_Result := Version.Status.Current_Status;
+         begin
+            Assert (Has_Change (Result.Changes, "a.txt", Version.Status.Modified_File),
+                    "a file changed and not staged was taken as unchanged after the index was written");
+            Assert (Has_Change (Result.Staged, "b.txt", Version.Status.New_File),
+                    "the staged file is not staged");
+         end;
+      end loop;
+      Version.Git_Fixtures.Run (Root, "git status --porcelain > '" & Listing & "'");
+      Assert (Said = " M a.txt" & Character'Val (10) & "A  b.txt",
+              "git reads the index otherwise: " & Said);
+      --  The staged file's stat data is the file's: git finds nothing to
+      --  look at again.
+      Version.Git_Fixtures.Run (Root, "git diff-files --name-only > '" & Listing & "'");
+      Assert (Said = "a.txt", "git sees files changed that are not: " & Said);
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Unstaged_Change_Survives_Index_Write;
+
    procedure Modified_Staged_File
    (T : in out AUnit.Test_Cases.Test_Case'Class) is
       Root : constant String :=
@@ -1018,6 +1070,9 @@ package body Version.Status.Tests is
 
       AUnit.Test_Cases.Registration.Register_Routine (T, Modified_Unstaged_File'Access,
                         "Status: modified unstaged file");
+
+      AUnit.Test_Cases.Registration.Register_Routine (T, Unstaged_Change_Survives_Index_Write'Access,
+                        "Status: an unstaged change survives an index write for another file");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T, LFS_Pointer_Status_Is_Ordinary_Modified_File'Access,

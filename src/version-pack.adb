@@ -109,8 +109,15 @@ package body Version.Pack is
 
    procedure Free is new Ada.Unchecked_Deallocation (Stream_Element_Array, Stream_Array_Access);
 
-   procedure Release_Cached_Files is
+   procedure Release_Cached_Files (Above : Natural := 0) is
+      Total : Long_Long_Integer := 0;
    begin
+      for Held of Data_Cache loop
+         Total := Total + Long_Long_Integer (Held'Length);
+      end loop;
+      if Total <= Long_Long_Integer (Above) then
+         return;
+      end if;
       for Held of Data_Cache loop
          Free (Held);
       end loop;

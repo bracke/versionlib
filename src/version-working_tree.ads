@@ -40,4 +40,11 @@ package Version.Working_Tree is
    --  still traversed conservatively, but ordinary files and gitlinks that
    --  cannot contribute to the requested pathspecs are not hashed/appended.
 
+   function Working_Blob_Id
+     (Repo          : Version.Repository.Repository_Handle;
+      Relative_Path : String)
+      return Version.Objects.Object_Id_Storage;
+   --  The object a regular file of the worktree holds as it stands, its
+   --  clean filter applied as staging applies it.
+
 end Version.Working_Tree;
