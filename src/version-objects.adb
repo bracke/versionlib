@@ -1,3 +1,5 @@
+with Interfaces.C;
+with System.Storage_Elements;
 with Version.Config;
 with Ada.Unchecked_Deallocation;
 with Ada.Containers.Indefinite_Hashed_Maps;
@@ -36,14 +38,16 @@ package body Version.Objects is
 
    function Id_Length (Id : Object_Id_Storage) return Natural is (Id.Length);
 
+   --  Compared where the text lies, not through a copy of each: an
+   --  ordered map of ids asks this at every node of every lookup.
    function "<" (Left, Right : Object_Id_Storage) return Boolean is
-     (To_String (Left) < To_String (Right));
+     (Left.Text (1 .. Left.Length) < Right.Text (1 .. Right.Length));
 
    function "=" (Left : Object_Id_Storage; Right : String) return Boolean is
-     (To_String (Left) = Right);
+     (Left.Text (1 .. Left.Length) = Right);
 
    function "=" (Left : String; Right : Object_Id_Storage) return Boolean is
-     (Left = To_String (Right));
+     (Left = Right.Text (1 .. Right.Length));
 
    function Is_Hex_Digit (C : Character) return Boolean is
    begin
@@ -1031,6 +1035,11 @@ package body Version.Objects is
       return Result;
    end Flatten_Tree;
 
+   function C_Memchr
+     (Block : System.Address; Value : Interfaces.C.int; Size : Interfaces.C.size_t)
+      return System.Address
+     with Import, Convention => C, External_Name => "memchr";
+
    procedure Find_Tree_Entry
      (Repo    : Version.Repository.Repository_Handle;
       Tree_Id : Hex_Object_Id;
@@ -1051,18 +1060,34 @@ package body Version.Objects is
       if Obj.Kind_Value /= Tree_Object then
          raise Ada.IO_Exceptions.Data_Error with "object is not a tree";
       end if;
-      --  A byte loop to each entry's space and NUL, the name compared only
-      --  where its length is the one asked for: a search call an entry was
-      --  most of a path-limited history.
+      --  Each entry's space found where a mode puts it (git writes five
+      --  or six digits) and its NUL by memchr, the name compared only where
+      --  its length is the one asked for: a search call an entry was most
+      --  of a path-limited history.
       while Pos <= Data'Last loop
-         Space := Pos;
-         while Space <= Data'Last and then Data (Space) /= ' ' loop
-            Space := Space + 1;
-         end loop;
-         Nul := Space + 1;
-         while Nul <= Data'Last and then Data (Nul) /= Character'Val (0) loop
-            Nul := Nul + 1;
-         end loop;
+         if Pos + 5 <= Data'Last and then Data (Pos + 5) = ' ' then
+            Space := Pos + 5;
+         elsif Pos + 6 <= Data'Last and then Data (Pos + 6) = ' ' then
+            Space := Pos + 6;
+         else
+            Space := Pos;
+            while Space <= Data'Last and then Data (Space) /= ' ' loop
+               Space := Space + 1;
+            end loop;
+         end if;
+         Nul := Data'Last + 1;
+         if Space < Data'Last then
+            declare
+               use type System.Address;
+               use type System.Storage_Elements.Storage_Offset;
+               Found_At : constant System.Address :=
+                 C_Memchr (Data (Space + 1)'Address, 0, Interfaces.C.size_t (Data'Last - Space));
+            begin
+               if Found_At /= System.Null_Address then
+                  Nul := Space + 1 + Natural (Found_At - Data (Space + 1)'Address);
+               end if;
+            end;
+         end if;
          if Space > Data'Last or else Nul > Data'Last or else Nul + Raw_Length > Data'Last then
             raise Ada.IO_Exceptions.Data_Error with "corrupt tree entry";
          end if;
