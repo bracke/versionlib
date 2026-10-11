@@ -4,7 +4,6 @@ with Ada.Calendar.Time_Zones;
 with Ada.Characters.Handling;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
-
 with Version.Config;
 with Version.Files;
 with Version.Mailmap;

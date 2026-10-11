@@ -7,7 +7,7 @@ with System;
 
 with GNAT.OS_Lib;
 
-with Hostkit.FS;
+with Hostkit.Fs;
 
 with Version.Config;
 with Version.Objects; use Version.Objects;
@@ -236,7 +236,7 @@ package body Version.Restore is
       --  Hostkit rather than symlink(2) directly: the C entry point does not
       --  exist on Windows, so importing it broke the link of every executable
       --  built over this library there.
-      if not Hostkit.FS.Create_Link
+      if not Hostkit.Fs.Create_Link
                (Target => Target, Link_Path => Native_Path)
       then
          raise Ada.IO_Exceptions.Use_Error

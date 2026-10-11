@@ -10,12 +10,6 @@ package body Version.Ref_Names is
       return Character'Pos (C) < 32 or else Character'Pos (C) = 127;
    end Is_Control;
 
-   function Starts_With (Value, Prefix : String) return Boolean is
-   begin
-      return Value'Length >= Prefix'Length
-        and then Value (Value'First .. Value'First + Prefix'Length - 1) = Prefix;
-   end Starts_With;
-
    function Ends_With (Value, Suffix : String) return Boolean is
    begin
       return Value'Length >= Suffix'Length

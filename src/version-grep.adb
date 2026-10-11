@@ -1,7 +1,6 @@
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 
-
 with Version.Files;
 with Version.Staging;
 
@@ -822,13 +821,13 @@ package body Version.Grep is
                H := Eval (Node.Left, Line, Col, Icol, False);
                if Collect then
                   State.Nodes.Reference (Node.Left).Hit :=
-                    State.Nodes (Node.Left).Hit or H;
+                    State.Nodes (Node.Left).Hit or else H;
                end if;
                H := Eval (Node.Right, Line, Col, Icol, Collect) or else H;
          end case;
          if Collect then
             Node := State.Nodes (X);
-            Node.Hit := Node.Hit or H;
+            Node.Hit := Node.Hit or else H;
             State.Nodes.Replace_Element (X, Node);
          end if;
          return H;

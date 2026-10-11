@@ -1,5 +1,3 @@
-with Ada.Containers.Vectors;
-
 with Version.Diff;
 with Version.Rebase;
 with Version.Rebase_State;

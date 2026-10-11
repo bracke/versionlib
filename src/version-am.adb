@@ -48,9 +48,6 @@ package body Version.Am is
      (Index_Type   => Positive,
       Element_Type => Unbounded_String);
 
-   function Is_Hex (C : Character) return Boolean is
-     (C in '0' .. '9' | 'a' .. 'f' | 'A' .. 'F');
-
    procedure Split_Lines (S : String; Lines : out Str_Vectors.Vector) is
       Start : Positive := S'First;
    begin

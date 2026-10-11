@@ -620,7 +620,6 @@ package body Version.Diff is
       function Old_Blank (L : Natural) return Boolean is
         (Is_Blank_Line (To_String (Old_Lines.Element (L))));
 
-
       --  The op at which old line S1 / new line S2 starts, and the last op
       --  still inside old line E1 / new line E2.
       function Op_From (S1, S2 : Natural) return Natural is
@@ -877,7 +876,6 @@ package body Version.Diff is
         (if Cnt = 1 then Count_Image (Start + 1)
          elsif Cnt = 0 then Count_Image (Start) & ",0"
          else Count_Image (Start + 1) & "," & Count_Image (Cnt));
-
 
       --  git's ws_check_emit for the default core.whitespace rule
       --  (blank-at-eol, space-before-tab, blank-at-eof): the line painted in
@@ -1179,7 +1177,6 @@ package body Version.Diff is
          New_At (K + 1) :=
            New_At (K) + (if Ops.Element (K).Kind = Op_Delete then 0 else 1);
       end loop;
-
 
       declare
          L1 : constant Natural := Trailing_Blank (Old_Lines);
@@ -2313,95 +2310,95 @@ package body Version.Diff is
          --  per-file bar loop is skipped; the totals it needs were summed
          --  in the pre-pass above.
          for I in Files.First_Index .. Files.Last_Index loop
-           if Show_Stat
-             and then (Stat_Count = 0 or else Shown < Stat_Count)
-           then
-            Shown := Shown + 1;
-            declare
-               F    : constant Stat_Entry := Files.Element (I);
-               Full : constant String := Disp_Name (F);
+            if Show_Stat
+              and then (Stat_Count = 0 or else Shown < Stat_Count)
+            then
+               Shown := Shown + 1;
+               declare
+                  F    : constant Stat_Entry := Files.Element (I);
+                  Full : constant String := Disp_Name (F);
 
-               --  git elides the head of an over-long name as "...", cutting
-               --  back to a path separator when there is one.
-               function Display_Name return String is
-                  Budget : constant Integer := Name_W - 3;
-                  Cut    : Integer;
+                  --  git elides the head of an over-long name as "...", cutting
+                  --  back to a path separator when there is one.
+                  function Display_Name return String is
+                     Budget : constant Integer := Name_W - 3;
+                     Cut    : Integer;
+                  begin
+                     if Full'Length <= Name_W then
+                        return Full;
+                     end if;
+                     Cut := Full'Last - Integer'Max (Budget, 0) + 1;
+                     for J in Cut .. Full'Last loop
+                        if Full (J) = '/' then
+                           return "..." & Full (J .. Full'Last);
+                        end if;
+                     end loop;
+                     return "..." & Full (Cut .. Full'Last);
+                  end Display_Name;
+
+                  Name     : constant String := Display_Name;
+                  Pad_Name : constant String :=
+                    Name & Repeat (' ', Integer'Max (0, Name_W - Name'Length));
                begin
-                  if Full'Length <= Name_W then
-                     return Full;
+                  if F.Binary then
+                     declare
+                        Bin : constant String := "Bin";
+                     begin
+                        Append
+                          (Result,
+                           " " & Pad_Name & " | "
+                           & Repeat (' ', Integer'Max (0, Count_W - Bin'Length))
+                           & Bin
+                           --  apply --stat knows no sizes, so it stops at "Bin".
+                           & (if Apply_Style then ""
+                              else " " & Painted (Del_C, Count_Image (F.Old_Size))
+                                   & " -> "
+                                   & Painted (Add_C, Count_Image (F.New_Size))
+                                   & " bytes")
+                           & LF);
+                     end;
+                  else
+                     declare
+                        Num : constant String := Count_Image (F.Ins + F.Del);
+                        Add : Natural := F.Ins;
+                        Del_N : Natural := F.Del;
+                     begin
+                        --  git scales the bar graph into the graph column when
+                        --  the largest change does not fit.
+                        if Graph_W <= Max_Change and then Max_Change > 0 then
+                           declare
+                              Total : Natural :=
+                                Scale_Linear (Add + Del_N, Graph_W, Max_Change);
+                           begin
+                              if Total < 2 and then Add > 0 and then Del_N > 0 then
+                                 Total := 2;
+                              end if;
+                              if Add < Del_N then
+                                 Add := Scale_Linear (Add, Graph_W, Max_Change);
+                                 Del_N := Total - Add;
+                              else
+                                 Del_N := Scale_Linear (Del_N, Graph_W, Max_Change);
+                                 Add := Total - Del_N;
+                              end if;
+                           end;
+                        end if;
+
+                        Append
+                          (Result,
+                           " " & Pad_Name & " | "
+                           & Repeat (' ', Integer'Max (0, Count_W - Num'Length))
+                           & Num
+                           --  git separates the count from the bars only when
+                           --  there are bars (a pure rename shows a bare "0");
+                           --  apply --stat always leaves the trailing space.
+                           & (if Apply_Style or else F.Ins + F.Del > 0 then " "
+                              else "")
+                           & Painted (Add_C, Repeat ('+', Add))
+                           & Painted (Del_C, Repeat ('-', Del_N)) & LF);
+                     end;
                   end if;
-                  Cut := Full'Last - Integer'Max (Budget, 0) + 1;
-                  for J in Cut .. Full'Last loop
-                     if Full (J) = '/' then
-                        return "..." & Full (J .. Full'Last);
-                     end if;
-                  end loop;
-                  return "..." & Full (Cut .. Full'Last);
-               end Display_Name;
-
-               Name     : constant String := Display_Name;
-               Pad_Name : constant String :=
-                 Name & Repeat (' ', Integer'Max (0, Name_W - Name'Length));
-            begin
-               if F.Binary then
-                  declare
-                     Bin : constant String := "Bin";
-                  begin
-                     Append
-                       (Result,
-                        " " & Pad_Name & " | "
-                        & Repeat (' ', Integer'Max (0, Count_W - Bin'Length))
-                        & Bin
-                        --  apply --stat knows no sizes, so it stops at "Bin".
-                        & (if Apply_Style then ""
-                           else " " & Painted (Del_C, Count_Image (F.Old_Size))
-                                & " -> "
-                                & Painted (Add_C, Count_Image (F.New_Size))
-                                & " bytes")
-                        & LF);
-                  end;
-               else
-                  declare
-                     Num : constant String := Count_Image (F.Ins + F.Del);
-                     Add : Natural := F.Ins;
-                     Del_N : Natural := F.Del;
-                  begin
-                     --  git scales the bar graph into the graph column when
-                     --  the largest change does not fit.
-                     if Graph_W <= Max_Change and then Max_Change > 0 then
-                        declare
-                           Total : Natural :=
-                             Scale_Linear (Add + Del_N, Graph_W, Max_Change);
-                        begin
-                           if Total < 2 and then Add > 0 and then Del_N > 0 then
-                              Total := 2;
-                           end if;
-                           if Add < Del_N then
-                              Add := Scale_Linear (Add, Graph_W, Max_Change);
-                              Del_N := Total - Add;
-                           else
-                              Del_N := Scale_Linear (Del_N, Graph_W, Max_Change);
-                              Add := Total - Del_N;
-                           end if;
-                        end;
-                     end if;
-
-                     Append
-                       (Result,
-                        " " & Pad_Name & " | "
-                        & Repeat (' ', Integer'Max (0, Count_W - Num'Length))
-                        & Num
-                        --  git separates the count from the bars only when
-                        --  there are bars (a pure rename shows a bare "0");
-                        --  apply --stat always leaves the trailing space.
-                        & (if Apply_Style or else F.Ins + F.Del > 0 then " "
-                           else "")
-                        & Painted (Add_C, Repeat ('+', Add))
-                        & Painted (Del_C, Repeat ('-', Del_N)) & LF);
-                  end;
-               end if;
-            end;
-           end if;
+               end;
+            end if;
          end loop;
 
          --  git caps the per-file lines at --stat-count and marks the rest with

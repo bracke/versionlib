@@ -9,7 +9,7 @@ with Interfaces.C_Streams;
 
 with Hostkit.Command_Line;
 with Hostkit.Descriptors;
-with Hostkit.FS;
+with Hostkit.Fs;
 
 package body Version.Platform is
 
@@ -171,7 +171,7 @@ package body Version.Platform is
    end Shell_Program;
 
    function Canonical_Path (Path : String) return String is
-      Resolved : constant String := Hostkit.FS.Real_Path (Path);
+      Resolved : constant String := Hostkit.Fs.Real_Path (Path);
    begin
       return (if Resolved'Length = 0 then Path else Resolved);
    exception

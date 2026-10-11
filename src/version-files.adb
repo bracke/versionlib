@@ -8,7 +8,7 @@ with Ada.Strings.Unbounded;
 with Ada.Task_Attributes;
 with Interfaces; use type Interfaces.Unsigned_32;
 with Interfaces.C;
-with Hostkit.FS;
+with Hostkit.Fs;
 
 with Version.Platform; use Version.Platform;
 with Version.Files.Rollback;
@@ -351,7 +351,7 @@ package body Version.Files is
       --  Hostkit rather than symlink(2) directly: the C entry point does not
       --  exist on Windows, so importing it broke the link of every executable
       --  built over this library there.
-      if not Hostkit.FS.Create_Link (Target => Target, Link_Path => Native) then
+      if not Hostkit.Fs.Create_Link (Target => Target, Link_Path => Native) then
          raise Ada.IO_Exceptions.Use_Error with
            "could not create symlink: " & Path;
       end if;

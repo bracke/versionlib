@@ -20,13 +20,13 @@ package body Version.Color is
    N_Strike  : aliased constant String := "strike";
 
    Attrs : constant array (Positive range <>) of Attr :=
-     ((N_Bold'Access,    1, 22),
+     [(N_Bold'Access,    1, 22),
       (N_Dim'Access,     2, 22),
       (N_Italic'Access,  3, 23),
       (N_Ul'Access,      4, 24),
       (N_Blink'Access,   5, 25),
       (N_Reverse'Access, 7, 27),
-      (N_Strike'Access,  9, 29));
+      (N_Strike'Access,  9, 29)];
 
    type Color_Names is array (0 .. 7) of access constant String;
    C_Black   : aliased constant String := "black";
@@ -38,8 +38,8 @@ package body Version.Color is
    C_Cyan    : aliased constant String := "cyan";
    C_White   : aliased constant String := "white";
    Names : constant Color_Names :=
-     (C_Black'Access, C_Red'Access, C_Green'Access, C_Yellow'Access,
-      C_Blue'Access, C_Magenta'Access, C_Cyan'Access, C_White'Access);
+     [C_Black'Access, C_Red'Access, C_Green'Access, C_Yellow'Access,
+      C_Blue'Access, C_Magenta'Access, C_Cyan'Access, C_White'Access];
 
    function To_Ansi (Spec : String) return String is
       use Ada.Strings.Unbounded;
@@ -61,8 +61,8 @@ package body Version.Color is
       end Add;
 
       --  Attributes recorded as they are parsed, then emitted in table order.
-      Have_Attr : array (Attrs'Range) of Boolean := (others => False);
-      Neg_Attr  : array (Attrs'Range) of Boolean := (others => False);
+      Have_Attr : array (Attrs'Range) of Boolean := [others => False];
+      Neg_Attr  : array (Attrs'Range) of Boolean := [others => False];
 
       function Slot_Value (Word : String) return Integer;
       --  A colour slot value: -1 for "normal", 0..255 for a name or number, or

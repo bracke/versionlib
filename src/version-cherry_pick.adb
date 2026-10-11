@@ -28,7 +28,6 @@ with Version.Trailers;
 with Version.Tree_Cache;
 with Version.Working_Tree;
 with Version.Write;
-with Version.Timestamps;
 
 package body Version.Cherry_Pick is
 
@@ -42,12 +41,6 @@ package body Version.Cherry_Pick is
    end record;
 
    function Join (Left, Right : String) return String renames Version.Files.Join;
-
-   function Natural_Image (Value : Natural) return String is
-      Text : constant String := Natural'Image (Value);
-   begin
-      return Text (Text'First + 1 .. Text'Last);
-   end Natural_Image;
 
    function Branch_Name_From_Ref (Branch_Ref : String) return String is
       Prefix : constant String := "refs/heads/";
@@ -366,11 +359,6 @@ package body Version.Cherry_Pick is
       raise Ada.IO_Exceptions.Data_Error with "invalid cherry-pick commit";
    end Author_Line;
 
-   function Unix_Time_Image return String is
-   begin
-      return Natural_Image (Natural (Version.Timestamps.Unix_Now));
-   end Unix_Time_Image;
-
    function Object_Id_For
      (Repo : Version.Repository.Repository_Handle;
       Kind : String; Content : String) return Version.Objects.Hex_Object_Id
@@ -430,7 +418,6 @@ package body Version.Cherry_Pick is
       return Version.Objects.Hex_Object_Id
    is
       Original_Obj : constant Version.Objects.Git_Object := Version.Objects.Read_Object (Repo, Original);
-      User : constant Version.Config.Identity := Version.Config.User_Identity (Repo);
       Message : constant String :=
         Version.Hooks.Prepare_Commit_Message
           (Repo      => Repo,

@@ -1,5 +1,3 @@
-with Ada.Strings.Unbounded;
-
 package body Version.Log_Graph is
 
    use Ada.Strings.Unbounded;

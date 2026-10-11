@@ -2496,7 +2496,6 @@ package body Version.Rebase is
    package Merges_Id_Sets is new Ada.Containers.Ordered_Sets
      (Element_Type => Version.Objects.Object_Id_Storage);
 
-
    ------------------------  merges todo: generation  ------------------------
 
    --  A label has to be a usable ref component, and it has to be stable across

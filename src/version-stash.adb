@@ -1189,7 +1189,6 @@ package body Version.Stash is
       end;
    end Store;
 
-
    --  The untracked files a stash carries, written back into the working
    --  tree (git's restore_untracked); an existing path is in the way.
    procedure Apply_Untracked_Parent_Tree
@@ -1290,7 +1289,6 @@ package body Version.Stash is
    procedure Rewrite_Stash_Reflog
      (Repo    : Version.Repository.Repository_Handle;
       Entries : Stash_Entry_Vectors.Vector);
-
 
    ---------------------------------------------------------------------------
    --  git's stash_info and the subcommands built on it
@@ -1446,6 +1444,7 @@ package body Version.Stash is
       Base_Items  : Version.Objects.Tree_Entry_Vectors.Vector;
       Other_Items : Version.Objects.Tree_Entry_Vectors.Vector)
    is
+      pragma Unreferenced (Repo);
       Status : constant Version.Status.Status_Result :=
         Version.Status.Current_Status;
       Blocked : Unbounded_String;

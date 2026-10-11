@@ -1099,165 +1099,164 @@ package body Version.Ref_Format is
          end if;
       end Atom_Value;
 
-
-   --  Block constructs -- %(align:...)...%(end) and %(if)...%(then)...
-   --  %(else)...%(end) -- wrap other atoms, so they are handled by scanning
-   --  to the matching %(end) (counting nesting) and expanding the body.
-   function Opener_At (Pos : Natural) return String is
-   begin
-      --  The atom name of a "%(...)" starting at Pos, or "" if not one.
-      if Pos + 1 <= Format'Last
-        and then Format (Pos) = '%' and then Format (Pos + 1) = '('
-      then
-         for K in Pos + 2 .. Format'Last loop
-            exit when Format (K) = ')' or else Format (K) = ':';
-            if Format (K) not in 'a' .. 'z' then
-               return "";
-            end if;
-         end loop;
-         declare
-            Stop : Natural := Pos + 2;
-         begin
-            while Stop <= Format'Last
-              and then Format (Stop) /= ')' and then Format (Stop) /= ':'
-            loop
-               Stop := Stop + 1;
-            end loop;
-            return Format (Pos + 2 .. Stop - 1);
-         end;
-      end if;
-      return "";
-   end Opener_At;
-
-   --  The index of the '%' of the %(end) that closes the block opened at
-   --  From (which is the '%' of the opener). Nested align/if are balanced.
-   function Matching_End (From : Natural) return Natural is
-      Depth : Natural := 0;
-      K     : Natural := From;
-   begin
-      while K <= Format'Last loop
-         if K + 1 <= Format'Last and then Format (K) = '%'
-           and then Format (K + 1) = '('
+      --  Block constructs -- %(align:...)...%(end) and %(if)...%(then)...
+      --  %(else)...%(end) -- wrap other atoms, so they are handled by scanning
+      --  to the matching %(end) (counting nesting) and expanding the body.
+      function Opener_At (Pos : Natural) return String is
+      begin
+         --  The atom name of a "%(...)" starting at Pos, or "" if not one.
+         if Pos + 1 <= Format'Last
+           and then Format (Pos) = '%' and then Format (Pos + 1) = '('
          then
-            declare
-               Head : constant String := Opener_At (K);
-            begin
-               if Head = "align" or else Head = "if" then
-                  Depth := Depth + 1;
-               elsif Head = "end" then
-                  Depth := Depth - 1;
-                  if Depth = 0 then
-                     return K;
-                  end if;
+            for K in Pos + 2 .. Format'Last loop
+               exit when Format (K) = ')' or else Format (K) = ':';
+               if Format (K) not in 'a' .. 'z' then
+                  return "";
                end if;
-            end;
-         end if;
-         K := K + 1;
-      end loop;
-      return 0;
-   end Matching_End;
-
-   --  The index of the '%' of a top-level %(<Tok>) inside Body (nested blocks
-   --  skipped), or 0.
-   function Top_Level (Body_Str : String; Tok : String) return Natural is
-      Depth : Natural := 0;
-      K     : Natural := Body_Str'First;
-   begin
-      while K <= Body_Str'Last loop
-         if K + 1 <= Body_Str'Last and then Body_Str (K) = '%'
-           and then Body_Str (K + 1) = '('
-         then
+            end loop;
             declare
-               Stop : Natural := K + 2;
+               Stop : Natural := Pos + 2;
             begin
-               while Stop <= Body_Str'Last
-                 and then Body_Str (Stop) /= ')'
-                 and then Body_Str (Stop) /= ':'
+               while Stop <= Format'Last
+                 and then Format (Stop) /= ')' and then Format (Stop) /= ':'
                loop
                   Stop := Stop + 1;
                end loop;
+               return Format (Pos + 2 .. Stop - 1);
+            end;
+         end if;
+         return "";
+      end Opener_At;
+
+      --  The index of the '%' of the %(end) that closes the block opened at
+      --  From (which is the '%' of the opener). Nested align/if are balanced.
+      function Matching_End (From : Natural) return Natural is
+         Depth : Natural := 0;
+         K     : Natural := From;
+      begin
+         while K <= Format'Last loop
+            if K + 1 <= Format'Last and then Format (K) = '%'
+              and then Format (K + 1) = '('
+            then
                declare
-                  Head : constant String := Body_Str (K + 2 .. Stop - 1);
+                  Head : constant String := Opener_At (K);
                begin
                   if Head = "align" or else Head = "if" then
                      Depth := Depth + 1;
                   elsif Head = "end" then
                      Depth := Depth - 1;
-                  elsif Depth = 0 and then Head = Tok then
-                     return K;
+                     if Depth = 0 then
+                        return K;
+                     end if;
                   end if;
                end;
-            end;
-         end if;
-         K := K + 1;
-      end loop;
-      return 0;
-   end Top_Level;
+            end if;
+            K := K + 1;
+         end loop;
+         return 0;
+      end Matching_End;
 
-   --  Pad Text to Width in the given position, git's %(align).
-   function Pad_Align (Text : String; Args : String) return String is
-      Width : Natural := 0;
-      Pos   : String (1 .. 6) := "left  ";
-      Pos_Last : Natural := 4;
-
-      procedure Take (Field : String) is
+      --  The index of the '%' of a top-level %(<Tok>) inside Body (nested blocks
+      --  skipped), or 0.
+      function Top_Level (Body_Str : String; Tok : String) return Natural is
+         Depth : Natural := 0;
+         K     : Natural := Body_Str'First;
       begin
-         if Starts_With (Field, "width=") then
-            Width := Natural'Value (Field (Field'First + 6 .. Field'Last));
-         elsif Starts_With (Field, "position=") then
-            declare
-               V : constant String := Field (Field'First + 9 .. Field'Last);
-            begin
-               Pos (1 .. V'Length) := V;
-               Pos_Last := V'Length;
-            end;
-         elsif Field = "left" or else Field = "right"
-           or else Field = "middle"
-         then
-            Pos (1 .. Field'Length) := Field;
-            Pos_Last := Field'Length;
-         else
-            begin
-               Width := Natural'Value (Field);
-            exception
-               when others => null;
-            end;
-         end if;
-      end Take;
+         while K <= Body_Str'Last loop
+            if K + 1 <= Body_Str'Last and then Body_Str (K) = '%'
+              and then Body_Str (K + 1) = '('
+            then
+               declare
+                  Stop : Natural := K + 2;
+               begin
+                  while Stop <= Body_Str'Last
+                    and then Body_Str (Stop) /= ')'
+                    and then Body_Str (Stop) /= ':'
+                  loop
+                     Stop := Stop + 1;
+                  end loop;
+                  declare
+                     Head : constant String := Body_Str (K + 2 .. Stop - 1);
+                  begin
+                     if Head = "align" or else Head = "if" then
+                        Depth := Depth + 1;
+                     elsif Head = "end" then
+                        Depth := Depth - 1;
+                     elsif Depth = 0 and then Head = Tok then
+                        return K;
+                     end if;
+                  end;
+               end;
+            end if;
+            K := K + 1;
+         end loop;
+         return 0;
+      end Top_Level;
 
-      First : Natural := Args'First;
-   begin
-      --  Args is "<width>,<pos>" or "width=..,position=..".
-      while First <= Args'Last loop
-         declare
-            Comma : Natural := First;
+      --  Pad Text to Width in the given position, git's %(align).
+      function Pad_Align (Text : String; Args : String) return String is
+         Width : Natural := 0;
+         Pos   : String (1 .. 6) := "left  ";
+         Pos_Last : Natural := 4;
+
+         procedure Take (Field : String) is
          begin
-            while Comma <= Args'Last and then Args (Comma) /= ',' loop
-               Comma := Comma + 1;
-            end loop;
-            Take (Args (First .. Comma - 1));
-            First := Comma + 1;
-         end;
-      end loop;
+            if Starts_With (Field, "width=") then
+               Width := Natural'Value (Field (Field'First + 6 .. Field'Last));
+            elsif Starts_With (Field, "position=") then
+               declare
+                  V : constant String := Field (Field'First + 9 .. Field'Last);
+               begin
+                  Pos (1 .. V'Length) := V;
+                  Pos_Last := V'Length;
+               end;
+            elsif Field = "left" or else Field = "right"
+              or else Field = "middle"
+            then
+               Pos (1 .. Field'Length) := Field;
+               Pos_Last := Field'Length;
+            else
+               begin
+                  Width := Natural'Value (Field);
+               exception
+                  when others => null;
+               end;
+            end if;
+         end Take;
 
-      if Text'Length >= Width then
-         return Text;
-      end if;
-
-      declare
-         Pad : constant Natural := Width - Text'Length;
-         P   : constant String := Pos (1 .. Pos_Last);
+         First : Natural := Args'First;
       begin
-         if P = "right" then
-            return (1 .. Pad => ' ') & Text;
-         elsif P = "middle" then
-            return (1 .. Pad / 2 => ' ') & Text
-              & (1 .. Pad - Pad / 2 => ' ');
-         else
-            return Text & (1 .. Pad => ' ');
+         --  Args is "<width>,<pos>" or "width=..,position=..".
+         while First <= Args'Last loop
+            declare
+               Comma : Natural := First;
+            begin
+               while Comma <= Args'Last and then Args (Comma) /= ',' loop
+                  Comma := Comma + 1;
+               end loop;
+               Take (Args (First .. Comma - 1));
+               First := Comma + 1;
+            end;
+         end loop;
+
+         if Text'Length >= Width then
+            return Text;
          end if;
-      end;
-   end Pad_Align;
+
+         declare
+            Pad : constant Natural := Width - Text'Length;
+            P   : constant String := Pos (1 .. Pos_Last);
+         begin
+            if P = "right" then
+               return (1 .. Pad => ' ') & Text;
+            elsif P = "middle" then
+               return (1 .. Pad / 2 => ' ') & Text
+                 & (1 .. Pad - Pad / 2 => ' ');
+            else
+               return Text & (1 .. Pad => ' ');
+            end if;
+         end;
+      end Pad_Align;
 
    begin
       while I <= Format'Last loop

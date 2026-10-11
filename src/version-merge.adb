@@ -10,7 +10,7 @@ with Interfaces.C;
 with System;
 with GNAT.OS_Lib;
 
-with Hostkit.FS;
+with Hostkit.Fs;
 
 with Version.Text_Filter;
 with Version.Config;
@@ -54,7 +54,6 @@ package body Version.Merge is
 
    package Path_Sets is new Ada.Containers.Indefinite_Ordered_Sets
      (Element_Type => String);
-
 
    --  Line -> equivalence class, git's minimal-perfect-hash of a record.
    package Class_Maps is new Ada.Containers.Indefinite_Ordered_Maps
@@ -3167,7 +3166,7 @@ package body Version.Merge is
             --  Hostkit rather than symlink(2) directly: the C entry point
             --  does not exist on Windows, so importing it broke the link of
             --  every executable built over this library there.
-            if not Hostkit.FS.Create_Link
+            if not Hostkit.Fs.Create_Link
                      (Target => Target, Link_Path => Native_Path)
             then
                raise Ada.IO_Exceptions.Use_Error with
