@@ -5,6 +5,7 @@ with Ada.IO_Exceptions;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
+with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Version.Files;
@@ -15,6 +16,33 @@ package body Version.Pack_Index_Cache is
    use Ada.Streams;
    use Ada.Strings.Unbounded;
    use Interfaces;
+
+   procedure Free is new Ada.Unchecked_Deallocation (Location_Maps.Map, Map_Access);
+
+   --  What a cache with no locations reads.
+   Empty : constant Map_Access := new Location_Maps.Map;
+
+   function Map (Item : Cache) return Map_Access is
+     (if Item.Locations = null then Empty else Item.Locations);
+
+   --  The cache's own map, to change: a shared one copied first.
+   procedure Own (Item : in out Cache) is
+   begin
+      if Item.Locations = null then
+         Item.Locations := new Location_Maps.Map;
+      elsif Item.Shared then
+         Item.Locations := new Location_Maps.Map'(Item.Locations.all);
+      end if;
+      Item.Shared := False;
+   end Own;
+
+   --  The last map Load built for a pack directory, and what that
+   --  directory's indexes were then: their names, sizes and times. One
+   --  directory's at a time; one replaced is left to whoever still holds
+   --  it, as a cache that has it does.
+   Last_Directory : Unbounded_String;
+   Last_Signature : Unbounded_String;
+   Last_Map       : Map_Access;
 
    subtype U32 is Interfaces.Unsigned_32;
    subtype U64 is Interfaces.Unsigned_64;
@@ -221,6 +249,7 @@ package body Version.Pack_Index_Cache is
       RL         : constant Stream_Element_Offset :=
         Stream_Element_Offset (Raw_Length);
    begin
+      Own (Item);
       if Magic /= 16#FF744F63# then
          raise Ada.IO_Exceptions.Data_Error with
            "unsupported pack index: missing v2 magic";
@@ -287,7 +316,7 @@ package body Version.Pack_Index_Cache is
                        Pack_Size - U64 (Raw_Length);
                   end if;
 
-                  Item.Locations.Include
+                  Item.Locations.all.Include
                     (Current_Entry.Id,
                      (Found      => True,
                       Pack_Path  => Current_Entry.Pack_Path,
@@ -302,8 +331,17 @@ package body Version.Pack_Index_Cache is
    procedure Clear (Item : in out Cache) is
    begin
       Item.Loaded := False;
-      Item.Locations.Clear;
+      if not Item.Shared then
+         Free (Item.Locations);
+      end if;
+      Item.Locations := null;
+      Item.Shared := False;
    end Clear;
+
+   overriding procedure Finalize (Item : in out Cache) is
+   begin
+      Clear (Item);
+   end Finalize;
 
    function Loaded
      (Item : Cache)
@@ -318,7 +356,7 @@ package body Version.Pack_Index_Cache is
       return Natural
    is
    begin
-      return Natural (Item.Locations.Length);
+      return Natural (Map (Item).Length);
    end Cached_Location_Count;
 
    procedure Load
@@ -339,12 +377,41 @@ package body Version.Pack_Index_Cache is
          return;
       end if;
 
-      Item.Locations.Clear;
+      Clear (Item);
 
       if not Version.Files.Exists (Pack_Dir) then
          Item.Loaded := True;
          return;
       end if;
+
+      --  The indexes as they stand: the map built for them last, where it
+      --  was built for these, is this cache's too.
+      declare
+         Signature : Unbounded_String;
+         Look      : Ada.Directories.Search_Type;
+         One       : Ada.Directories.Directory_Entry_Type;
+      begin
+         Ada.Directories.Start_Search
+           (Look, Pack_Dir, "*.idx",
+            [Ada.Directories.Ordinary_File => True, others => False]);
+         while Ada.Directories.More_Entries (Look) loop
+            Ada.Directories.Get_Next_Entry (Look, One);
+            Append (Signature,
+                    Ada.Directories.Simple_Name (One) & ":"
+                    & Ada.Directories.File_Size'Image (Ada.Directories.Size (One)) & ":"
+                    & Ada.Directories.Modification_Time (One)'Image & ";");
+         end loop;
+         Ada.Directories.End_Search (Look);
+         if Last_Map /= null and then Last_Directory = Pack_Dir and then Last_Signature = Signature then
+            Item.Locations := Last_Map;
+            Item.Shared := True;
+            Item.Loaded := True;
+            return;
+         end if;
+         Last_Directory := To_Unbounded_String (Pack_Dir);
+         Last_Signature := Signature;
+         Last_Map := null;
+      end;
 
       Ada.Directories.Start_Search
         (Search    => Search,
@@ -377,6 +444,10 @@ package body Version.Pack_Index_Cache is
 
       Ada.Directories.End_Search (Search);
       Item.Loaded := True;
+      --  Shared from now: the next cache of this directory takes it.
+      Own (Item);
+      Last_Map := Item.Locations;
+      Item.Shared := True;
 
    exception
       when others =>
@@ -393,7 +464,7 @@ package body Version.Pack_Index_Cache is
       return Boolean
    is
    begin
-      return Item.Locations.Contains (Id);
+      return Map (Item).Contains (Id);
    end Contains;
 
    function Locate
@@ -401,7 +472,7 @@ package body Version.Pack_Index_Cache is
       Id   : Version.Objects.Hex_Object_Id)
       return Version.Pack.Pack_Location
    is
-      Pos : constant Location_Maps.Cursor := Item.Locations.Find (Id);
+      Pos : constant Location_Maps.Cursor := Map (Item).Find (Id);
    begin
       if Location_Maps.Has_Element (Pos) then
          return Location_Maps.Element (Pos);
@@ -421,7 +492,7 @@ package body Version.Pack_Index_Cache is
       Match  : in out Version.Objects.Hex_Object_Id)
    is
       Prefix_Text : constant String := Ada.Characters.Handling.To_Lower (Prefix);
-      Cursor      : Location_Maps.Cursor := Item.Locations.First;
+      Cursor      : Location_Maps.Cursor := Map (Item).First;
    begin
       while Location_Maps.Has_Element (Cursor) loop
          declare
@@ -457,7 +528,7 @@ package body Version.Pack_Index_Cache is
    is
       Prefix_Text : constant String :=
         Ada.Characters.Handling.To_Lower (Prefix);
-      Cursor      : Location_Maps.Cursor := Item.Locations.First;
+      Cursor      : Location_Maps.Cursor := Map (Item).First;
    begin
       while Location_Maps.Has_Element (Cursor) loop
          declare

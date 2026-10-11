@@ -2002,7 +2002,9 @@ package body Version.Diff is
       Result      : out Stat_Entry;
       Changed     : out Boolean;
       Old_Working : Boolean := False;
-      Opts        : Diff_Options := (others => <>)) is
+      Opts        : Diff_Options := (others => <>);
+      Counts      : Boolean := True) is
+      use type Version.Merge.Whitespace_Mode;
    begin
       Result  :=
         (Path        => To_Unbounded_String (Path),
@@ -2021,6 +2023,21 @@ package body Version.Diff is
          --  Identical content: still a change if the mode moved, and git
          --  reports it (as "M", with a zero-width stat bar).
          Changed := Result.Old_Mode /= Result.New_Mode;
+         return;
+      end if;
+
+      --  Only whether it changed, between two objects: different ids are
+      --  different content, unless a rule could fold the difference away
+      --  -- whitespace, blank lines, an ignored pattern, a textconv driver.
+      --  log --name-status over two hundred commits diffed every file's
+      --  lines to say M, and took fifty seconds where git takes ten
+      --  milliseconds.
+      if not Counts and then not New_Working and then not Old_Working
+        and then Opts.Whitespace = Version.Merge.Whitespace_Strict
+        and then not Opts.Ignore_Blank_Lines and then Opts.Ignore_Regexes.Is_Empty
+        and then (not Opts.Textconv or else Textconv_Command (Repo, Path) = "")
+      then
+         Changed := True;
          return;
       end if;
 
@@ -3244,7 +3261,8 @@ package body Version.Diff is
                         Result      => Entry_Stat,
                         Changed     => Changed,
                         Old_Working => Src_E.Working,
-                        Opts        => Opts);
+                        Opts        => Opts,
+                        Counts      => False);
                      if Changed or else Is_Rename_Dest then
                         if Raw then
                            declare

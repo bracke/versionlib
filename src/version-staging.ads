@@ -1,4 +1,6 @@
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Vectors;
+with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
 
 with Version.Objects;
@@ -34,6 +36,36 @@ package Version.Staging is
    function Load
      (Repo : Version.Repository.Repository_Handle)
       return Index_Entry_Vectors.Vector;
+
+   --  What the index recorded of a stage-0 file when it was staged: its
+   --  object and the file's modification time and size as stat saw them
+   --  then. git's stat cache: a file whose time and size still match, and
+   --  that was not changed in the second the index was written, holds that
+   --  object without being read.
+   type Stat_Entry is record
+      Id       : Version.Objects.Object_Id_Storage;
+      Mtime_S  : Long_Long_Integer := 0;
+      --  Zero where the writer kept whole seconds only, as this library's
+      --  writer does: then the seconds alone are compared.
+      Mtime_Ns : Long_Long_Integer := 0;
+      --  The size modulo 2**32, as the index holds it.
+      Size     : Long_Long_Integer := 0;
+   end record;
+
+   package Stat_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type        => String,
+      Element_Type    => Stat_Entry,
+      Hash            => Ada.Strings.Hash,
+      Equivalent_Keys => "=");
+
+   function Load_Stats
+     (Repo : Version.Repository.Repository_Handle)
+      return Stat_Maps.Map;
+
+   --  The index file: GIT_INDEX_FILE where set, else the git directory's.
+   function Index_File_Path
+     (Repo : Version.Repository.Repository_Handle)
+      return String;
 
    procedure Write
       (Repo    : Version.Repository.Repository_Handle;

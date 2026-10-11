@@ -266,11 +266,19 @@ package body Version.Staging is
       return Join (Version.Repository.Git_Dir (Repo), "index");
    end Index_File_Path;
 
-   function Load
-     (Repo : Version.Repository.Repository_Handle)
+   --  The index's entries, and where Stats is given, what each stage-0
+   --  entry recorded of its file.
+   function Load_Entries
+     (Repo  : Version.Repository.Repository_Handle;
+      Stats : access Stat_Maps.Map)
       return Index_Entry_Vectors.Vector
    is
       Path : constant String := Index_File_Path (Repo);
+
+      --  A four-byte field whole, past what Natural holds.
+      function Field (Data : Stream_Element_Array; At_Pos : Stream_Element_Offset) return Long_Long_Integer is
+        (Long_Long_Integer (Data (At_Pos)) * 16#1000000# + Long_Long_Integer (Data (At_Pos + 1)) * 16#10000#
+         + Long_Long_Integer (Data (At_Pos + 2)) * 16#100# + Long_Long_Integer (Data (At_Pos + 3)));
 
       Result : Index_Entry_Vectors.Vector;
 
@@ -403,6 +411,14 @@ package body Version.Staging is
                                         Skip_Worktree => Skip_Worktree,
                                         Assume_Valid  => Assume_Valid,
                                         Intent_To_Add => Intent_To_Add));
+                        if Stats /= null and then Stage = 0 then
+                           Stats.Include
+                             (Name,
+                              (Id       => Id,
+                               Mtime_S  => Field (Data, E_Start + 8),
+                               Mtime_Ns => Field (Data, E_Start + 12),
+                               Size     => Field (Data, E_Start + 36)));
+                        end if;
                      end;
 
                      Pos := E_Start + 42 + RL + Extra_Flags_Length
@@ -428,7 +444,22 @@ package body Version.Staging is
             end;
          end;
       end;
-   end Load;
+   end Load_Entries;
+
+   function Load
+     (Repo : Version.Repository.Repository_Handle)
+      return Index_Entry_Vectors.Vector is (Load_Entries (Repo, null));
+
+   function Load_Stats
+     (Repo : Version.Repository.Repository_Handle)
+      return Stat_Maps.Map
+   is
+      Result  : aliased Stat_Maps.Map;
+      Ignored : constant Index_Entry_Vectors.Vector := Load_Entries (Repo, Result'Access);
+      pragma Unreferenced (Ignored);
+   begin
+      return Result;
+   end Load_Stats;
 
    procedure Append_U32_BE
    (Buffer : in out Unbounded_String;

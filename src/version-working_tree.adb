@@ -7,6 +7,7 @@ with Ada.Containers.Indefinite_Ordered_Maps;
 with GNAT.OS_Lib;
 with System;
 with Interfaces.C;
+with Hostkit.Metadata;
 with Version.Files;
 with Version.Platform;
 
@@ -29,7 +30,51 @@ package body Version.Working_Tree is
       Paths       : Path_Boolean_Maps.Map;
       Gitlinks    : Path_Boolean_Maps.Map;
       Directories : Path_Boolean_Maps.Map;
+      --  What the index recorded of each file, and when the index was
+      --  written; Index_S negative where there is nothing to trust.
+      Stats       : Version.Staging.Stat_Maps.Map;
+      Index_S     : Long_Long_Integer := -1;
+      Index_Ns    : Long_Long_Integer := 0;
    end record;
+
+   --  The object a tracked file holds, without reading it, where the index
+   --  says so and can be believed: its time and size as staged, and not
+   --  changed in the moment the index was written -- git's stat cache and
+   --  its racy-git rule. False where it must be read.
+   function Known_Id
+     (Index : Tracked_Path_Index;
+      Full  : String;
+      Rel   : String;
+      Id    : out Version.Objects.Object_Id_Storage) return Boolean
+   is
+      Position : Version.Staging.Stat_Maps.Cursor;
+   begin
+      Id := Version.Objects.Zero_Object_Id;
+      if Index.Index_S < 0 then
+         return False;
+      end if;
+      Position := Index.Stats.Find (Rel);
+      if not Version.Staging.Stat_Maps.Has_Element (Position) then
+         return False;
+      end if;
+      declare
+         Held : constant Version.Staging.Stat_Entry := Version.Staging.Stat_Maps.Element (Position);
+         Now  : constant Hostkit.Metadata.Entry_Revision := Hostkit.Metadata.Entry_Revision_Of (Full);
+         S    : constant Long_Long_Integer := Long_Long_Integer (Now.Modified_Seconds);
+         Ns   : constant Long_Long_Integer := Long_Long_Integer (Now.Modified_Nanoseconds);
+      begin
+         if Now.Available
+           and then Held.Size = Long_Long_Integer (Now.Size) mod 2 ** 32
+           and then Held.Mtime_S = S mod 2 ** 32
+           and then (Held.Mtime_Ns = 0 or else Held.Mtime_Ns = Ns)
+           and then (S < Index.Index_S or else (S = Index.Index_S and then Ns < Index.Index_Ns))
+         then
+            Id := Held.Id;
+            return True;
+         end if;
+      end;
+      return False;
+   end Known_Id;
 
    function Scan_Path_Text (Path : String) return String is
    begin
@@ -214,6 +259,33 @@ package body Version.Working_Tree is
       return Result;
    end Build_Tracked_Path_Index;
 
+   --  The same, with what the repository's index recorded of its files.
+   function Build_Tracked_Path_Index
+     (Tracked_Paths : Version.Staging.Index_Entry_Vectors.Vector;
+      Repo          : Version.Repository.Repository_Handle)
+      return Tracked_Path_Index
+   is
+      Result : Tracked_Path_Index := Build_Tracked_Path_Index (Tracked_Paths);
+      Index  : constant String := Version.Staging.Index_File_Path (Repo);
+   begin
+      if Version.Files.Exists (Index) then
+         declare
+            Written : constant Hostkit.Metadata.Entry_Revision := Hostkit.Metadata.Entry_Revision_Of (Index);
+         begin
+            if Written.Available then
+               Result.Stats := Version.Staging.Load_Stats (Repo);
+               Result.Index_S := Long_Long_Integer (Written.Modified_Seconds);
+               Result.Index_Ns := Long_Long_Integer (Written.Modified_Nanoseconds);
+            end if;
+         end;
+      end if;
+      return Result;
+   exception
+      when others =>
+         --  Not to be trusted: every file read.
+         return Build_Tracked_Path_Index (Tracked_Paths);
+   end Build_Tracked_Path_Index;
+
    function Is_Tracked_Path
      (Index : Tracked_Path_Index; Path : String) return Boolean is
    begin
@@ -384,6 +456,16 @@ package body Version.Working_Tree is
                             Version.Pathspec.Matches_Any
                               (Pathspecs, Rel_File, Is_Directory => False))
                      then
+                        declare
+                           Known : Version.Objects.Object_Id_Storage;
+                        begin
+                           if Known_Id (Tracked_Index, Full, Rel_File, Known) then
+                              Result.Append
+                                (Version.Working_Tree.Working_File'
+                                   (Path => To_Unbounded_String (Rel_File), Id => Known));
+                              goto Next_Entry;
+                           end if;
+                        end;
                         Result.Append
                           (Version.Working_Tree.Working_File'
                              (Path => To_Unbounded_String (Rel_File),
@@ -403,6 +485,8 @@ package body Version.Working_Tree is
                end if;
             end if;
          end;
+         <<Next_Entry>>
+         null;
       end loop;
 
       Ada.Directories.End_Search (Search);
@@ -455,7 +539,7 @@ package body Version.Working_Tree is
    is
       Result          : Working_File_Vectors.Vector;
       Tracked_Index   : constant Tracked_Path_Index :=
-        Build_Tracked_Path_Index (Tracked_Paths);
+        Build_Tracked_Path_Index (Tracked_Paths, Repo);
       Empty_Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
    begin
       Scan_Directory
@@ -483,7 +567,7 @@ package body Version.Working_Tree is
    is
       Result        : Working_File_Vectors.Vector;
       Tracked_Index : constant Tracked_Path_Index :=
-        Build_Tracked_Path_Index (Tracked_Paths);
+        Build_Tracked_Path_Index (Tracked_Paths, Repo);
    begin
       if Pathspecs.Is_Empty then
          return

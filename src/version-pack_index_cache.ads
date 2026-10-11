@@ -1,4 +1,5 @@
 with Ada.Containers.Ordered_Maps;
+with Ada.Finalization;
 
 with Version.Hash;
 with Version.Objects;
@@ -70,9 +71,18 @@ private
       Element_Type => Version.Pack.Pack_Location,
       "="          => Version.Pack."=");
 
-   type Cache is limited record
+   type Map_Access is access Location_Maps.Map;
+
+   --  A cache's locations: its own, or the ones Load shares among every
+   --  cache of one pack directory as it stands -- loaded, sorted and
+   --  mapped once, not once a commit, which log -M spent most of its time
+   --  doing. A shared map is never changed: Load_Index copies it first.
+   type Cache is new Ada.Finalization.Limited_Controlled with record
       Loaded    : Boolean := False;
-      Locations : Location_Maps.Map;
+      Locations : Map_Access;
+      Shared    : Boolean := False;
    end record;
+
+   overriding procedure Finalize (Item : in out Cache);
 
 end Version.Pack_Index_Cache;

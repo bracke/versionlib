@@ -1,3 +1,4 @@
+with Ada.Containers.Ordered_Maps;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Streams;
@@ -710,12 +711,29 @@ package body Version.Objects is
    function Commit_Author_Time (Obj : Git_Object) return Long_Long_Integer
    is (Commit_Header_Time (Obj, "author"));
 
+   --  Each tree flattened once, by its id: the trees of commit after commit
+   --  share most of their subtrees, and a log read and checked every entry
+   --  of every one again for each commit. Emptied past a million entries.
+   package Flattened_Maps is new Ada.Containers.Ordered_Maps
+     (Key_Type     => Object_Id_Storage,
+      Element_Type => Tree_Entry_Vectors.Vector,
+      "="          => Tree_Entry_Vectors."=");
+   Flattened         : Flattened_Maps.Map;
+   Flattened_Entries : Natural := 0;
+
    procedure Append_Flattened_Tree
      (Repo      : Version.Repository.Repository_Handle;
       Tree_Id   : Hex_Object_Id;
       Base_Path : String;
-      Result    : in out Tree_Entry_Vectors.Vector)
+      Result    : in out Tree_Entry_Vectors.Vector);
+
+   --  A tree's entries, flattened, named from the tree itself.
+   function Read_Flattened
+     (Repo    : Version.Repository.Repository_Handle;
+      Tree_Id : Hex_Object_Id) return Tree_Entry_Vectors.Vector
    is
+      Result : Tree_Entry_Vectors.Vector;
+      Base_Path : constant String := "";
       Obj  : constant Git_Object := Read_Object (Repo, Tree_Id);
       Data : constant String := To_String (Obj.Content_Value);
       Pos  : Natural := Data'First;
@@ -808,6 +826,45 @@ package body Version.Objects is
             end;
          end;
       end loop;
+      return Result;
+   end Read_Flattened;
+
+   procedure Append_Flattened_Tree
+     (Repo      : Version.Repository.Repository_Handle;
+      Tree_Id   : Hex_Object_Id;
+      Base_Path : String;
+      Result    : in out Tree_Entry_Vectors.Vector)
+   is
+      Position : Flattened_Maps.Cursor := Flattened.Find (Tree_Id);
+   begin
+      if not Flattened_Maps.Has_Element (Position) then
+         declare
+            Read     : constant Tree_Entry_Vectors.Vector := Read_Flattened (Repo, Tree_Id);
+            Inserted : Boolean;
+         begin
+            if Flattened_Entries + Natural (Read.Length) > 1_000_000 then
+               Flattened.Clear;
+               Flattened_Entries := 0;
+            end if;
+            Flattened.Insert (Tree_Id, Read, Position, Inserted);
+            Flattened_Entries := Flattened_Entries + Natural (Read.Length);
+         end;
+      end if;
+      declare
+         Entries : Tree_Entry_Vectors.Vector renames Flattened.Reference (Position);
+      begin
+         if Base_Path'Length = 0 then
+            Result.Append_Vector (Entries);
+         else
+            for One of Entries loop
+               Result.Append
+                 (Tree_Entry'(Path => To_Unbounded_String (Base_Path & "/" & To_String (One.Path)),
+                   Id   => One.Id,
+                   Kind => One.Kind,
+                   Mode => One.Mode));
+            end loop;
+         end if;
+      end;
    end Append_Flattened_Tree;
 
    function Flatten_Tree

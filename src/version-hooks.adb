@@ -627,6 +627,20 @@ package body Version.Hooks is
       end if;
    end Require_Hook_Success;
 
+   function Runnable_Hook
+     (Repo : Version.Repository.Repository_Handle;
+      Name : String) return String is
+   begin
+      if not Is_Allowed_Hook_Name (Name) then
+         return "";
+      end if;
+      declare
+         Path : constant String := Hook_Path (Repo, Name);
+      begin
+         return (if Hook_Is_Executable (Path) then Path else "");
+      end;
+   end Runnable_Hook;
+
    function Hooks_Disabled return Boolean is
    begin
       --  Within a task's own directory a hook would move the process's

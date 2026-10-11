@@ -64,4 +64,12 @@ package Version.Hooks is
 
    function Hooks_Disabled return Boolean;
 
+   function Runnable_Hook
+     (Repo : Version.Repository.Repository_Handle;
+      Name : String) return String;
+   --  The hook git would run for Name -- core.hooksPath honoured -- where
+   --  there is one it could run; "" where there is none. For a program
+   --  that runs a hook itself, as a child started in the right directory,
+   --  where Run_Hook would move its own.
+
 end Version.Hooks;

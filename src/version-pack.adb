@@ -1,5 +1,6 @@
 with Ada.Unchecked_Deallocation;
 with Ada.Containers.Indefinite_Ordered_Maps;
+with Ada.Containers.Indefinite_Vectors;
 with Ada.Containers.Vectors;
 with Ada.Directories;
 with Ada.IO_Exceptions;
@@ -7,6 +8,7 @@ with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Interfaces; use Interfaces;
 with Zlib;       use Zlib;
+with Hostkit.Metadata;
 with Version.Files;
 with Version.Hash;
 with Version.Pack_Index;
@@ -115,6 +117,30 @@ package body Version.Pack is
       Data_Cache.Clear;
    end Release_Cached_Files;
 
+   --  Whether a file is a published pack or index: named by its checksum,
+   --  pack-<hex>.pack or .idx, it cannot change under that name.
+   function Immutable (Path : String) return Boolean is
+      Slash : Natural := Path'First - 1;
+   begin
+      for I in Path'Range loop
+         if Path (I) = '/' or else Path (I) = '\' then
+            Slash := I;
+         end if;
+      end loop;
+      declare
+         Name : constant String := Path (Slash + 1 .. Path'Last);
+         Dot  : constant Natural :=
+           (if Name'Length > 4 and then Name (Name'Last - 3 .. Name'Last) = ".idx" then Name'Last - 3
+            elsif Name'Length > 5 and then Name (Name'Last - 4 .. Name'Last) = ".pack" then Name'Last - 4
+            else 0);
+      begin
+         return Dot > 0
+           and then Name'Length > 5 and then Name (Name'First .. Name'First + 4) = "pack-"
+           and then Dot - (Name'First + 5) in 40 | 64
+           and then (for all C of Name (Name'First + 5 .. Dot - 1) => C in '0' .. '9' | 'a' .. 'f');
+      end;
+   end Immutable;
+
    function Cached_File (Path : String) return Stream_Array_Access is
       C : constant Data_Maps.Cursor := Data_Cache.Find (Path);
    begin
@@ -123,6 +149,11 @@ package body Version.Pack is
             Held : constant Stream_Array_Access := Data_Maps.Element (C);
             Size : Ada.Directories.File_Size := 0;
          begin
+            --  A published pack is what it was: asked of the disk once an
+            --  object -- thousands of times a status -- it said the same.
+            if Immutable (Path) then
+               return Held;
+            end if;
             begin
                Size := Ada.Directories.Size (Version.Files.To_Native_Path (Path));
             exception
@@ -131,15 +162,33 @@ package body Version.Pack is
             if Ada.Directories."=" (Size, Ada.Directories.File_Size (Held'Length)) then
                return Held;
             end if;
+            --  Not freed: a resolution further up may still be reading it.
             Data_Cache.Delete (Path);
          end;
       end if;
+      --  Read where it is kept: built on the stack and copied, a pack is
+      --  written twice and its pages touched twice.
       declare
-         Fresh : constant Stream_Array_Access :=
-           new Stream_Element_Array'(Read_File (Path));
+         File  : Stream_IO.File_Type;
+         Fresh : Stream_Array_Access;
+         Last  : Stream_Element_Offset;
       begin
+         Stream_IO.Open (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path));
+         Fresh := new Stream_Element_Array (1 .. Stream_Element_Offset (Stream_IO.Size (File)));
+         Stream_IO.Read (File, Fresh.all, Last);
+         Stream_IO.Close (File);
+         if Last /= Fresh'Last then
+            Free (Fresh);
+            raise Ada.IO_Exceptions.Data_Error with "could not read complete pack file: " & Path;
+         end if;
          Data_Cache.Insert (Path, Fresh);
          return Fresh;
+      exception
+         when others =>
+            if Stream_IO.Is_Open (File) then
+               Stream_IO.Close (File);
+            end if;
+            raise;
       end;
    end Cached_File;
 
@@ -361,6 +410,26 @@ package body Version.Pack is
          Pack_Size    => U64 (Ada.Directories.Size (Pack_Path)),
          Raw_Length   => Raw_Length);
    end Entry_End_Offset;
+   --  A published pack's size, asked of the disk once; another's each time.
+   package Size_Maps is new Ada.Containers.Indefinite_Ordered_Maps (String, U64);
+   Pack_Sizes : Size_Maps.Map;
+
+   function Size_Of_Pack (Pack_Path : String) return U64 is
+      Position : constant Size_Maps.Cursor := Pack_Sizes.Find (Pack_Path);
+   begin
+      if Size_Maps.Has_Element (Position) then
+         return Size_Maps.Element (Position);
+      end if;
+      declare
+         Size : constant U64 := U64 (Ada.Directories.Size (Pack_Path));
+      begin
+         if Immutable (Pack_Path) then
+            Pack_Sizes.Include (Pack_Path, Size);
+         end if;
+         return Size;
+      end;
+   end Size_Of_Pack;
+
    function Index_Find_Location
      (Index_Path : String;
       Pack_Path  : String;
@@ -454,8 +523,7 @@ package body Version.Pack is
                           Names_Start  => Names_Start,
                           Raw_Length   => Raw_Length);
 
-                     Pack_Size : constant U64 :=
-                       U64 (Ada.Directories.Size (Pack_Path));
+                     Pack_Size : constant U64 := Size_Of_Pack (Pack_Path);
 
                      End_Offset : constant U64 :=
                        Next_Offset_After
@@ -489,6 +557,54 @@ package body Version.Pack is
       end;
    end Index_Find_Location;
 
+   --  The indexes of the last pack directory looked in, in the order the
+   --  directory lists them, and the directory's change stamp then: one
+   --  stat a lookup, not a listing and a stat for each of its files --
+   --  thousands of lookups a log, each listing the directory, were most of
+   --  its time. A pack added or removed changes the directory's stamp.
+   package Path_Vectors is new Ada.Containers.Indefinite_Vectors (Positive, String);
+   Listed_Directory : Unbounded_String;
+   Listed_Stamp     : Unbounded_String;
+   Listed_Indexes   : Path_Vectors.Vector;
+
+   function Indexes_In (Pack_Dir : String) return Path_Vectors.Vector is
+      Available : Boolean;
+      Stamp     : constant String := Hostkit.Metadata.Change_Stamp (Pack_Dir, Available);
+      Result    : Path_Vectors.Vector;
+      Search    : Ada.Directories.Search_Type;
+      E         : Ada.Directories.Directory_Entry_Type;
+   begin
+      if Available and then To_String (Listed_Directory) = Pack_Dir and then To_String (Listed_Stamp) = Stamp then
+         return Listed_Indexes;
+      end if;
+      --  No pack directory, no packs.
+      if not Available and then not Version.Files.Exists (Pack_Dir) then
+         Listed_Directory := Null_Unbounded_String;
+         return Result;
+      end if;
+      Ada.Directories.Start_Search
+        (Search    => Search,
+         Directory => Pack_Dir,
+         Pattern   => "*.idx",
+         Filter    =>
+           [Ada.Directories.Ordinary_File => True,
+            Ada.Directories.Directory     => False,
+            Ada.Directories.Special_File  => False]);
+      while Ada.Directories.More_Entries (Search) loop
+         Ada.Directories.Get_Next_Entry (Search, E);
+         Result.Append (Ada.Directories.Full_Name (E));
+      end loop;
+      Ada.Directories.End_Search (Search);
+      if Available then
+         Listed_Directory := To_Unbounded_String (Pack_Dir);
+         Listed_Stamp := To_Unbounded_String (Stamp);
+         Listed_Indexes := Result;
+      else
+         Listed_Directory := Null_Unbounded_String;
+      end if;
+      return Result;
+   end Indexes_In;
+
    function Find_Location
      (Repo : Version.Repository.Repository_Handle;
       Id   : Version.Objects.Hex_Object_Id) return Pack_Location
@@ -499,36 +615,9 @@ package body Version.Pack is
 
       Raw_Length : constant Natural :=
         Version.Hash.Raw_Length (Version.Repository.Algorithm (Repo));
-
-      Search : Ada.Directories.Search_Type;
-      E      : Ada.Directories.Directory_Entry_Type;
-      Opened : Boolean := False;
    begin
-      if not Version.Files.Exists (Pack_Dir) then
-         return
-           (Found      => False,
-            Pack_Path  => Null_Unbounded_String,
-            Offset     => 0,
-            End_Offset => 0);
-      end if;
-
-      Ada.Directories.Start_Search
-        (Search    => Search,
-         Directory => Pack_Dir,
-         Pattern   => "*.idx",
-         Filter    =>
-           [Ada.Directories.Ordinary_File => True,
-            Ada.Directories.Directory     => False,
-            Ada.Directories.Special_File  => False]);
-
-      Opened := True;
-
-      while Ada.Directories.More_Entries (Search) loop
-         Ada.Directories.Get_Next_Entry (Search, E);
-
+      for Index_Path of Indexes_In (Pack_Dir) loop
          declare
-            Index_Path : constant String := Ada.Directories.Full_Name (E);
-
             Pack_Path : constant String :=
               Index_Path (Index_Path'First .. Index_Path'Last - 3) & "pack";
 
@@ -538,27 +627,16 @@ package body Version.Pack is
                  Raw_Length => Raw_Length);
          begin
             if Location.Found then
-               Ada.Directories.End_Search (Search);
                return Location;
             end if;
          end;
       end loop;
-
-      Ada.Directories.End_Search (Search);
 
       return
         (Found      => False,
          Pack_Path  => Null_Unbounded_String,
          Offset     => 0,
          End_Offset => 0);
-
-   exception
-      when others =>
-         if Opened then
-            Ada.Directories.End_Search (Search);
-         end if;
-
-         raise;
    end Find_Location;
 
    function Contains

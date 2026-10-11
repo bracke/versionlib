@@ -2249,6 +2249,12 @@ package body Version.Ignore is
       end if;
    end Load_Info_Exclude;
 
+   --  Each .gitignore of the tree, read as git reads them: a directory's
+   --  own first, then its subdirectories' in name order -- and none in a
+   --  directory the rules so far exclude, which git never goes into and
+   --  whose .gitignore says nothing. Walking every build directory, every
+   --  name in it sorted, to find no .gitignore there made status take a
+   --  second where git takes milliseconds.
    procedure Scan_Directory
      (Rules : in out Ignore_Rules; Root : String; Dir : String)
    is
@@ -2256,14 +2262,22 @@ package body Version.Ignore is
       E      : Ada.Directories.Directory_Entry_Type;
       Opened : Boolean := False;
       Dirs   : String_Vectors.Vector;
-      Files  : String_Vectors.Vector;
+      Own    : constant String := Version.Files.Child_Path (Dir, ".gitignore");
    begin
+      if Version.Files.Is_Ordinary_File (Own) then
+         Load_File
+           (Rules              => Rules,
+            Base_Dir           => Relative_Path (Root, Dir),
+            Path               => Own,
+            Skip_Symbolic_Link => True);
+      end if;
+
       Ada.Directories.Start_Search
         (Search    => Search,
          Directory => Dir,
          Pattern   => "",
          Filter    =>
-           [Ada.Directories.Ordinary_File => True,
+           [Ada.Directories.Ordinary_File => False,
             Ada.Directories.Directory     => True,
             Ada.Directories.Special_File  => False]);
 
@@ -2280,15 +2294,11 @@ package body Version.Ignore is
             --  perfectly happy to track.
             Full : constant String := Version.Files.Child_Path (Dir, Name);
          begin
-            if Name /= "." and then Name /= ".." then
-               if Ada.Directories.Kind (E) = Ada.Directories.Directory then
-                  if Name /= ".git" then
-                     Dirs.Append (To_Unbounded_String (Full));
-                  end if;
-               elsif Ada.Directories.Kind (E) = Ada.Directories.Ordinary_File
-               then
-                  Files.Append (To_Unbounded_String (Full));
-               end if;
+            if Name /= "." and then Name /= ".." and then Name /= ".git"
+              and then Ada.Directories.Kind (E) = Ada.Directories.Directory
+              and then not Is_Ignored (Rules, Relative_Path (Root, Full), Is_Directory => True)
+            then
+               Dirs.Append (To_Unbounded_String (Full));
             end if;
          end;
       end loop;
@@ -2296,24 +2306,7 @@ package body Version.Ignore is
       Ada.Directories.End_Search (Search);
       Opened := False;
 
-      Sort (Files);
       Sort (Dirs);
-
-      if not Files.Is_Empty then
-         for I in Files.First_Index .. Files.Last_Index loop
-            declare
-               Full : constant String := To_String (Files.Element (I));
-            begin
-               if Ada.Directories.Simple_Name (Full) = ".gitignore" then
-                  Load_File
-                    (Rules              => Rules,
-                     Base_Dir           => Relative_Path (Root, Dir),
-                     Path               => Full,
-                     Skip_Symbolic_Link => True);
-               end if;
-            end;
-         end loop;
-      end if;
 
       if not Dirs.Is_Empty then
          for I in Dirs.First_Index .. Dirs.Last_Index loop

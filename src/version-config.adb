@@ -6,6 +6,8 @@ with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
+with Hostkit.Metadata;
+
 with Version.Files;
 with Version.Refs;
 with Version.Timestamps;
@@ -748,12 +750,55 @@ package body Version.Config is
      (if Env_Value ("HOME") /= ""
       then Version.Files.Join (Env_Value ("HOME"), ".gitconfig") else "");
 
+   --  The last configuration read, and what its files were then: each
+   --  path and its change stamp. Read for every file a status looks at, a
+   --  configuration of four files was parsed thousands of times.
+   Last_Key     : Unbounded_String;
+   Last_Entries : Config_Entry_Vectors.Vector;
+
    function Read_All
      (Repo : Version.Repository.Repository_Handle)
       return Config_Entry_Vectors.Vector
    is
       R      : aliased constant Version.Repository.Repository_Handle := Repo;
       Result : Config_Entry_Vectors.Vector;
+
+      --  The files it reads as they stand; "" where one cannot be told
+      --  apart from a rewrite of it, and nothing is kept.
+      function Key return String is
+         Text : Unbounded_String;
+
+         procedure Stamp (Path : String) is
+            Available : Boolean;
+         begin
+            Append (Text, Path & "=");
+            if Path /= "" and then Version.Files.Exists (Path) then
+               declare
+                  Seen : constant String := Hostkit.Metadata.Change_Stamp (Path, Available);
+               begin
+                  if not Available then
+                     Text := To_Unbounded_String ("?");
+                     return;
+                  end if;
+                  Append (Text, Seen);
+               end;
+            end if;
+            Append (Text, ASCII.LF);
+         end Stamp;
+      begin
+         Stamp (System_Config_File);
+         if Ada.Environment_Variables.Exists ("GIT_CONFIG_GLOBAL") then
+            Stamp (Env_Value ("GIT_CONFIG_GLOBAL"));
+         else
+            Stamp (Xdg_Global_Config_File);
+            Stamp (Home_Global_Config_File);
+         end if;
+         Stamp (Config_Path (Repo));
+         Stamp (Version.Files.Join (Version.Repository.Git_Dir (Repo), "config.worktree"));
+         return (if Index (Text, "?") = 1 then "" else To_String (Text));
+      end Key;
+
+      Now : constant String := Key;
 
       procedure Read (Path : String) is
       begin
@@ -765,6 +810,9 @@ package body Version.Config is
          end if;
       end Read;
    begin
+      if Now /= "" and then To_String (Last_Key) = Now then
+         return Last_Entries;
+      end if;
       --  git's config read order (last value wins): system, then global
       --  (XDG then ~/.gitconfig, or GIT_CONFIG_GLOBAL replacing both), then
       --  the repository's local config, then the per-worktree config.
@@ -788,6 +836,16 @@ package body Version.Config is
               (Version.Repository.Git_Dir (Repo), "config.worktree"));
       end if;
 
+      --  Kept where every file it read is in the key: an include reads
+      --  another, whose changes the key would not see.
+      Last_Key := Null_Unbounded_String;
+      if Now /= ""
+        and then (for all E of Result =>
+                    Ada.Strings.Fixed.Index (Lower (Config_Entry_Name (E)), "include") /= 1)
+      then
+         Last_Key := To_Unbounded_String (Now);
+         Last_Entries := Result;
+      end if;
       return Result;
    end Read_All;
 
@@ -801,6 +859,8 @@ package body Version.Config is
 
       Last_Section : Unbounded_String;
    begin
+      --  What was read before this write is not the configuration now.
+      Last_Key := Null_Unbounded_String;
       Version.Files.Create_Parent_Directories (Temp_Path);
       --  Text_Translation=No: git's files are LF on every host, and GNAT's
       --  Text_IO would otherwise write the host's own terminator.
