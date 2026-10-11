@@ -4022,13 +4022,18 @@ package body Version.Diff is
          Space : Natural := Pos;
          Nul   : Natural;
       begin
-         while Space <= Data'Last and then Data (Space) /= ' ' loop
-            Space := Space + 1;
-         end loop;
-         Nul := Space + 1;
-         while Nul <= Data'Last and then Data (Nul) /= Character'Val (0) loop
-            Nul := Nul + 1;
-         end loop;
+         --  A mode is five or six digits as git writes it; the name runs to
+         --  its NUL, found by memchr.
+         if Pos + 5 <= Data'Last and then Data (Pos + 5) = ' ' then
+            Space := Pos + 5;
+         elsif Pos + 6 <= Data'Last and then Data (Pos + 6) = ' ' then
+            Space := Pos + 6;
+         else
+            while Space <= Data'Last and then Data (Space) /= ' ' loop
+               Space := Space + 1;
+            end loop;
+         end if;
+         Nul := Version.Objects.Next_Nul (Data, Space + 1);
          if Space > Data'Last or else Nul > Data'Last or else Nul + Raw_Length > Data'Last then
             raise Ada.IO_Exceptions.Data_Error with "corrupt tree entry";
          end if;

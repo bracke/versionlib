@@ -2733,4 +2733,25 @@ package body Version.Ignore is
       return Match_Direct (Rules => Rules, Relative_Path => Normal_Path, Is_Directory => Is_Directory).Is_Ignored;
    end Is_Ignored_In;
 
+   function Excludes_Directory
+     (Rules          : Ignore_Rules;
+      Relative_Dir   : String;
+      Parent_Ignored : Boolean)
+      return Boolean
+   is
+      Normal_Dir : constant String :=
+        Normalize_Query_Path (To_String (Rules.Root_Path), Relative_Dir);
+   begin
+      if Parent_Ignored then
+         return True;
+      elsif Normal_Dir'Length = 0 or else Is_Git_Internal_Path (Normal_Dir) then
+         return False;
+      end if;
+      return Match_Direct
+        (Rules                               => Rules,
+         Relative_Path                       => Normal_Dir,
+         Is_Directory                        => True,
+         Count_Trailing_Double_Star_Directory => False).Is_Ignored;
+   end Excludes_Directory;
+
 end Version.Ignore;

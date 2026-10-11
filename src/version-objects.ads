@@ -32,6 +32,11 @@ package Version.Objects is
 
    function To_String (Id : Object_Id_Storage) return String;
 
+   function Next_Nul (Data : String; From : Positive) return Natural;
+   --  The first NUL in Data at or after From, by memchr; Data'Last + 1 where
+   --  there is none. A tree entry's name ends at one, and walking to it a
+   --  character at a time was most of a tree's reading.
+
    function Hash (Id : Object_Id_Storage) return Ada.Containers.Hash_Type;
    function Same (Left, Right : Object_Id_Storage) return Boolean;
    --  For hashed maps of ids: an id's leading hex digits are already as

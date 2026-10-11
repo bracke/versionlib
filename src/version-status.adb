@@ -1274,6 +1274,58 @@ package body Version.Status is
 
       Ignored : array (Working_Files.First_Index .. Working_Files.Last_Index) of Boolean :=
         [others => False];
+
+      --  Asked once: a checkout that is not sparse includes every path,
+      --  and asking it for each path read the configuration each time.
+      Sparse : constant Boolean := Version.Sparse.Enabled (Repo);
+
+      --  Whether everything under a directory is ignored, kept per
+      --  directory: each path asked of its parents once, not every file's
+      --  parents matched against every rule again.
+      Excluded : Answer_Maps.Map;
+
+      function Dir_Excluded (Dir : String) return Boolean is
+         Pos : constant Answer_Maps.Cursor := Excluded.Find (Dir);
+      begin
+         if Answer_Maps.Has_Element (Pos) then
+            return Answer_Maps.Element (Pos);
+         end if;
+         declare
+            Slash : Natural := 0;
+         begin
+            for I in reverse Dir'Range loop
+               if Dir (I) = '/' then
+                  Slash := I;
+                  exit;
+               end if;
+            end loop;
+            declare
+               Answer : constant Boolean :=
+                 Version.Ignore.Excludes_Directory
+                   (Ignore_Rules, Dir,
+                    Parent_Ignored => Slash > 0 and then Dir_Excluded (Dir (Dir'First .. Slash - 1)));
+            begin
+               Excluded.Insert (Dir, Answer);
+               return Answer;
+            end;
+         end;
+      end Dir_Excluded;
+
+      function File_Ignored (Path : String) return Boolean is
+         Slash : Natural := 0;
+      begin
+         for I in reverse Path'Range loop
+            if Path (I) = '/' then
+               Slash := I;
+               exit;
+            end if;
+         end loop;
+         return Version.Ignore.Is_Ignored_In
+           (Rules          => Ignore_Rules,
+            Relative_Path  => Path,
+            Is_Directory   => False,
+            Parent_Ignored => Slash > 0 and then Dir_Excluded (Path (Path'First .. Slash - 1)));
+      end File_Ignored;
    begin
       for Item of Index_Entries loop
          Block_Parents (To_String (Item.Path));
@@ -1284,9 +1336,7 @@ package body Version.Status is
             Path : constant String := To_String (Working_Files.Element (I).Path);
          begin
             if not Index_Pos.Contains (Path) then
-               Ignored (I) :=
-                 Version.Ignore.Is_Ignored
-                   (Rules => Ignore_Rules, Relative_Path => Path, Is_Directory => False);
+               Ignored (I) := File_Ignored (Path);
                if not Ignored (I) then
                   Block_Parents (Path);
                end if;
@@ -1299,7 +1349,7 @@ package body Version.Status is
             Path : constant String := To_String (Working_Files.Element (I).Path);
          begin
             if Ignored (I)
-              and then Version.Sparse.Included (Repo, Path)
+              and then (not Sparse or else Version.Sparse.Included (Repo, Path))
               and then
                 (Pathspecs.Is_Empty
                  or else Version.Pathspec.Matches_Any (Pathspecs, Path))
@@ -1829,6 +1879,10 @@ package body Version.Status is
       All_Untracked : Boolean := False)
       return Status_Result
    is
+      --  One operation: the configuration read once, not again for every
+      --  ignored path that asks whether the checkout is sparse.
+      Scope         : Version.Objects.Lookup_Scope;
+      pragma Unreferenced (Scope);
       Repo          : constant Version.Repository.Repository_Handle :=
         Version.Repository.Open;
       Index_Entries : constant Version.Staging.Index_Entry_Vectors.Vector :=

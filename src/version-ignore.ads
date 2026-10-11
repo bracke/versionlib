@@ -33,6 +33,17 @@ package Version.Ignore is
    --  path is in is ignored -- a walk of the tree, which asked it of that
    --  directory -- so its parents are not matched again for every entry.
 
+   function Excludes_Directory
+     (Rules          : Ignore_Rules;
+      Relative_Dir   : String;
+      Parent_Ignored : Boolean)
+      return Boolean;
+   --  Whether what is under Relative_Dir is ignored for being under it, as
+   --  Is_Ignored asks it of each parent of a path: its parent's answer, or
+   --  its own match as a directory (a trailing "/**" not counted). A caller
+   --  answering many paths keeps this per directory and hands it to
+   --  Is_Ignored_In.
+
    function Rules_From_Text
      (Root             : String;
       Text             : String;

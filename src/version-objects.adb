@@ -1098,6 +1098,22 @@ package body Version.Objects is
       return System.Address
      with Import, Convention => C, External_Name => "memchr";
 
+   function Next_Nul (Data : String; From : Positive) return Natural is
+      use type System.Address;
+      use type System.Storage_Elements.Storage_Offset;
+   begin
+      if From > Data'Last then
+         return Data'Last + 1;
+      end if;
+      declare
+         Found_At : constant System.Address :=
+           C_Memchr (Data (From)'Address, 0, Interfaces.C.size_t (Data'Last - From + 1));
+      begin
+         return (if Found_At = System.Null_Address then Data'Last + 1
+                 else From + Natural (Found_At - Data (From)'Address));
+      end;
+   end Next_Nul;
+
    procedure Find_Tree_Entry
      (Repo    : Version.Repository.Repository_Handle;
       Tree_Id : Hex_Object_Id;
@@ -1133,19 +1149,7 @@ package body Version.Objects is
                Space := Space + 1;
             end loop;
          end if;
-         Nul := Data'Last + 1;
-         if Space < Data'Last then
-            declare
-               use type System.Address;
-               use type System.Storage_Elements.Storage_Offset;
-               Found_At : constant System.Address :=
-                 C_Memchr (Data (Space + 1)'Address, 0, Interfaces.C.size_t (Data'Last - Space));
-            begin
-               if Found_At /= System.Null_Address then
-                  Nul := Space + 1 + Natural (Found_At - Data (Space + 1)'Address);
-               end if;
-            end;
-         end if;
+         Nul := Next_Nul (Data, Space + 1);
          if Space > Data'Last or else Nul > Data'Last or else Nul + Raw_Length > Data'Last then
             raise Ada.IO_Exceptions.Data_Error with "corrupt tree entry";
          end if;
