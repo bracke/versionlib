@@ -255,6 +255,10 @@ package body Version.Objects is
    --  Resolve a `refs/replace/<oid>` chain (loose refs), as `git` does when
    --  reading objects, unless GIT_NO_REPLACE_OBJECTS is set. Read directly
    --  from the filesystem to avoid a dependency cycle with Version.Refs.
+   --  The replacement directory of the last repository asked about.
+   Replace_Of_Dir : Unbounded_String;
+   Replace_Dir    : Unbounded_String;
+
    function Replacement_Of
      (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
       return Hex_Object_Id
@@ -262,6 +266,17 @@ package body Version.Objects is
       Current : Hex_Object_Id := Id;
    begin
       if Ada.Environment_Variables.Exists ("GIT_NO_REPLACE_OBJECTS") then
+         return Id;
+      end if;
+
+      --  No replacement directory, nothing replaced: asked of the directory,
+      --  its path made once a repository, rather than a path joined and
+      --  normalised for each object read.
+      if To_String (Replace_Of_Dir) /= Version.Repository.Common_Git_Dir (Repo) then
+         Replace_Of_Dir := To_Unbounded_String (Version.Repository.Common_Git_Dir (Repo));
+         Replace_Dir := To_Unbounded_String (Join (Join (Version.Repository.Common_Git_Dir (Repo), "refs"), "replace"));
+      end if;
+      if not Version.Files.Exists (To_String (Replace_Dir)) then
          return Id;
       end if;
 
@@ -303,10 +318,15 @@ package body Version.Objects is
    begin
       --  The packs first: asked in memory once their indexes are read, where
       --  a loose object costs the disk a look for every object. One both
-      --  loose and packed is the same object.
-      if Version.Pack.Contains (Repo, Eff) then
-         return Version.Pack.Read_Object (Repo, Eff);
-      end if;
+      --  loose and packed is the same object. Found once and read from
+      --  where it was found, not looked up a second time to read it.
+      declare
+         Location : constant Version.Pack.Pack_Location := Version.Pack.Find_Location (Repo, Eff);
+      begin
+         if Location.Found then
+            return Version.Pack.Read_Object_At_Location (Repo, Location);
+         end if;
+      end;
 
       if Version.Files.Exists (Path) then
          return Read_Loose_Object (Repo, Eff);
@@ -893,6 +913,8 @@ package body Version.Objects is
       Data       : constant String := To_String (Obj.Content_Value);
       Raw_Length : constant Natural := Version.Hash.Raw_Length (Version.Repository.Algorithm (Repo));
       Pos        : Natural := Data'First;
+      Space      : Natural;
+      Nul        : Natural;
    begin
       Found := False;
       Result := (Path => Null_Unbounded_String, Id => Zero_Object_Id, Kind => Tree_Blob,
@@ -900,34 +922,38 @@ package body Version.Objects is
       if Obj.Kind_Value /= Tree_Object then
          raise Ada.IO_Exceptions.Data_Error with "object is not a tree";
       end if;
+      --  A byte loop to each entry's space and NUL, the name compared only
+      --  where its length is the one asked for: a search call an entry was
+      --  most of a path-limited history.
       while Pos <= Data'Last loop
-         declare
-            Space : constant Natural := Ada.Strings.Fixed.Index (Data (Pos .. Data'Last), " ");
-            Nul   : constant Natural :=
-              (if Space = 0 then 0
-               else Ada.Strings.Fixed.Index (Data (Space + 1 .. Data'Last), [1 => Character'Val (0)]));
-         begin
-            if Space = 0 or else Nul = 0 or else Nul + Raw_Length > Data'Last then
-               raise Ada.IO_Exceptions.Data_Error with "corrupt tree entry";
-            end if;
-            if Data (Space + 1 .. Nul - 1) = Name then
-               Version.Path_Safety.Require_Safe_Relative_Path (Name, "tree entry path", Allow_Control => True);
-               declare
-                  Mode_Text : constant String := Data (Pos .. Space - 1);
-               begin
-                  Result :=
-                    (Path => To_Unbounded_String (Name),
-                     Id   => To_Hex (Data (Nul + 1 .. Nul + Raw_Length)),
-                     Kind => (if Mode_Text = "40000" then Tree_Directory
-                              elsif Mode_Text = "160000" then Tree_Gitlink
-                              else Tree_Blob),
-                     Mode => To_Unbounded_String (Mode_Text));
-               end;
-               Found := True;
-               return;
-            end if;
-            Pos := Nul + Raw_Length + 1;
-         end;
+         Space := Pos;
+         while Space <= Data'Last and then Data (Space) /= ' ' loop
+            Space := Space + 1;
+         end loop;
+         Nul := Space + 1;
+         while Nul <= Data'Last and then Data (Nul) /= Character'Val (0) loop
+            Nul := Nul + 1;
+         end loop;
+         if Space > Data'Last or else Nul > Data'Last or else Nul + Raw_Length > Data'Last then
+            raise Ada.IO_Exceptions.Data_Error with "corrupt tree entry";
+         end if;
+         if Nul - Space - 1 = Name'Length and then Data (Space + 1 .. Nul - 1) = Name then
+            Version.Path_Safety.Require_Safe_Relative_Path (Name, "tree entry path", Allow_Control => True);
+            declare
+               Mode_Text : constant String := Data (Pos .. Space - 1);
+            begin
+               Result :=
+                 (Path => To_Unbounded_String (Name),
+                  Id   => To_Hex (Data (Nul + 1 .. Nul + Raw_Length)),
+                  Kind => (if Mode_Text = "40000" then Tree_Directory
+                           elsif Mode_Text = "160000" then Tree_Gitlink
+                           else Tree_Blob),
+                  Mode => To_Unbounded_String (Mode_Text));
+            end;
+            Found := True;
+            return;
+         end if;
+         Pos := Nul + Raw_Length + 1;
       end loop;
    end Find_Tree_Entry;
 

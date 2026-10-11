@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Directories; use Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
@@ -419,6 +420,9 @@ package body Version.Ignore is
       Case_Insensitive : Boolean := False)
       return Boolean is
 
+      P_At : Positive := P;
+      T_At : Positive := T;
+
       function Recursive_Double_Star return Boolean is
       begin
          return
@@ -429,6 +433,19 @@ package body Version.Ignore is
               or else (P + 2 <= Pattern'Last and then Pattern (P + 2) = '/'));
       end Recursive_Double_Star;
    begin
+      --  Plain characters taken in a loop, not a call each.
+      while P_At <= Pattern'Last
+        and then Pattern (P_At) not in '\' | '*' | '?' | '['
+        and then T_At <= Text'Last
+        and then Characters_Equal (Pattern (P_At), Text (T_At), Case_Insensitive)
+      loop
+         P_At := P_At + 1;
+         T_At := T_At + 1;
+      end loop;
+      if P_At /= P then
+         return Glob_Match (Pattern, Text, P_At, T_At, Case_Insensitive);
+      end if;
+
       if P > Pattern'Last then
          return T > Text'Last;
       end if;
@@ -506,9 +523,68 @@ package body Version.Ignore is
    function Glob_Match
      (Pattern : String; Text : String; Case_Insensitive : Boolean := False)
       return Boolean is
+      function Plain (Part : String) return Boolean is
+        (for all C of Part => C not in '\' | '*' | '?' | '[');
+      function Same (Left, Right : String) return Boolean is
+        (Left'Length = Right'Length
+         and then (for all K in 0 .. Left'Length - 1 =>
+                     Characters_Equal (Left (Left'First + K), Right (Right'First + K), Case_Insensitive)));
    begin
       if Pattern'Length = 0 then
          return Text'Length = 0;
+      end if;
+
+      --  A rule without a slash, as **/ and the rule: any directories, then
+      --  the rule against the last component alone -- nothing in it can
+      --  cross a slash. Matched character by character down the whole path
+      --  through the double star, it was most of a status.
+      if Pattern'Length > 3 and then Pattern (Pattern'First .. Pattern'First + 2) = "**/"
+        and then (for all C of Pattern (Pattern'First + 3 .. Pattern'Last) => C /= '/')
+        and then Ada.Strings.Fixed.Index (Pattern (Pattern'First + 3 .. Pattern'Last), "**") = 0
+      then
+         declare
+            Slash : Natural := Text'First - 1;
+         begin
+            for K in Text'Range loop
+               if Text (K) = '/' then
+                  Slash := K;
+               end if;
+            end loop;
+            return Glob_Match (Pattern (Pattern'First + 3 .. Pattern'Last), Text (Slash + 1 .. Text'Last),
+                               Case_Insensitive);
+         end;
+      end if;
+
+      --  **/ and a path with no wildcard -- the global excludes are made of
+      --  these: the path itself, or the path after some directories.
+      if Pattern'Length > 3 and then Pattern (Pattern'First .. Pattern'First + 2) = "**/"
+        and then Plain (Pattern (Pattern'First + 3 .. Pattern'Last))
+      then
+         declare
+            Rest : constant String := Pattern (Pattern'First + 3 .. Pattern'Last);
+         begin
+            return Same (Text, Rest)
+              or else (Text'Length > Rest'Length
+                       and then Text (Text'Last - Rest'Length) = '/'
+                       and then Same (Text (Text'Last - Rest'Length + 1 .. Text'Last), Rest));
+         end;
+      end if;
+
+      --  The shapes most rules have, answered without the matcher: a name
+      --  as it stands, and *.ext -- a star never crossing a slash.
+      if Plain (Pattern) then
+         return Same (Pattern, Text);
+      elsif Pattern (Pattern'First) = '*' and then Pattern'Length > 1
+        and then Pattern (Pattern'First + 1) /= '*'
+        and then Plain (Pattern (Pattern'First + 1 .. Pattern'Last))
+      then
+         declare
+            Tail : constant String := Pattern (Pattern'First + 1 .. Pattern'Last);
+         begin
+            return Text'Length >= Tail'Length
+              and then Same (Text (Text'Last - Tail'Length + 1 .. Text'Last), Tail)
+              and then (for all C of Text (Text'First .. Text'Last - Tail'Length) => C /= '/');
+         end;
       end if;
 
       return

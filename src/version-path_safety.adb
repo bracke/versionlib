@@ -118,11 +118,13 @@ package body Version.Path_Safety is
       Allow_Control : Boolean := False)
       return String
    is
-      Result    : Unbounded_String;
-      Component : Unbounded_String;
+      Result : Unbounded_String;
+      --  Where the component being read began: each is a slice of Path,
+      --  checked and appended whole -- built a character at a time, the
+      --  check of every tree entry cost more than reading the tree.
+      Start  : Natural := Path'First;
 
-      procedure Finish_Component is
-         Text : constant String := To_String (Component);
+      procedure Finish_Component (Text : String) is
       begin
          Validate_Common_Component (Path, Text);
          Validate_Windows_Component (Path, Text);
@@ -132,7 +134,6 @@ package body Version.Path_Safety is
          end if;
 
          Append (Result, Text);
-         Component := Null_Unbounded_String;
       end Finish_Component;
    begin
       if Path'Length = 0 then
@@ -152,24 +153,27 @@ package body Version.Path_Safety is
            "trailing slash is not allowed: " & Path;
       end if;
 
-      for C of Path loop
-         if C = Character'Val (0) then
-            raise Ada.IO_Exceptions.Data_Error with "path contains NUL";
-         elsif Is_Control (C) and then not Allow_Control then
-            raise Ada.IO_Exceptions.Data_Error with "path contains control character";
-         elsif C = '/' or else C = '\' then
-            if Length (Component) = 0 then
-               raise Ada.IO_Exceptions.Data_Error with
-                 "empty path component: " & Path;
-            else
-               Finish_Component;
+      for I in Path'Range loop
+         declare
+            C : constant Character := Path (I);
+         begin
+            if C = Character'Val (0) then
+               raise Ada.IO_Exceptions.Data_Error with "path contains NUL";
+            elsif Is_Control (C) and then not Allow_Control then
+               raise Ada.IO_Exceptions.Data_Error with "path contains control character";
+            elsif C = '/' or else C = '\' then
+               if I = Start then
+                  raise Ada.IO_Exceptions.Data_Error with
+                    "empty path component: " & Path;
+               else
+                  Finish_Component (Path (Start .. I - 1));
+                  Start := I + 1;
+               end if;
             end if;
-         else
-            Append (Component, C);
-         end if;
+         end;
       end loop;
 
-      Finish_Component;
+      Finish_Component (Path (Start .. Path'Last));
 
       declare
          Normalized : constant String := To_String (Result);

@@ -1293,24 +1293,50 @@ package body Version.Diff is
 
    --  The `diff.<driver>.textconv` command for Path, from its `diff=<driver>`
    --  attribute; "" when there is none.
+   --  Whether the configuration names any textconv driver at all: where it
+   --  names none, no file has one, and no attributes are read to say so --
+   --  a log asked for each changed file of each commit, and read the
+   --  .gitattributes files from disk every time.
+   function Any_Textconv (Repo : Version.Repository.Repository_Handle) return Boolean is
+   begin
+      for E of Version.Config.Read_All (Repo) loop
+         declare
+            Name : constant String := Ada.Characters.Handling.To_Lower (Version.Config.Config_Entry_Name (E));
+         begin
+            if Name'Length > 14 and then Name (Name'First .. Name'First + 4) = "diff."
+              and then Name (Name'Last - 8 .. Name'Last) = ".textconv"
+            then
+               return True;
+            end if;
+         end;
+      end loop;
+      return False;
+   end Any_Textconv;
+
    function Textconv_Command
      (Repo : Version.Repository.Repository_Handle; Path : String) return String
    is
       use type Version.Attributes.Attribute_State;
-      Attr : constant Version.Attributes.Attribute_Result :=
-        Version.Attributes.Lookup (Repo, Path, "diff");
    begin
-      if Attr.State /= Version.Attributes.Attribute_Valued then
+      if not Any_Textconv (Repo) then
          return "";
       end if;
       declare
-         Key : constant String :=
-           "diff." & To_String (Attr.Value) & ".textconv";
+         Attr : constant Version.Attributes.Attribute_Result :=
+           Version.Attributes.Lookup (Repo, Path, "diff");
       begin
-         if Version.Config.Has_Key (Repo, Key) then
-            return Version.Config.Get_Value (Repo, Key);
+         if Attr.State /= Version.Attributes.Attribute_Valued then
+            return "";
          end if;
-         return "";
+         declare
+            Key : constant String :=
+              "diff." & To_String (Attr.Value) & ".textconv";
+         begin
+            if Version.Config.Has_Key (Repo, Key) then
+               return Version.Config.Get_Value (Repo, Key);
+            end if;
+            return "";
+         end;
       end;
    end Textconv_Command;
 
@@ -2004,7 +2030,8 @@ package body Version.Diff is
       Changed     : out Boolean;
       Old_Working : Boolean := False;
       Opts        : Diff_Options := (others => <>);
-      Counts      : Boolean := True) is
+      Counts      : Boolean := True;
+      Converting  : Boolean := True) is
       use type Version.Merge.Whitespace_Mode;
    begin
       Result  :=
@@ -2036,7 +2063,7 @@ package body Version.Diff is
       if not Counts and then not New_Working and then not Old_Working
         and then Opts.Whitespace = Version.Merge.Whitespace_Strict
         and then not Opts.Ignore_Blank_Lines and then Opts.Ignore_Regexes.Is_Empty
-        and then (not Opts.Textconv or else Textconv_Command (Repo, Path) = "")
+        and then (not Opts.Textconv or else not Converting or else Textconv_Command (Repo, Path) = "")
       then
          Changed := True;
          return;
@@ -3160,6 +3187,9 @@ package body Version.Diff is
             end loop;
          end;
       end Pair_Renames;
+      --  Whether any file could have a textconv driver: asked once, not of
+      --  every changed file.
+      Converting : constant Boolean := Opts.Textconv and then Any_Textconv (Repo);
    begin
       if not Old_Side.Is_Empty then
          for I in Old_Side.First_Index .. Old_Side.Last_Index loop
@@ -3263,7 +3293,8 @@ package body Version.Diff is
                         Changed     => Changed,
                         Old_Working => Src_E.Working,
                         Opts        => Opts,
-                        Counts      => False);
+                        Counts      => False,
+                        Converting  => Converting);
                      if Changed or else Is_Rename_Dest then
                         if Raw then
                            declare
@@ -3935,15 +3966,82 @@ package body Version.Diff is
    is
       Algorithm : constant Version.Hash.Hash_Algorithm := Version.Repository.Algorithm (Repo);
 
-      --  One level of a tree, its entries in the order the tree keeps them.
-      function Level (Tree : Version.Objects.Hex_Object_Id) return Version.Objects.Tree_Entry_Vectors.Vector is
-        (Version.Objects.Parse_Tree
-           (Algorithm, Version.Objects.Content (Version.Object_Cache.Read_Object (Repo, Objects, Tree))));
+      Raw_Length : constant Natural := Version.Hash.Raw_Length (Algorithm);
 
-      --  The key a tree is sorted by: a directory's name as if it ended in
-      --  a slash, as git orders them.
-      function Key (One : Version.Objects.Tree_Entry) return String is
-        (To_String (One.Path) & (if One.Kind = Version.Objects.Tree_Directory then "/" else ""));
+      --  One level of a tree, its bytes as stored.
+      function Level (Tree : Version.Objects.Hex_Object_Id) return String is
+        (Version.Objects.Content (Version.Object_Cache.Read_Object (Repo, Objects, Tree)));
+
+      --  Where an entry's parts lie in a tree's bytes: mode, name, raw id.
+      type Spot is record
+         Mode_First, Mode_Last, Name_First, Name_Last, Id_First, Next : Natural := 0;
+      end record;
+
+      function Spot_At (Data : String; Pos : Natural) return Spot is
+         Space : Natural := Pos;
+         Nul   : Natural;
+      begin
+         while Space <= Data'Last and then Data (Space) /= ' ' loop
+            Space := Space + 1;
+         end loop;
+         Nul := Space + 1;
+         while Nul <= Data'Last and then Data (Nul) /= Character'Val (0) loop
+            Nul := Nul + 1;
+         end loop;
+         if Space > Data'Last or else Nul > Data'Last or else Nul + Raw_Length > Data'Last then
+            raise Ada.IO_Exceptions.Data_Error with "corrupt tree entry";
+         end if;
+         return (Mode_First => Pos, Mode_Last => Space - 1, Name_First => Space + 1, Name_Last => Nul - 1,
+                 Id_First => Nul + 1, Next => Nul + 1 + Raw_Length);
+      end Spot_At;
+
+      function Is_Directory (Data : String; At_Spot : Spot) return Boolean is
+        (Data (At_Spot.Mode_First .. At_Spot.Mode_Last) = "40000");
+
+      --  An entry made whole, for what is reported: the rest are compared
+      --  where they lie and never made.
+      function Entry_Of (Data : String; At_Spot : Spot) return Version.Objects.Tree_Entry is
+         Mode_Text : constant String := Data (At_Spot.Mode_First .. At_Spot.Mode_Last);
+      begin
+         return
+           (Path => To_Unbounded_String (Data (At_Spot.Name_First .. At_Spot.Name_Last)),
+            Id   => Version.Objects.To_Hex (Data (At_Spot.Id_First .. At_Spot.Id_First + Raw_Length - 1)),
+            Kind => (if Mode_Text = "40000" then Version.Objects.Tree_Directory
+                     elsif Mode_Text = "160000" then Version.Objects.Tree_Gitlink
+                     else Version.Objects.Tree_Blob),
+            Mode => To_Unbounded_String (Mode_Text));
+      end Entry_Of;
+
+      --  Two entries in the order a tree keeps them -- a directory's name as
+      --  if it ended in a slash -- without making either name.
+      function Order (A : String; SA : Spot; B : String; SB : Spot) return Integer is
+         LA : constant Natural := SA.Name_Last - SA.Name_First + 1;
+         LB : constant Natural := SB.Name_Last - SB.Name_First + 1;
+         Common : constant Natural := Natural'Min (LA, LB);
+         function After (Data : String; S : Spot; Length, K : Natural) return Integer is
+           (if K < Length then Character'Pos (Data (S.Name_First + K))
+            elsif Is_Directory (Data, S) then Character'Pos ('/')
+            else -1);
+      begin
+         for K in 0 .. Common - 1 loop
+            if A (SA.Name_First + K) /= B (SB.Name_First + K) then
+               return (if A (SA.Name_First + K) < B (SB.Name_First + K) then -1 else 1);
+            end if;
+         end loop;
+         declare
+            NA : constant Integer := After (A, SA, LA, Common);
+            NB : constant Integer := After (B, SB, LB, Common);
+         begin
+            if NA /= NB then
+               return (if NA < NB then -1 else 1);
+            elsif NA = -1 or else LA = LB then
+               return 0;
+            else
+               --  One name is the other plus a slash and more: compared on.
+               return (if LA < LB then -1 else 1);
+            end if;
+         end;
+      end Order;
 
       function Joined (Base, Name : String) return String is
         (if Base = "" then Name else Base & "/" & Name);
@@ -3976,40 +4074,52 @@ package body Version.Diff is
       --  A file and a directory of one name sort apart and are each one
       --  side's -- what a change of kind is.
       procedure Walk (Old_Id, New_Id : Version.Objects.Hex_Object_Id; Base : String) is
-         Old_Level : constant Version.Objects.Tree_Entry_Vectors.Vector := Level (Old_Id);
-         New_Level : constant Version.Objects.Tree_Entry_Vectors.Vector := Level (New_Id);
-         I         : Natural := Old_Level.First_Index;
-         J         : Natural := New_Level.First_Index;
+         Old_Data : constant String := Level (Old_Id);
+         New_Data : constant String := Level (New_Id);
+         I        : Natural := Old_Data'First;
+         J        : Natural := New_Data'First;
       begin
-         while I <= Old_Level.Last_Index or else J <= New_Level.Last_Index loop
-            if J > New_Level.Last_Index
-              or else (I <= Old_Level.Last_Index and then Key (Old_Level (I)) < Key (New_Level (J)))
-            then
-               Whole (Old_Level (I), Base, Old_Out);
-               I := I + 1;
-            elsif I > Old_Level.Last_Index or else Key (New_Level (J)) < Key (Old_Level (I)) then
-               Whole (New_Level (J), Base, New_Out);
-               J := J + 1;
-            else
-               declare
-                  Was : constant Version.Objects.Tree_Entry := Old_Level (I);
-                  Now : constant Version.Objects.Tree_Entry := New_Level (J);
-                  Name : constant String := To_String (Was.Path);
-               begin
-                  if Was.Id = Now.Id and then Was.Mode = Now.Mode then
+         while I <= Old_Data'Last or else J <= New_Data'Last loop
+            declare
+               SI : constant Spot := (if I <= Old_Data'Last then Spot_At (Old_Data, I) else (others => 0));
+               SJ : constant Spot := (if J <= New_Data'Last then Spot_At (New_Data, J) else (others => 0));
+               Cmp : constant Integer :=
+                 (if J > New_Data'Last then -1
+                  elsif I > Old_Data'Last then 1
+                  else Order (Old_Data, SI, New_Data, SJ));
+            begin
+               if Cmp < 0 then
+                  Whole (Entry_Of (Old_Data, SI), Base, Old_Out);
+                  I := SI.Next;
+               elsif Cmp > 0 then
+                  Whole (Entry_Of (New_Data, SJ), Base, New_Out);
+                  J := SJ.Next;
+               else
+                  --  The same name: passed over where its object and mode
+                  --  are the same, compared where they lie.
+                  if Old_Data (SI.Id_First .. SI.Id_First + Raw_Length - 1)
+                       = New_Data (SJ.Id_First .. SJ.Id_First + Raw_Length - 1)
+                    and then Old_Data (SI.Mode_First .. SI.Mode_Last) = New_Data (SJ.Mode_First .. SJ.Mode_Last)
+                  then
                      null;
-                  elsif Was.Kind = Version.Objects.Tree_Directory then
-                     Version.Path_Safety.Require_Safe_Relative_Path
-                       (Joined (Base, Name), "tree entry path", Allow_Control => True);
-                     Walk (Was.Id, Now.Id, Joined (Base, Name));
+                  elsif Is_Directory (Old_Data, SI) then
+                     declare
+                        Was  : constant Version.Objects.Tree_Entry := Entry_Of (Old_Data, SI);
+                        Now  : constant Version.Objects.Tree_Entry := Entry_Of (New_Data, SJ);
+                        Name : constant String := To_String (Was.Path);
+                     begin
+                        Version.Path_Safety.Require_Safe_Relative_Path
+                          (Joined (Base, Name), "tree entry path", Allow_Control => True);
+                        Walk (Was.Id, Now.Id, Joined (Base, Name));
+                     end;
                   else
-                     Whole (Was, Base, Old_Out);
-                     Whole (Now, Base, New_Out);
+                     Whole (Entry_Of (Old_Data, SI), Base, Old_Out);
+                     Whole (Entry_Of (New_Data, SJ), Base, New_Out);
                   end if;
-               end;
-               I := I + 1;
-               J := J + 1;
-            end if;
+                  I := SI.Next;
+                  J := SJ.Next;
+               end if;
+            end;
          end loop;
       end Walk;
    begin

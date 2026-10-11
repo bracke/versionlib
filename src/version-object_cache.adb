@@ -41,6 +41,24 @@ package body Version.Object_Cache is
          return Object_Maps.Element (Pos);
       end if;
 
+      --  The packs first, their indexes searched where they lie -- no map
+      --  of every object built to find one -- then the loose store.
+      declare
+         Location : constant Version.Pack.Pack_Location := Version.Pack.Find_Location (Repo, Eff);
+      begin
+         if Location.Found then
+            declare
+               Obj : constant Version.Objects.Git_Object :=
+                 Version.Pack.Read_Object_At_Location
+                   (Repo     => Repo,
+                    Location => Location);
+            begin
+               Cache.Objects.Include (Id, Obj);
+               return Obj;
+            end;
+         end if;
+      end;
+
       declare
          Path : constant String :=
            Version.Objects.Loose_Object_Path (Repo, Eff);
@@ -49,27 +67,6 @@ package body Version.Object_Cache is
             declare
                Obj : constant Version.Objects.Git_Object :=
                  Version.Objects.Read_Loose_Object (Repo, Eff);
-            begin
-               Cache.Objects.Include (Id, Obj);
-               return Obj;
-            end;
-         end if;
-      end;
-
-      Version.Pack_Index_Cache.Load
-        (Repo => Repo,
-         Item => Cache.Pack_Indexes);
-
-      declare
-         Location : constant Version.Pack.Pack_Location :=
-           Version.Pack_Index_Cache.Locate (Cache.Pack_Indexes, Eff);
-      begin
-         if Location.Found then
-            declare
-               Obj : constant Version.Objects.Git_Object :=
-                 Version.Pack.Read_Object_At_Location
-                   (Repo     => Repo,
-                    Location => Location);
             begin
                Cache.Objects.Include (Id, Obj);
                return Obj;
@@ -92,14 +89,8 @@ package body Version.Object_Cache is
             end if;
          end;
 
-         Version.Pack_Index_Cache.Clear (Cache.Pack_Indexes);
-         Version.Pack_Index_Cache.Load
-           (Repo => Repo,
-            Item => Cache.Pack_Indexes);
-
          declare
-            Location : constant Version.Pack.Pack_Location :=
-              Version.Pack_Index_Cache.Locate (Cache.Pack_Indexes, Eff);
+            Location : constant Version.Pack.Pack_Location := Version.Pack.Find_Location (Repo, Eff);
          begin
             if Location.Found then
                declare

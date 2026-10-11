@@ -1163,15 +1163,24 @@ package body Version.Maintenance.Tests is
             Pack_Before : constant String := Version.Files.Read_Binary_File (Pack_Path);
             Idx_Before : constant String := Version.Files.Read_Binary_File (Idx_Path);
          begin
-            Other_Blob := Version.Write.Write_Blob (Repo, "different blob payload");
-            Ada.Directories.Create_Path
-              (Ada.Directories.Containing_Directory
-                 (Object_File_Path (Root, Blob_Id)));
-            Version.Files.Delete_File_If_Exists (Object_File_Path (Root, Blob_Id));
-            Version.Files.Write_Binary_File
-              (Path    => Object_File_Path (Root, Blob_Id),
-               Content => Version.Files.Read_Binary_File
-                 (Object_File_Path (Root, Other_Blob)));
+            --  A reachable object only loose, then corrupted: objects are
+            --  read from the packs first, as git reads them, so a corrupt
+            --  loose copy of one already packed is never read -- this one
+            --  is in no pack, and the repack must read it and refuse.
+            Version.Git_Fixtures.Run
+              (Root, "printf 'loose only payload\n' > loose-only.txt && git add loose-only.txt"
+               & " && git -c user.name=T -c user.email=t@e commit -q -m loose");
+            declare
+               Loose_Blob : constant Version.Objects.Object_Id_Storage :=
+                 Version.Write.Write_Blob (Repo, "loose only payload" & Character'Val (10));
+            begin
+               Other_Blob := Version.Write.Write_Blob (Repo, "different blob payload");
+               Version.Files.Delete_File_If_Exists (Object_File_Path (Root, Loose_Blob));
+               Version.Files.Write_Binary_File
+                 (Path    => Object_File_Path (Root, Loose_Blob),
+                  Content => Version.Files.Read_Binary_File
+                    (Object_File_Path (Root, Other_Blob)));
+            end;
 
             begin
                Second_Result := Version.Maintenance.Repack (Repo);

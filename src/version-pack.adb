@@ -246,7 +246,9 @@ package body Version.Pack is
    function Hex_Byte
      (Id : Version.Objects.Hex_Object_Id; Index : Positive) return Natural is
    begin
-      return Hex_Nibble (To_String (Id) (Index)) * 16 + Hex_Nibble (To_String (Id) (Index + 1));
+      --  The characters where they are: To_String made a copy of the whole
+      --  id for each, twice a byte of every comparison of a lookup.
+      return Hex_Nibble (Id.Text (Index)) * 16 + Hex_Nibble (Id.Text (Index + 1));
    end Hex_Byte;
 
    function Compare_Id_At
@@ -574,13 +576,22 @@ package body Version.Pack is
    Listed_Stamp     : Unbounded_String;
    Listed_Indexes   : Path_Vectors.Vector;
 
-   function Indexes_In (Pack_Dir : String) return Path_Vectors.Vector is
-      Available : Boolean;
-      Stamp     : constant String := Hostkit.Metadata.Change_Stamp (Pack_Dir, Available);
+   --  Trusted: the listing kept for the directory, without asking it again.
+   --  Only an object not found there, or an index gone from under it, has
+   --  the directory listed anew -- what a new pack or a repack causes, and
+   --  all a stale listing can cause.
+   function Indexes_In (Pack_Dir : String; Trusted : Boolean := False) return Path_Vectors.Vector is
+      Available : Boolean := False;
+      Stamp     : constant String :=
+        (if Trusted and then To_String (Listed_Directory) = Pack_Dir then To_String (Listed_Stamp)
+         else Hostkit.Metadata.Change_Stamp (Pack_Dir, Available));
       Result    : Path_Vectors.Vector;
       Search    : Ada.Directories.Search_Type;
       E         : Ada.Directories.Directory_Entry_Type;
    begin
+      if Trusted and then To_String (Listed_Directory) = Pack_Dir then
+         return Listed_Indexes;
+      end if;
       if Available and then To_String (Listed_Directory) = Pack_Dir and then To_String (Listed_Stamp) = Stamp then
          return Listed_Indexes;
       end if;
@@ -622,28 +633,42 @@ package body Version.Pack is
 
       Raw_Length : constant Natural :=
         Version.Hash.Raw_Length (Version.Repository.Algorithm (Repo));
+      --  The packs of a listing, searched; False where an index of it is
+      --  not there any more.
+      function Search (Listing : Path_Vectors.Vector; Location : out Pack_Location) return Boolean is
+      begin
+         Location := (Found => False, Pack_Path => Null_Unbounded_String, Offset => 0, End_Offset => 0);
+         for Index_Path of Listing loop
+            declare
+               Pack_Path : constant String :=
+                 Index_Path (Index_Path'First .. Index_Path'Last - 3) & "pack";
+            begin
+               Location :=
+                 Index_Find_Location
+                   (Index_Path => Index_Path, Pack_Path => Pack_Path, Id => Id,
+                    Raw_Length => Raw_Length);
+               if Location.Found then
+                  return True;
+               end if;
+            exception
+               when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
+                  return False;
+            end;
+         end loop;
+         return True;
+      end Search;
+
+      Location : Pack_Location;
    begin
-      for Index_Path of Indexes_In (Pack_Dir) loop
-         declare
-            Pack_Path : constant String :=
-              Index_Path (Index_Path'First .. Index_Path'Last - 3) & "pack";
-
-            Location : constant Pack_Location :=
-              Index_Find_Location
-                (Index_Path => Index_Path, Pack_Path => Pack_Path, Id => Id,
-                 Raw_Length => Raw_Length);
-         begin
-            if Location.Found then
-               return Location;
-            end if;
-         end;
-      end loop;
-
-      return
-        (Found      => False,
-         Pack_Path  => Null_Unbounded_String,
-         Offset     => 0,
-         End_Offset => 0);
+      --  The listing kept, first; asked of the directory again only where
+      --  it did not find the object or held an index since gone.
+      if Search (Indexes_In (Pack_Dir, Trusted => True), Location) and then Location.Found then
+         return Location;
+      end if;
+      if Search (Indexes_In (Pack_Dir), Location) then
+         return Location;
+      end if;
+      return (Found => False, Pack_Path => Null_Unbounded_String, Offset => 0, End_Offset => 0);
    end Find_Location;
 
    function Contains
