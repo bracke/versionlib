@@ -323,7 +323,9 @@ package body Version.Working_Tree is
       Result        : in out Working_File_Vectors.Vector;
       --  Whether Dir itself is ignored: what is in it, then, without its
       --  parents matched again for each entry.
-      Dir_Ignored   : Boolean := False)
+      Dir_Ignored   : Boolean := False;
+      --  The paths alone: no file read, each Id the zero id.
+      Paths_Only    : Boolean := False)
    is
       use type Hostkit.Directory_Listing.Entry_Kind;
       Listed : Hostkit.Directory_Listing.Entry_Vectors.Vector;
@@ -386,7 +388,9 @@ package body Version.Working_Tree is
                         Result.Append
                           (Version.Working_Tree.Working_File'
                              (Path => To_Unbounded_String (Rel_File),
-                              Id   => Symlink_Blob_Id (Full, Algorithm)));
+                              Id   =>
+                                (if Paths_Only then Version.Objects.Zero_Object_Id
+                                 else Symlink_Blob_Id (Full, Algorithm))));
                      end if;
                   end;
                elsif Is_Dir then
@@ -448,7 +452,8 @@ package body Version.Working_Tree is
                               Pathspecs     => Pathspecs,
                               Algorithm     => Algorithm,
                               Result        => Result,
-                              Dir_Ignored   => Ignored);
+                              Dir_Ignored   => Ignored,
+                              Paths_Only    => Paths_Only);
                         end if;
                      end;
                   end if;
@@ -473,6 +478,13 @@ package body Version.Working_Tree is
                             Version.Pathspec.Matches_Any
                               (Pathspecs, Rel_File, Is_Directory => False))
                      then
+                        if Paths_Only then
+                           Result.Append
+                             (Version.Working_Tree.Working_File'
+                                (Path => To_Unbounded_String (Rel_File),
+                                 Id   => Version.Objects.Zero_Object_Id));
+                           goto Next_Entry;
+                        end if;
                         declare
                            Known : Version.Objects.Object_Id_Storage;
                         begin
@@ -507,6 +519,31 @@ package body Version.Working_Tree is
       end loop;
    end Scan_Directory;
 
+   function Scan_Paths
+     (Repo : Version.Repository.Repository_Handle)
+      return Working_File_Vectors.Vector
+   is
+      Result          : Working_File_Vectors.Vector;
+      No_Rules        : Version.Ignore.Ignore_Rules;
+      Empty_Index     : Version.Staging.Index_Entry_Vectors.Vector;
+      Empty_Pathspecs : Version.Pathspec.Pathspec_Vectors.Vector;
+   begin
+      Scan_Directory
+        (Repo          => Repo,
+         Filter_Active => False,
+         Root          => Version.Repository.Root_Path (Repo),
+         Dir           => Version.Repository.Root_Path (Repo),
+         Ignore_Rules  => No_Rules,
+         Tracked_Index => Build_Tracked_Path_Index (Empty_Index),
+         Use_Ignore    => False,
+         Use_Pathspec  => False,
+         Pathspecs     => Empty_Pathspecs,
+         Algorithm     => Version.Repository.Algorithm (Repo),
+         Result        => Result,
+         Paths_Only    => True);
+      return Result;
+   end Scan_Paths;
+
    function Scan
      (Repo : Version.Repository.Repository_Handle)
       return Working_File_Vectors.Vector
@@ -514,8 +551,9 @@ package body Version.Working_Tree is
       Result : Working_File_Vectors.Vector;
    begin
       declare
-         Empty_Rules     : constant Version.Ignore.Ignore_Rules :=
-           Version.Ignore.Load (Repo);
+         --  Not used: the scan ignores nothing, and loading them walked the
+         --  tree for .gitignore files.
+         Empty_Rules     : Version.Ignore.Ignore_Rules;
          Empty_Index     : Version.Staging.Index_Entry_Vectors.Vector;
          Empty_Tracked   : constant Tracked_Path_Index :=
            Build_Tracked_Path_Index (Empty_Index);

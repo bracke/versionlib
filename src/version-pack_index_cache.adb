@@ -1,3 +1,4 @@
+with Version.Shared_Lock;
 with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
 with Ada.Directories;
@@ -237,6 +238,8 @@ package body Version.Pack_Index_Cache is
       Pack_Path  : String;
       Algorithm  : Version.Hash.Hash_Algorithm := Version.Hash.Sha1)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Data : constant Stream_Element_Array := Read_File (Index_Path);
 
       Magic : constant U32 := U32_BE (Data, Data'First);
@@ -329,6 +332,8 @@ package body Version.Pack_Index_Cache is
    end Load_Index;
 
    procedure Clear (Item : in out Cache) is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       Item.Loaded := False;
       if not Item.Shared then
@@ -347,6 +352,8 @@ package body Version.Pack_Index_Cache is
      (Item : Cache)
       return Boolean
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       return Item.Loaded;
    end Loaded;
@@ -355,6 +362,8 @@ package body Version.Pack_Index_Cache is
      (Item : Cache)
       return Natural
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       return Natural (Map (Item).Length);
    end Cached_Location_Count;
@@ -363,6 +372,8 @@ package body Version.Pack_Index_Cache is
      (Repo : Version.Repository.Repository_Handle;
       Item : in out Cache)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Pack_Dir : constant String :=
         Version.Files.Join
           (Version.Files.Join
@@ -463,6 +474,8 @@ package body Version.Pack_Index_Cache is
       Id   : Version.Objects.Hex_Object_Id)
       return Boolean
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       return Map (Item).Contains (Id);
    end Contains;
@@ -472,6 +485,8 @@ package body Version.Pack_Index_Cache is
       Id   : Version.Objects.Hex_Object_Id)
       return Version.Pack.Pack_Location
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Pos : constant Location_Maps.Cursor := Map (Item).Find (Id);
    begin
       if Location_Maps.Has_Element (Pos) then
@@ -491,6 +506,8 @@ package body Version.Pack_Index_Cache is
       Count  : in out Natural;
       Match  : in out Version.Objects.Hex_Object_Id)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Prefix_Text : constant String := Ada.Characters.Handling.To_Lower (Prefix);
       Cursor      : Location_Maps.Cursor := Map (Item).First;
    begin
@@ -526,6 +543,8 @@ package body Version.Pack_Index_Cache is
       Prefix : String;
       Into   : in out Version.Objects.Object_Id_Vectors.Vector)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Prefix_Text : constant String :=
         Ada.Characters.Handling.To_Lower (Prefix);
       Cursor      : Location_Maps.Cursor := Map (Item).First;

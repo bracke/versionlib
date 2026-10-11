@@ -1,3 +1,4 @@
+with Ada.Task_Attributes;
 with Ada.Characters.Handling;
 with Ada.Containers.Vectors;
 with Ada.Directories;
@@ -617,9 +618,11 @@ package body Version.Write is
       end loop;
    end Require_Safe_Signing_Key;
 
-   Sign_Error_Output : Unbounded_String;
+   --  A task's own: the last signing failure of the task that asks.
+   package Sign_Errors is new Ada.Task_Attributes
+     (Attribute => Unbounded_String, Initial_Value => Null_Unbounded_String);
 
-   function Last_Sign_Error return String is (To_String (Sign_Error_Output));
+   function Last_Sign_Error return String is (To_String (Sign_Errors.Value));
 
    --  The committer's "Name <email>" (git's IDENT_NO_DATE form).
    function Committer_Ident
@@ -697,7 +700,7 @@ package body Version.Write is
             Free_Args;
             Version.Files.Delete_File_If_Exists (Input_Path);
             Version.Files.Delete_File_If_Exists (Output_Path);
-            Sign_Error_Output := To_Unbounded_String ("(no gpg output)");
+            Sign_Errors.Set_Value (To_Unbounded_String ("(no gpg output)"));
             raise Ada.IO_Exceptions.Data_Error with
               "gpg failed to sign the data:";
          end if;
@@ -720,8 +723,8 @@ package body Version.Write is
             Version.Files.Delete_File_If_Exists (Error_Path);
             --  git's sign_buffer error; gpg's output is kept aside (an
             --  exception message would truncate it).
-            Sign_Error_Output := To_Unbounded_String
-              (if Captured'Length > 0 then Captured else "(no gpg output)");
+            Sign_Errors.Set_Value (To_Unbounded_String
+              (if Captured'Length > 0 then Captured else "(no gpg output)"));
             raise Ada.IO_Exceptions.Data_Error with
               "gpg failed to sign the data:";
          end;

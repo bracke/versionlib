@@ -1,3 +1,4 @@
+with Version.Shared_Lock;
 with Hostkit.Metadata;
 with Interfaces;
 with Ada.Characters.Latin_1;
@@ -1834,8 +1835,10 @@ package body Version.Status is
         Version.Staging.Load (Repo);
       Ignore_Rules  : constant Version.Ignore.Ignore_Rules :=
         Version.Ignore.Load (Repo);
+      --  Names only: what is ignored is listed, never read.
       Working_Files : constant Version.Working_Tree.Working_File_Vectors.Vector :=
-        Version.Working_Tree.Scan (Repo);
+        (if Mode = Ignored_Matching then Version.Working_Tree.Working_File_Vectors.Empty_Vector
+         else Version.Working_Tree.Scan_Paths (Repo));
       Result        : Status_Result :=
         Current_Status (Pathspecs, All_Untracked);
    begin
@@ -2168,6 +2171,8 @@ package body Version.Status is
    function Upstream_Status_Text
      (Repo : Version.Repository.Repository_Handle; Branch : String)
       return String is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       Long_Out   := Null_Unbounded_String;
       Long_Hints := True;
@@ -2500,6 +2505,8 @@ package body Version.Status is
       Nowarn          : Boolean := False;
       Commit_Template : Boolean := False;
       Initial         : Boolean := False) return String is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       Long_Out   := Null_Unbounded_String;
       Long_Hints := Hints;

@@ -1,3 +1,4 @@
+with Ada.Containers;
 with Ada.Containers.Vectors;
 with Ada.Finalization;
 with Ada.Strings.Unbounded;
@@ -30,6 +31,11 @@ package Version.Objects is
    subtype Hex_Object_Id is Object_Id_Storage;
 
    function To_String (Id : Object_Id_Storage) return String;
+
+   function Hash (Id : Object_Id_Storage) return Ada.Containers.Hash_Type;
+   function Same (Left, Right : Object_Id_Storage) return Boolean;
+   --  For hashed maps of ids: an id's leading hex digits are already as
+   --  good as a hash, and two ids are the same where their text is.
 
    function To_Object_Id (Text : String) return Object_Id_Storage;
 
@@ -224,6 +230,11 @@ package Version.Objects is
    --  nested ones share the first's answer.
    overriding procedure Initialize (Item : in out Lookup_Scope);
    overriding procedure Finalize (Item : in out Lookup_Scope);
+
+   function Lookup_Serial return Natural;
+   --  The number of the calling task's outermost Lookup_Scope, different
+   --  for every one; 0 outside any. What one operation works out once can
+   --  be kept under it.
 
 private
 

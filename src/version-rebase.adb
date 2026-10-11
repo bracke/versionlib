@@ -1,3 +1,4 @@
+with Ada.Task_Attributes;
 with Ada.Containers;
 with Version.Platform; use Ada.Containers;
 with Ada.Containers.Ordered_Sets;
@@ -47,7 +48,10 @@ package body Version.Rebase is
 
    --  The original -> rewritten pairs of the linear replay in progress,
    --  loaded from the state on --continue/--skip.
-   Linear_Map : Version.Rebase_State.Map_Vectors.Vector;
+   --  A task's own, so two tasks' rebases keep apart.
+   package Linear_Maps is new Ada.Task_Attributes
+     (Attribute     => Version.Rebase_State.Map_Vectors.Vector,
+      Initial_Value => Version.Rebase_State.Map_Vectors.Empty_Vector);
 
    function Replay_Subject
      (Repo : Version.Repository.Repository_Handle;
@@ -1050,7 +1054,7 @@ package body Version.Rebase is
       declare
       begin
          for U of Version.Rebase_State.Read_Update_Refs (Repo) loop
-            for M of Linear_Map loop
+            for M of Linear_Maps.Value loop
                if M.Original = U.Old_Tip then
                   declare
                      Ref : constant String := To_String (U.Ref_Name);
@@ -1127,7 +1131,7 @@ package body Version.Rebase is
       Branch_Ref : String;
       Commits    : Version.Rebase_State.Commit_Vectors.Vector) is
    begin
-      Linear_Map.Clear;
+      Linear_Maps.Set_Value (Version.Rebase_State.Map_Vectors.Empty_Vector);
       Version.Rebase_State.Write_Options (Repo, Current_Options);
       Plan_Update_Refs (Repo, Branch_Ref, Commits);
    end Record_Start;
@@ -1136,7 +1140,7 @@ package body Version.Rebase is
    procedure Resume_From (State : Version.Rebase_State.Rebase_State) is
    begin
       Current_Options := Version.Rebase_State.Options (State);
-      Linear_Map := Version.Rebase_State.Rebased_Map (State);
+      Linear_Maps.Set_Value (Version.Rebase_State.Rebased_Map (State));
    end Resume_From;
 
    procedure Replay_Remaining
@@ -1160,7 +1164,7 @@ package body Version.Rebase is
       Index       : Natural := Next_Index;
       Exec_Cursor : Natural := Next_Exec;
       --  Original -> rewritten, carried in the state for --update-refs.
-      Map         : Version.Rebase_State.Map_Vectors.Vector := Linear_Map;
+      Map         : Version.Rebase_State.Map_Vectors.Vector := Linear_Maps.Value;
 
       --  git's "Rebasing (n/N)" on stderr, n counting picks and execs.
       Total_Steps : constant Natural :=
@@ -1210,7 +1214,7 @@ package body Version.Rebase is
             Next_Exec           => Exec_Cursor,
             Pause_Reason        => Reason,
             Rebased_Map         => Map);
-         Linear_Map := Map;
+         Linear_Maps.Set_Value (Map);
       end Persist;
 
       --  Run every exec now due (After <= the number of commits applied so far)

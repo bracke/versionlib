@@ -1,4 +1,4 @@
-with Ada.Containers.Ordered_Maps;
+with Ada.Containers.Hashed_Maps;
 
 with Version.Objects;
 use type Version.Objects.Object_Id_Storage;
@@ -25,10 +25,12 @@ package Version.Object_Cache is
 
 private
 
-   package Object_Maps is new Ada.Containers.Ordered_Maps
-     (Key_Type     => Version.Objects.Object_Id_Storage,
-      Element_Type => Version.Objects.Git_Object,
-      "="          => Version.Objects."=");
+   package Object_Maps is new Ada.Containers.Hashed_Maps
+     (Key_Type        => Version.Objects.Object_Id_Storage,
+      Element_Type    => Version.Objects.Git_Object,
+      Hash            => Version.Objects.Hash,
+      Equivalent_Keys => Version.Objects.Same,
+      "="             => Version.Objects."=");
 
    type Object_Cache is limited record
       Objects      : Object_Maps.Map;

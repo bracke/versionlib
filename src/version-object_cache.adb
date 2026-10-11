@@ -21,6 +21,14 @@ package body Version.Object_Cache is
       return Natural (Cache.Objects.Length);
    end Cached_Object_Count;
 
+   --  Read_Object past its cache: the replacement resolved, the object read
+   --  and kept.
+   function Read_Uncached
+     (Repo  : Version.Repository.Repository_Handle;
+      Cache : in out Object_Cache;
+      Id    : Version.Objects.Hex_Object_Id)
+      return Version.Objects.Git_Object;
+
    function Read_Object
      (Repo  : Version.Repository.Repository_Handle;
       Cache : in out Object_Cache;
@@ -28,7 +36,19 @@ package body Version.Object_Cache is
       return Version.Objects.Git_Object
    is
       Pos : constant Object_Maps.Cursor := Cache.Objects.Find (Id);
+   begin
+      if Object_Maps.Has_Element (Pos) then
+         return Object_Maps.Element (Pos);
+      end if;
+      return Read_Uncached (Repo, Cache, Id);
+   end Read_Object;
 
+   function Read_Uncached
+     (Repo  : Version.Repository.Repository_Handle;
+      Cache : in out Object_Cache;
+      Id    : Version.Objects.Hex_Object_Id)
+      return Version.Objects.Git_Object
+   is
       --  Resolve the replacement before reading. The uncached path does this
       --  already; skipping it here made every history walk -- which uses the
       --  cache for speed -- read the original object, so a `replace --graft`
@@ -37,9 +57,6 @@ package body Version.Object_Cache is
       Eff : constant Version.Objects.Hex_Object_Id :=
         Version.Objects.Replacement_Of (Repo, Id);
    begin
-      if Object_Maps.Has_Element (Pos) then
-         return Object_Maps.Element (Pos);
-      end if;
 
       --  The packs first, their indexes searched where they lie -- no map
       --  of every object built to find one -- then the loose store.
@@ -104,6 +121,6 @@ package body Version.Object_Cache is
 
       raise Ada.IO_Exceptions.Data_Error with
         Version.Promisor.Missing_Object_Diagnostic (Repo, To_String (Id));
-   end Read_Object;
+   end Read_Uncached;
 
 end Version.Object_Cache;

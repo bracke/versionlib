@@ -1,3 +1,4 @@
+with Ada.Task_Attributes;
 with Ada.IO_Exceptions;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
@@ -249,7 +250,8 @@ package body Version.Transport.Http is
    --  `reject`ed (git's smart-HTTP authentication handshake).
    --  The status the last request came back with, so a caller that cares
    --  (the dumb protocol's GET, which reads a 404 as "not here") can see it.
-   Last_Status : Natural := 0;
+   --  A task's own: two tasks' requests do not read each other's.
+   package Last_Statuses is new Ada.Task_Attributes (Attribute => Natural, Initial_Value => 0);
 
    procedure Request_With_Auth
      (Method   : String;
@@ -315,7 +317,7 @@ package body Version.Transport.Http is
             "open HTTP response stream");
          Opened := True;
          Code := Http_Client.Response_Streams.Status_Code (Stream);
-         Last_Status := Natural (Code);
+         Last_Statuses.Set_Value (Natural (Code));
       end Do_Open;
 
       procedure Consume_Body is
@@ -405,9 +407,9 @@ package body Version.Transport.Http is
       Consumer : in out Byte_Consumer'Class;
       Found    : out Boolean) is
    begin
-      Last_Status := 0;
+      Last_Statuses.Set_Value (0);
       Request_With_Auth ("GET", Url, Git_Discovery_Headers, "", Consumer);
-      Found := Last_Status in 200 .. 299;
+      Found := Last_Statuses.Value in 200 .. 299;
    exception
       when others =>
          Found := False;

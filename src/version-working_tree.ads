@@ -24,6 +24,12 @@ package Version.Working_Tree is
      (Repo : Version.Repository.Repository_Handle)
       return Working_File_Vectors.Vector;
 
+   function Scan_Paths
+     (Repo : Version.Repository.Repository_Handle)
+      return Working_File_Vectors.Vector;
+   --  Scan's paths, every file and link of the tree, without reading one:
+   --  each Id is the zero id. For a caller that wants the names only.
+
    function Scan
      (Repo          : Version.Repository.Repository_Handle;
       Ignore_Rules  : Version.Ignore.Ignore_Rules;

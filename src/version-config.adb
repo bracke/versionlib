@@ -1,9 +1,11 @@
+with Version.Shared_Lock;
 with Ada.Calendar;
 with Ada.Calendar.Time_Zones;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
 with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Task_Attributes;
 with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
 with Ada.Text_IO;
@@ -761,6 +763,8 @@ package body Version.Config is
    Stamping : Stamp_Answer := Unknown;
 
    function Stamps_Work return Boolean is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Available : Boolean;
       Ignored   : constant String :=
         (if Stamping = Unknown then Hostkit.Metadata.Change_Stamp (Ada.Directories.Current_Directory, Available)
@@ -786,7 +790,9 @@ package body Version.Config is
    Last_Values  : Value_Maps.Map;
    Last_Config  : Unbounded_String;
    Generation   : Natural := 0;
-   Held         : Natural := 0;
+   --  A task's own holds: one task's operation does not stop another's
+   --  reads from looking at the files.
+   package Holds is new Ada.Task_Attributes (Attribute => Natural, Initial_Value => 0);
 
    --  The files it reads as they stand; "" where one cannot be told
    --  apart from a rewrite of it, and nothing is kept.
@@ -831,26 +837,28 @@ package body Version.Config is
 
    function Kept_Is_Current
      (Repo : Version.Repository.Repository_Handle) return Boolean is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       if Length (Last_Key) = 0
         or else To_String (Last_Config) /= Config_Path (Repo)
       then
          return False;
       end if;
-      return Held > 0 or else To_String (Last_Key) = Stamp_Key (Repo);
+      return Holds.Value > 0 or else To_String (Last_Key) = Stamp_Key (Repo);
    end Kept_Is_Current;
 
    function Kept_Generation return Natural is (Generation);
 
    procedure Hold_Kept is
    begin
-      Held := Held + 1;
+      Holds.Set_Value (Holds.Value + 1);
    end Hold_Kept;
 
    procedure Release_Kept is
    begin
-      if Held > 0 then
-         Held := Held - 1;
+      if Holds.Value > 0 then
+         Holds.Set_Value (Holds.Value - 1);
       end if;
    end Release_Kept;
 
@@ -863,8 +871,10 @@ package body Version.Config is
      (Repo : Version.Repository.Repository_Handle)
       return Config_Entry_Vectors.Vector
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
-      if Held > 0
+      if Holds.Value > 0
         and then Length (Last_Key) > 0
         and then To_String (Last_Config) = Config_Path (Repo)
       then
@@ -877,6 +887,8 @@ package body Version.Config is
      (Repo : Version.Repository.Repository_Handle)
       return Config_Entry_Vectors.Vector
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       R      : aliased constant Version.Repository.Repository_Handle := Repo;
       Result : Config_Entry_Vectors.Vector;
 
@@ -941,6 +953,8 @@ package body Version.Config is
      (Path    : String;
       Entries : Config_Entry_Vectors.Vector)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Temp_Path : constant String := Path & ".tmp";
 
       File : Ada.Text_IO.File_Type;
@@ -1487,6 +1501,8 @@ package body Version.Config is
       Default : String := "")
       return String
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Wanted : constant String := Lower (Name);
       Found  : Boolean := False;
       Value  : Unbounded_String;

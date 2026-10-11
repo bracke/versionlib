@@ -2,6 +2,7 @@ with AUnit.Assertions;
 with AUnit.Test_Cases;
 
 with Ada.Text_IO;
+with Ada.Exceptions;
 with GNAT.OS_Lib;
 
 with Version.Test_Support;
@@ -683,6 +684,88 @@ package body Version.Status.Tests is
          raise;
    end Ignored_Directory_Is_Not_Reported;
 
+   procedure Status_In_Two_Tasks
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root
+          (Version.Temp_Fixture.Test_Case (T));
+      Dir_A : constant String := Version.Test_Support.Join (Root, "a");
+      Dir_B : constant String := Version.Test_Support.Join (Root, "b");
+
+      protected Tally is
+         procedure Miss (What : String);
+         function Misses return Natural;
+         function First return String;
+      private
+         Count : Natural := 0;
+         Said  : Unbounded_String;
+      end Tally;
+
+      protected body Tally is
+         procedure Miss (What : String) is
+         begin
+            Count := Count + 1;
+            if Length (Said) = 0 then
+               Said := To_Unbounded_String (What);
+            end if;
+         end Miss;
+         function Misses return Natural is (Count);
+         function First return String is (To_String (Said));
+      end Tally;
+
+      --  Each task asks its own repository, from its own directory, over
+      --  and over while the other asks the other: what the library keeps
+      --  between calls is shared, and must come back whole for each.
+      task type Asker (Is_A : Boolean);
+
+      task body Asker is
+         procedure Check is
+            Status : constant Version.Status.Status_Result :=
+              Version.Status.Current_Status;
+         begin
+            if Is_A then
+               if not Has_Change (Status.Changes, "a.txt", Version.Status.Modified_File)
+                 or else not Has_Change (Status.Untracked, "only-a.txt", Version.Status.New_File)
+                 or else Has_Change (Status.Untracked, "only-b.txt", Version.Status.New_File)
+               then
+                  Tally.Miss ("a's status was not a's");
+               end if;
+            elsif not Status.Changes.Is_Empty
+              or else not Has_Change (Status.Untracked, "only-b.txt", Version.Status.New_File)
+              or else Has_Change (Status.Untracked, "only-a.txt", Version.Status.New_File)
+            then
+               Tally.Miss ("b's status was not b's");
+            end if;
+         end Check;
+      begin
+         for Round in 1 .. 25 loop
+            Version.Files.In_Directory ((if Is_A then Dir_A else Dir_B), Check'Access);
+         end loop;
+      exception
+         when Failure : others =>
+            Tally.Miss (Ada.Exceptions.Exception_Information (Failure));
+      end Asker;
+   begin
+      Version.Test_Support.Make_Directory (Dir_A);
+      Version.Test_Support.Make_Directory (Dir_B);
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Dir_A);
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Dir_B);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Dir_A, "a.txt"), "changed" & Character'Val (10));
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Dir_A, "only-a.txt"), "a" & Character'Val (10));
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Dir_B, "only-b.txt"), "b" & Character'Val (10));
+      declare
+         First_Asker  : Asker (Is_A => True);
+         Second_Asker : Asker (Is_A => False);
+      begin
+         null;
+      end;
+      Assert (Tally.Misses = 0, "two tasks' status crossed: " & Tally.First);
+   end Status_In_Two_Tasks;
+
    procedure Ignored_Nested_Repository_And_Large_File
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1181,6 +1264,10 @@ package body Version.Status.Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Ignored_Status_Reports_Ignored_Separately'Access,
          "Status: ignored output reports ignored files separately");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Status_In_Two_Tasks'Access,
+         "Status: two tasks asking two repositories each get their own");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Ignored_Nested_Repository_And_Large_File'Access,

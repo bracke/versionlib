@@ -1,3 +1,4 @@
+with Version.Shared_Lock;
 with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Ordered_Sets;
@@ -71,6 +72,8 @@ package body Version.Revisions is
    --  location map for each.  A new or repacked pack changes the
    --  directory's timestamp, which reloads them.
    procedure Refresh_Abbrev_Packs (Repo : Version.Repository.Repository_Handle) is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       use type Ada.Calendar.Time;
       Pack_Dir : constant String :=
         Join (Join (Version.Repository.Common_Git_Dir (Repo), "objects"), "pack");
@@ -91,6 +94,8 @@ package body Version.Revisions is
      (Repo : Version.Repository.Repository_Handle)
       return Positive
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Count : Natural;
       Bits  : Natural := 0;
    begin
@@ -109,6 +114,8 @@ package body Version.Revisions is
       Minimum : Natural)
       return Natural
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Full : constant String := Lower (To_String (Id));
       Floor : constant Positive :=
         (if Minimum = Auto_Abbrev then Auto_Abbrev_Length (Repo) else Minimum);
@@ -123,7 +130,6 @@ package body Version.Revisions is
       Loose : Id_Sets.Set;
 
       use type Ada.Directories.File_Kind;
-      use type Ada.Calendar.Time;
    begin
       Refresh_Abbrev_Packs (Repo);
 

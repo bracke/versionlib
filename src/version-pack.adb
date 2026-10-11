@@ -1,3 +1,4 @@
+with Version.Shared_Lock;
 with Ada.Unchecked_Deallocation;
 with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Indefinite_Vectors;
@@ -110,6 +111,8 @@ package body Version.Pack is
    procedure Free is new Ada.Unchecked_Deallocation (Stream_Element_Array, Stream_Array_Access);
 
    procedure Release_Cached_Files (Above : Natural := 0) is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Total : Long_Long_Integer := 0;
    begin
       for Held of Data_Cache loop
@@ -627,6 +630,8 @@ package body Version.Pack is
      (Repo : Version.Repository.Repository_Handle;
       Id   : Version.Objects.Hex_Object_Id) return Pack_Location
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Pack_Dir : constant String :=
         Join
           (Join (Version.Repository.Common_Git_Dir (Repo), "objects"), "pack");
@@ -691,12 +696,16 @@ package body Version.Pack is
    function Contains
      (Repo : Version.Repository.Repository_Handle;
       Id   : Version.Objects.Hex_Object_Id) return Boolean is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       return Find_Location (Repo, Id).Found;
    end Contains;
 
    function Read_Header (Location : Pack_Location) return Packed_Object_Header
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Data : Stream_Element_Array renames
         Cached_File (To_String (Location.Pack_Path)).all;
 
@@ -1041,6 +1050,8 @@ package body Version.Pack is
    function Read_Delta_Base
      (Repo     : Version.Repository.Repository_Handle;
       Location : Pack_Location) return Delta_Base_Info is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Data   : Stream_Element_Array renames
         Cached_File (To_String (Location.Pack_Path)).all;
       Header : constant Packed_Object_Header := Read_Header (Location);
@@ -1098,6 +1109,8 @@ package body Version.Pack is
      (Repo : Version.Repository.Repository_Handle; Location : Pack_Location)
       return Version.Objects.Git_Object
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       --  The file's size is part of the key: a temporary pack rewritten
       --  under the same name within one process must not serve stale
       --  objects (Cached_File reloads on a size change for the same reason).
@@ -1273,6 +1286,8 @@ package body Version.Pack is
      (Repo : Version.Repository.Repository_Handle;
       Id   : Version.Objects.Hex_Object_Id) return Version.Objects.Git_Object
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Location : constant Pack_Location := Find_Location (Repo, Id);
    begin
       return Read_Object_At_Location (Repo => Repo, Location => Location);
@@ -1598,6 +1613,8 @@ package body Version.Pack is
       Pack_Path    : String;
       Canonicalize : Boolean := True)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Data           : constant Stream_Element_Array := Read_File (Pack_Path);
       Magic          : String (1 .. 4) := [others => Character'Val (0)];
       Version_Number : U32 := 0;
@@ -1904,6 +1921,8 @@ package body Version.Pack is
      (Repo : Version.Repository.Repository_Handle)
       return Version.Objects.Object_Id_Vectors.Vector
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Pack_Dir : constant String :=
         Join
           (Join (Version.Repository.Common_Git_Dir (Repo), "objects"), "pack");

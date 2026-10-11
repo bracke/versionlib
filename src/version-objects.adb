@@ -1,6 +1,8 @@
+with Version.Shared_Lock;
 with Interfaces.C;
 with System.Storage_Elements;
 with Version.Config;
+with Ada.Task_Attributes;
 with Ada.Unchecked_Deallocation;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Strings.Hash;
@@ -37,6 +39,19 @@ package body Version.Objects is
      (To_Object_Id ([1 .. 40 => '0']));
 
    function Id_Length (Id : Object_Id_Storage) return Natural is (Id.Length);
+
+   function Hash (Id : Object_Id_Storage) return Ada.Containers.Hash_Type is
+      use type Ada.Containers.Hash_Type;
+      Result : Ada.Containers.Hash_Type := 0;
+   begin
+      for I in 1 .. Natural'Min (Id.Length, 8) loop
+         Result := Result * 16 + Character'Pos (Id.Text (I));
+      end loop;
+      return Result;
+   end Hash;
+
+   function Same (Left, Right : Object_Id_Storage) return Boolean is
+     (Left.Text (1 .. Left.Length) = Right.Text (1 .. Right.Length));
 
    --  Compared where the text lies, not through a copy of each: an
    --  ordered map of ids asks this at every node of every lookup.
@@ -209,6 +224,8 @@ package body Version.Objects is
       Present : out Boolean;
       Object  : out Git_Object)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Path      : constant String := Loose_Object_Path (Repo, Id);
       Available : Boolean;
       Stamp     : constant String := Hostkit.Metadata.Change_Stamp (Path, Available);
@@ -352,35 +369,69 @@ package body Version.Objects is
    Replace_Of_Dir : Unbounded_String;
    Replace_Dir    : Unbounded_String;
 
-   --  Within an operation's Lookup_Scope: whether that directory was there
-   --  when first asked.
-   Scope_Depth   : Natural := 0;
-   Scope_Asked   : Boolean := False;
-   Scope_Present : Boolean := False;
+   --  Within an operation's Lookup_Scope -- a task's own -- whether the
+   --  replacement directory of the repository it asked about was there when
+   --  first asked.
+   type Scope_State is record
+      Depth   : Natural := 0;
+      Serial  : Natural := 0;
+      Asked   : Boolean := False;
+      Present : Boolean := False;
+      Git_Dir : Unbounded_String;
+   end record;
+
+   package Scopes is new Ada.Task_Attributes
+     (Attribute     => Scope_State,
+      Initial_Value => (Depth => 0, Serial => 0, Asked => False, Present => False,
+                        Git_Dir => Null_Unbounded_String));
+
+   --  The numbers outermost scopes are given, across tasks.
+   Last_Serial : Natural := 0;
+
+   function Lookup_Serial return Natural is
+      State : constant Scope_State := Scopes.Value;
+   begin
+      return (if State.Depth > 0 then State.Serial else 0);
+   end Lookup_Serial;
 
    overriding procedure Initialize (Item : in out Lookup_Scope) is
       pragma Unreferenced (Item);
+      State : Scope_State := Scopes.Value;
    begin
-      Scope_Depth := Scope_Depth + 1;
+      if State.Depth = 0 then
+         declare
+            Guard : Version.Shared_Lock.Hold;
+            pragma Unreferenced (Guard);
+         begin
+            Last_Serial := (if Last_Serial = Natural'Last then 1 else Last_Serial + 1);
+            State.Serial := Last_Serial;
+         end;
+      end if;
+      State.Depth := State.Depth + 1;
+      Scopes.Set_Value (State);
       Version.Config.Hold_Kept;
    end Initialize;
 
    overriding procedure Finalize (Item : in out Lookup_Scope) is
       pragma Unreferenced (Item);
+      State : Scope_State := Scopes.Value;
    begin
       Version.Config.Release_Kept;
-      if Scope_Depth > 0 then
-         Scope_Depth := Scope_Depth - 1;
+      if State.Depth > 0 then
+         State.Depth := State.Depth - 1;
       end if;
-      if Scope_Depth = 0 then
-         Scope_Asked := False;
+      if State.Depth = 0 then
+         State.Asked := False;
       end if;
+      Scopes.Set_Value (State);
    end Finalize;
 
    function Replacement_Of
      (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
       return Hex_Object_Id
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Current : Hex_Object_Id := Id;
    begin
       if Ada.Environment_Variables.Exists ("GIT_NO_REPLACE_OBJECTS") then
@@ -393,25 +444,30 @@ package body Version.Objects is
       if To_String (Replace_Of_Dir) /= Version.Repository.Common_Git_Dir (Repo) then
          Replace_Of_Dir := To_Unbounded_String (Version.Repository.Common_Git_Dir (Repo));
          Replace_Dir := To_Unbounded_String (Join (Join (Version.Repository.Common_Git_Dir (Repo), "refs"), "replace"));
-         Scope_Asked := False;
       end if;
-      if Scope_Depth > 0 and then Scope_Asked then
-         if not Scope_Present then
-            return Id;
-         end if;
-      else
-         declare
-            Present : constant Boolean := Version.Files.Exists (To_String (Replace_Dir));
-         begin
-            if Scope_Depth > 0 then
-               Scope_Asked := True;
-               Scope_Present := Present;
-            end if;
-            if not Present then
+      declare
+         State : Scope_State := Scopes.Value;
+      begin
+         if State.Depth > 0 and then State.Asked and then State.Git_Dir = Replace_Of_Dir then
+            if not State.Present then
                return Id;
             end if;
-         end;
-      end if;
+         else
+            declare
+               Present : constant Boolean := Version.Files.Exists (To_String (Replace_Dir));
+            begin
+               if State.Depth > 0 then
+                  State.Asked := True;
+                  State.Present := Present;
+                  State.Git_Dir := Replace_Of_Dir;
+                  Scopes.Set_Value (State);
+               end if;
+               if not Present then
+                  return Id;
+               end if;
+            end;
+         end if;
+      end;
 
       for Depth in 1 .. 30 loop
          declare
@@ -991,6 +1047,8 @@ package body Version.Objects is
       Base_Path : String;
       Result    : in out Tree_Entry_Vectors.Vector)
    is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
       Position : Flattened_Maps.Cursor := Flattened.Find (Tree_Id);
    begin
       if not Flattened_Maps.Has_Element (Position) then

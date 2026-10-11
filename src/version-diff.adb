@@ -1,3 +1,4 @@
+with Version.Shared_Lock;
 with Ada.Containers;
 use type Ada.Containers.Count_Type;
 with Ada.Containers.Vectors;
@@ -155,9 +156,22 @@ package body Version.Diff is
 
    --  The index line's width where none is asked: git's automatic one for
    --  the repository at hand, 7 outside one.
+   --  Worked out once an operation (Version.Objects.Lookup_Serial), not
+   --  with the repository opened again for each file's index line.
+   Index_Width_Serial : Natural := 0;
+   Index_Width        : Positive := 7;
+
    function Auto_Index_Width return Positive is
+      Guard  : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
+      Serial : constant Natural := Version.Objects.Lookup_Serial;
    begin
-      return Version.Revisions.Auto_Abbrev_Length (Version.Repository.Open);
+      if Serial /= 0 and then Serial = Index_Width_Serial then
+         return Index_Width;
+      end if;
+      Index_Width := Version.Revisions.Auto_Abbrev_Length (Version.Repository.Open);
+      Index_Width_Serial := Serial;
+      return Index_Width;
    exception
       when others =>
          return 7;
@@ -1315,6 +1329,8 @@ package body Version.Diff is
    function Any_Textconv_Read (Repo : Version.Repository.Repository_Handle) return Boolean;
 
    function Any_Textconv (Repo : Version.Repository.Repository_Handle) return Boolean is
+      Guard : Version.Shared_Lock.Hold;
+      pragma Unreferenced (Guard);
    begin
       if Textconv_Generation = Version.Config.Kept_Generation
         and then Version.Config.Kept_Is_Current (Repo)

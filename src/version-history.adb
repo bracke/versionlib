@@ -1,3 +1,4 @@
+with Ada.Containers.Hashed_Maps;
 with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Ordered_Sets;
 with Ada.IO_Exceptions;
@@ -458,13 +459,17 @@ package body Version.History is
          Uninteresting : Boolean := False;
       end record;
 
-      package Seen_Maps is new Ada.Containers.Ordered_Maps
-        (Key_Type     => Version.Objects.Object_Id_Storage,
-         Element_Type => Seen_State);
+      package Seen_Maps is new Ada.Containers.Hashed_Maps
+        (Key_Type        => Version.Objects.Object_Id_Storage,
+         Element_Type    => Seen_State,
+         Hash            => Version.Objects.Hash,
+         Equivalent_Keys => Version.Objects.Same);
 
-      package Signature_Maps is new Ada.Containers.Ordered_Maps
-        (Key_Type     => Version.Objects.Object_Id_Storage,
-         Element_Type => Unbounded_String);
+      package Signature_Maps is new Ada.Containers.Hashed_Maps
+        (Key_Type        => Version.Objects.Object_Id_Storage,
+         Element_Type    => Unbounded_String,
+         Hash            => Version.Objects.Hash,
+         Equivalent_Keys => Version.Objects.Same);
 
       Objects    : Version.Object_Cache.Object_Cache;
       Shallow    : Version.Shallow_Cache.Shallow_Cache;
