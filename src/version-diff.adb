@@ -3935,20 +3935,15 @@ package body Version.Diff is
    is
       Algorithm : constant Version.Hash.Hash_Algorithm := Version.Repository.Algorithm (Repo);
 
-      package Entry_Maps is new Ada.Containers.Indefinite_Ordered_Maps
-        (String, Version.Objects.Tree_Entry, "<", Version.Objects."=");
+      --  One level of a tree, its entries in the order the tree keeps them.
+      function Level (Tree : Version.Objects.Hex_Object_Id) return Version.Objects.Tree_Entry_Vectors.Vector is
+        (Version.Objects.Parse_Tree
+           (Algorithm, Version.Objects.Content (Version.Object_Cache.Read_Object (Repo, Objects, Tree))));
 
-      function Level (Tree : Version.Objects.Hex_Object_Id) return Entry_Maps.Map is
-         Result : Entry_Maps.Map;
-      begin
-         for One of Version.Objects.Parse_Tree
-                      (Algorithm,
-                       Version.Objects.Content (Version.Object_Cache.Read_Object (Repo, Objects, Tree)))
-         loop
-            Result.Include (To_String (One.Path), One);
-         end loop;
-         return Result;
-      end Level;
+      --  The key a tree is sorted by: a directory's name as if it ended in
+      --  a slash, as git orders them.
+      function Key (One : Version.Objects.Tree_Entry) return String is
+        (To_String (One.Path) & (if One.Kind = Version.Objects.Tree_Directory then "/" else ""));
 
       function Joined (Base, Name : String) return String is
         (if Base = "" then Name else Base & "/" & Name);
@@ -3976,40 +3971,44 @@ package body Version.Diff is
          end if;
       end Whole;
 
+      --  Both levels walked together in their order: an entry on one side
+      --  only is all of it on that side; the same name on both, compared.
+      --  A file and a directory of one name sort apart and are each one
+      --  side's -- what a change of kind is.
       procedure Walk (Old_Id, New_Id : Version.Objects.Hex_Object_Id; Base : String) is
-         Old_Level : constant Entry_Maps.Map := Level (Old_Id);
-         New_Level : constant Entry_Maps.Map := Level (New_Id);
+         Old_Level : constant Version.Objects.Tree_Entry_Vectors.Vector := Level (Old_Id);
+         New_Level : constant Version.Objects.Tree_Entry_Vectors.Vector := Level (New_Id);
+         I         : Natural := Old_Level.First_Index;
+         J         : Natural := New_Level.First_Index;
       begin
-         for Position in Old_Level.Iterate loop
-            declare
-               Name : constant String := Entry_Maps.Key (Position);
-               Was  : constant Version.Objects.Tree_Entry := Entry_Maps.Element (Position);
-            begin
-               if not New_Level.Contains (Name) then
-                  Whole (Was, Base, Old_Out);
-               else
-                  declare
-                     Now : constant Version.Objects.Tree_Entry := New_Level.Element (Name);
-                  begin
-                     if Was.Id = Now.Id and then Was.Mode = Now.Mode then
-                        null;
-                     elsif Was.Kind = Version.Objects.Tree_Directory
-                       and then Now.Kind = Version.Objects.Tree_Directory
-                     then
-                        Version.Path_Safety.Require_Safe_Relative_Path
-                          (Joined (Base, Name), "tree entry path", Allow_Control => True);
-                        Walk (Was.Id, Now.Id, Joined (Base, Name));
-                     else
-                        Whole (Was, Base, Old_Out);
-                        Whole (Now, Base, New_Out);
-                     end if;
-                  end;
-               end if;
-            end;
-         end loop;
-         for Position in New_Level.Iterate loop
-            if not Old_Level.Contains (Entry_Maps.Key (Position)) then
-               Whole (Entry_Maps.Element (Position), Base, New_Out);
+         while I <= Old_Level.Last_Index or else J <= New_Level.Last_Index loop
+            if J > New_Level.Last_Index
+              or else (I <= Old_Level.Last_Index and then Key (Old_Level (I)) < Key (New_Level (J)))
+            then
+               Whole (Old_Level (I), Base, Old_Out);
+               I := I + 1;
+            elsif I > Old_Level.Last_Index or else Key (New_Level (J)) < Key (Old_Level (I)) then
+               Whole (New_Level (J), Base, New_Out);
+               J := J + 1;
+            else
+               declare
+                  Was : constant Version.Objects.Tree_Entry := Old_Level (I);
+                  Now : constant Version.Objects.Tree_Entry := New_Level (J);
+                  Name : constant String := To_String (Was.Path);
+               begin
+                  if Was.Id = Now.Id and then Was.Mode = Now.Mode then
+                     null;
+                  elsif Was.Kind = Version.Objects.Tree_Directory then
+                     Version.Path_Safety.Require_Safe_Relative_Path
+                       (Joined (Base, Name), "tree entry path", Allow_Control => True);
+                     Walk (Was.Id, Now.Id, Joined (Base, Name));
+                  else
+                     Whole (Was, Base, Old_Out);
+                     Whole (Now, Base, New_Out);
+                  end if;
+               end;
+               I := I + 1;
+               J := J + 1;
             end if;
          end loop;
       end Walk;
