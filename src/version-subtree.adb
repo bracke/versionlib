@@ -420,7 +420,7 @@ package body Version.Subtree is
    is
       Full : constant String := Hex (Item);
       Len  : constant Positive :=
-        Version.Revisions.Unique_Abbrev_Length (Repo, Item, 7);
+        Version.Revisions.Unique_Abbrev_Length (Repo, Item, Version.Revisions.Auto_Abbrev);
    begin
       return Full (Full'First .. Full'First + Len - 1);
    end Short;

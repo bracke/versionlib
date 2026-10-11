@@ -24,15 +24,26 @@ package Version.Revisions is
       Text : String)
       return Version.Objects.Hex_Object_Id;
 
+   Auto_Abbrev : constant Natural := 0;
+   --  The Minimum that asks for git's automatic width (core.abbrev=auto).
+
+   function Auto_Abbrev_Length
+     (Repo : Version.Repository.Repository_Handle)
+      return Positive;
+   --  git's automatic abbreviation width: half the bits of the number of
+   --  packed objects, rounded up, and never below 7 -- a repository of
+   --  20,000 objects abbreviates to 8.
+
    function Unique_Abbrev_Length
      (Repo    : Version.Repository.Repository_Handle;
       Id      : Version.Objects.Hex_Object_Id;
-      Minimum : Positive)
+      Minimum : Natural)
       return Natural;
    --  The shortest hexadecimal prefix length (>= Minimum, capped at the full
    --  id width) that uniquely identifies Id among all loose and packed
    --  objects -- git's `find_unique_abbrev` behaviour for %h/%t/%p. Minimum is
-   --  the configured floor (7 for core.abbrev=auto, or the requested width).
+   --  the configured floor: Auto_Abbrev for core.abbrev=auto, or the
+   --  requested width.
 
    function Objects_With_Prefix
      (Repo   : Version.Repository.Repository_Handle;

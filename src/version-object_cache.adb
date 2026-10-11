@@ -60,17 +60,13 @@ package body Version.Object_Cache is
       end;
 
       declare
-         Path : constant String :=
-           Version.Objects.Loose_Object_Path (Repo, Eff);
+         Present : Boolean;
+         Obj     : Version.Objects.Git_Object;
       begin
-         if Version.Files.Exists (Path) then
-            declare
-               Obj : constant Version.Objects.Git_Object :=
-                 Version.Objects.Read_Loose_Object (Repo, Eff);
-            begin
-               Cache.Objects.Include (Id, Obj);
-               return Obj;
-            end;
+         Version.Objects.Read_Loose_If_Present (Repo, Eff, Present, Obj);
+         if Present then
+            Cache.Objects.Include (Id, Obj);
+            return Obj;
          end if;
       end;
 

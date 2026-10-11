@@ -725,7 +725,7 @@ package body Version.Combine_Diff is
       Full : constant String := Version.Objects.To_String (Id);
       N    : constant Natural :=
         (if Options.Full_Index then Full'Length
-         else Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7));
+         else Version.Revisions.Unique_Abbrev_Length (Repo, Id, Version.Revisions.Auto_Abbrev));
    begin
       return Full (Full'First .. Full'First + N - 1);
    end Abbrev_Id;

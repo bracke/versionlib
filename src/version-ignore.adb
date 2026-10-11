@@ -5,6 +5,7 @@ with Ada.IO_Exceptions;
 with Ada.Text_IO;
 with Ada.Containers; use Ada.Containers;
 with GNAT.OS_Lib;
+with Hostkit.Directory_Listing;
 with Version.Config;
 with Version.Files;
 with Version.Platform;
@@ -633,45 +634,48 @@ package body Version.Ignore is
    end Same_Base;
 
    function Rule_Applies_To_Path
-     (Item : Rule; Path : String; Local_Path : out Unbounded_String)
+     (Item : Rule; Path : String; Local_First : out Positive)
       return Boolean
    is
-      Base : constant String := To_String (Item.Base_Dir);
    begin
-      Local_Path := Null_Unbounded_String;
+      --  The path as the rule's directory sees it is Path (Local_First ..
+      --  Path'Last): a slice, not a copy, asked of every rule for every path.
+      Local_First := Path'First;
 
-      if Base'Length = 0 then
-         Local_Path := To_Unbounded_String (Path);
+      if Length (Item.Base_Dir) = 0 then
          return True;
       end if;
 
-      if Path'Length < Base'Length then
-         return False;
-      end if;
+      declare
+         Base : constant String := To_String (Item.Base_Dir);
+      begin
+         if Path'Length < Base'Length then
+            return False;
+         end if;
 
-      --  The base is a directory on disk, and git reaches a nested
-      --  .gitignore by opening <dir>/.gitignore along the queried path -- so
-      --  on a host that folds case, `SUB/` finds `sub/.gitignore` and the
-      --  rules in it apply. Where the host distinguishes case, git's open
-      --  fails and so must this comparison.
-      if not Same_Base
-               (Path (Path'First .. Path'First + Base'Length - 1), Base)
-      then
-         return False;
-      end if;
+         --  The base is a directory on disk, and git reaches a nested
+         --  .gitignore by opening <dir>/.gitignore along the queried path -- so
+         --  on a host that folds case, `SUB/` finds `sub/.gitignore` and the
+         --  rules in it apply. Where the host distinguishes case, git's open
+         --  fails and so must this comparison.
+         if not Same_Base
+                  (Path (Path'First .. Path'First + Base'Length - 1), Base)
+         then
+            return False;
+         end if;
 
-      if Path'Length = Base'Length then
-         Local_Path := Null_Unbounded_String;
+         if Path'Length = Base'Length then
+            Local_First := Path'Last + 1;
+            return True;
+         end if;
+
+         if Path (Path'First + Base'Length) /= '/' then
+            return False;
+         end if;
+
+         Local_First := Path'First + Base'Length + 1;
          return True;
-      end if;
-
-      if Path (Path'First + Base'Length) /= '/' then
-         return False;
-      end if;
-
-      Local_Path :=
-        To_Unbounded_String (Path (Path'First + Base'Length + 1 .. Path'Last));
-      return True;
+      end;
    end Rule_Applies_To_Path;
 
    function Single_Target_Matches
@@ -755,7 +759,7 @@ package body Version.Ignore is
       Case_Insensitive                   : Boolean := False)
       return Boolean
    is
-      Local : Unbounded_String;
+      Local_First : Positive;
    begin
       if Relative_Path'Length = 0 then
          return False;
@@ -765,12 +769,12 @@ package body Version.Ignore is
          return False;
       end if;
 
-      if not Rule_Applies_To_Path (Item, Relative_Path, Local) then
+      if not Rule_Applies_To_Path (Item, Relative_Path, Local_First) then
          return False;
       end if;
 
       declare
-         Local_Text : constant String := To_String (Local);
+         Local_Text : String renames Relative_Path (Local_First .. Relative_Path'Last);
       begin
          if Item.Directory_Only then
             return
@@ -2334,44 +2338,49 @@ package body Version.Ignore is
    procedure Scan_Directory
      (Rules : in out Ignore_Rules; Root : String; Dir : String)
    is
-      Search : Ada.Directories.Search_Type;
-      E      : Ada.Directories.Directory_Entry_Type;
-      Opened : Boolean := False;
+      use type Hostkit.Directory_Listing.Entry_Kind;
+      Listed : Hostkit.Directory_Listing.Entry_Vectors.Vector;
       Dirs   : String_Vectors.Vector;
-      Own    : constant String := Version.Files.Child_Path (Dir, ".gitignore");
    begin
-      if Version.Files.Is_Ordinary_File (Own) then
-         Load_File
-           (Rules              => Rules,
-            Base_Dir           => Relative_Path (Root, Dir),
-            Path               => Own,
-            Skip_Symbolic_Link => True);
+      --  The listing says what each entry is, where the filesystem records
+      --  it; an entry it cannot say for is asked itself. A link is never a
+      --  directory here: git does not follow one.
+      if not Hostkit.Directory_Listing.List (Dir, Listed) then
+         return;
       end if;
 
-      Ada.Directories.Start_Search
-        (Search    => Search,
-         Directory => Dir,
-         Pattern   => "",
-         Filter    =>
-           [Ada.Directories.Ordinary_File => False,
-            Ada.Directories.Directory     => True,
-            Ada.Directories.Special_File  => False]);
+      for Item of Listed loop
+         if Item.Name = ".gitignore"
+           and then (Item.Kind = Hostkit.Directory_Listing.Regular_File
+                     or else Item.Kind = Hostkit.Directory_Listing.Unknown)
+         then
+            declare
+               Own : constant String := Version.Files.Child_Path (Dir, ".gitignore");
+            begin
+               if Version.Files.Is_Ordinary_File (Own) then
+                  Load_File
+                    (Rules              => Rules,
+                     Base_Dir           => Relative_Path (Root, Dir),
+                     Path               => Own,
+                     Skip_Symbolic_Link => True);
+               end if;
+            end;
+         end if;
+      end loop;
 
-      Opened := True;
-
-      while Ada.Directories.More_Entries (Search) loop
-         Ada.Directories.Get_Next_Entry (Search, E);
-
+      for Item of Listed loop
          declare
-            Name : constant String := Ada.Directories.Simple_Name (E);
             --  Composed rather than asked of Ada.Directories: its
             --  Full_Name validates the simple name, and a host that forbids
             --  a control character in one refuses to name a file git is
             --  perfectly happy to track.
-            Full : constant String := Version.Files.Child_Path (Dir, Name);
+            Full : constant String := Version.Files.Child_Path (Dir, Item.Name);
          begin
-            if Name /= "." and then Name /= ".." and then Name /= ".git"
-              and then Ada.Directories.Kind (E) = Ada.Directories.Directory
+            if Item.Name /= ".git"
+              and then (Item.Kind = Hostkit.Directory_Listing.Directory
+                        or else (Item.Kind = Hostkit.Directory_Listing.Unknown
+                                 and then not GNAT.OS_Lib.Is_Symbolic_Link (Full)
+                                 and then GNAT.OS_Lib.Is_Directory (Full)))
               and then not Is_Ignored (Rules, Relative_Path (Root, Full), Is_Directory => True)
             then
                Dirs.Append (To_Unbounded_String (Full));
@@ -2379,25 +2388,14 @@ package body Version.Ignore is
          end;
       end loop;
 
-      Ada.Directories.End_Search (Search);
-      Opened := False;
-
       Sort (Dirs);
 
-      if not Dirs.Is_Empty then
-         for I in Dirs.First_Index .. Dirs.Last_Index loop
-            Scan_Directory
-              (Rules => Rules,
-               Root  => Root,
-               Dir   => To_String (Dirs.Element (I)));
-         end loop;
-      end if;
-
+      for Sub of Dirs loop
+         Scan_Directory (Rules => Rules, Root => Root, Dir => To_String (Sub));
+      end loop;
    exception
       when others =>
-         if Opened then
-            Ada.Directories.End_Search (Search);
-         end if;
+         null;
    end Scan_Directory;
 
    function Rules_From_Text
@@ -2593,29 +2591,31 @@ package body Version.Ignore is
          return Result;
       end if;
 
-      if not Rules.Rules.Is_Empty then
-         for I in Rules.Rules.First_Index .. Rules.Rules.Last_Index loop
-            declare
-               Item : constant Rule := Rules.Rules.Element (I);
-            begin
-               if Rule_Matches
-                    (Item                                => Item,
-                     Relative_Path                       => Relative_Path,
-                     Is_Directory                       => Is_Directory,
-                     Count_Trailing_Double_Star_Directory =>
-                       Count_Trailing_Double_Star_Directory,
-                     Case_Insensitive => Rules.Case_Insensitive)
-               then
-                  Result :=
-                    (Has_Match   => True,
-                     Is_Ignored  => not Item.Negated,
-                     Source_Path => Item.Source_Path,
-                     Source_Line => Item.Source_Line,
-                     Pattern     => Item.Source_Pattern);
-               end if;
-            end;
-         end loop;
-      end if;
+      --  The last rule that matches decides, so the rules are asked from
+      --  the last back and the first that matches is the answer; each by
+      --  reference, since a copy is four strings adjusted and finalized for
+      --  every rule and every path of a walk.
+      for I in reverse Rules.Rules.First_Index .. Rules.Rules.Last_Index loop
+         declare
+            Item : Rule renames Rules.Rules.Constant_Reference (I).Element.all;
+         begin
+            if Rule_Matches
+                 (Item                                => Item,
+                  Relative_Path                       => Relative_Path,
+                  Is_Directory                        => Is_Directory,
+                  Count_Trailing_Double_Star_Directory =>
+                    Count_Trailing_Double_Star_Directory,
+                  Case_Insensitive                    => Rules.Case_Insensitive)
+            then
+               return
+                 (Has_Match   => True,
+                  Is_Ignored  => not Item.Negated,
+                  Source_Path => Item.Source_Path,
+                  Source_Line => Item.Source_Line,
+                  Pattern     => Item.Source_Pattern);
+            end if;
+         end;
+      end loop;
 
       return Result;
    end Match_Direct;
@@ -2712,5 +2712,25 @@ package body Version.Ignore is
    begin
       return Match (Rules, Relative_Path, Is_Directory).Is_Ignored;
    end Is_Ignored;
+
+   function Is_Ignored_In
+     (Rules          : Ignore_Rules;
+      Relative_Path  : String;
+      Is_Directory   : Boolean;
+      Parent_Ignored : Boolean)
+      return Boolean
+   is
+      Normal_Path : constant String :=
+        Normalize_Query_Path (To_String (Rules.Root_Path), Relative_Path);
+   begin
+      --  As Match: what is in an ignored directory is ignored, and nothing
+      --  re-includes it; else the path's own rules decide.
+      if Normal_Path'Length = 0 or else Is_Git_Internal_Path (Normal_Path) then
+         return False;
+      elsif Parent_Ignored then
+         return True;
+      end if;
+      return Match_Direct (Rules => Rules, Relative_Path => Normal_Path, Is_Directory => Is_Directory).Is_Ignored;
+   end Is_Ignored_In;
 
 end Version.Ignore;

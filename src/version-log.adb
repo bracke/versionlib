@@ -585,7 +585,7 @@ package body Version.Log is
         (if Full then Hex'Length
          elsif Header.Abbrev_Len > 0
          then Natural'Min (Natural'Max (Header.Abbrev_Len, 4), Hex'Length)
-         else Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7));
+         else Version.Revisions.Unique_Abbrev_Length (Repo, Id, Version.Revisions.Auto_Abbrev));
    begin
       return Hex (Hex'First .. Hex'First + N - 1);
    end Shown_Id;
@@ -1323,6 +1323,8 @@ package body Version.Log is
       Always_Show_Header : Boolean := False)
       return String
    is
+      Scope : Version.Objects.Lookup_Scope;
+      pragma Unreferenced (Scope);
       Result  : Unbounded_String;
       Objects : Version.Object_Cache.Object_Cache;
       First   : Boolean := True;

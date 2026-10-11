@@ -1,3 +1,5 @@
+with Hostkit.Metadata;
+with Interfaces;
 with Ada.Characters.Latin_1;
 with Ada.Directories;
 with Ada.IO_Exceptions;
@@ -87,7 +89,21 @@ package body Version.Status is
    is
       Full : constant String :=
         Version.Files.Join (Version.Repository.Root_Path (Repo), Path);
+      use type Interfaces.Unsigned_64;
+      Seen : constant Hostkit.Metadata.Entry_Revision := Hostkit.Metadata.Entry_Revision_Of (Full);
    begin
+      --  One look at the entry, as git takes its mode: a link, or a file
+      --  whose owner may run it -- st_mode's bits, where a test for a link
+      --  and another for running it were two.
+      if Seen.Available and then Seen.Mode /= 0 and then Version.Platform.Supports_Executable_Bit then
+         if (Seen.Mode and 8#170000#) = 8#120000# then
+            return "120000";
+         elsif (Seen.Mode and 8#100#) /= 0 then
+            return "100755";
+         else
+            return "100644";
+         end if;
+      end if;
       if GNAT.OS_Lib.Is_Symbolic_Link (Version.Files.To_Native_Path (Full)) then
          return "120000";
       elsif not Version.Platform.Supports_Executable_Bit
@@ -1171,36 +1187,126 @@ package body Version.Status is
       Working_Files   : Version.Working_Tree.Working_File_Vectors.Vector;
       Ignore_Rules    : Version.Ignore.Ignore_Rules;
       Repo            : Version.Repository.Repository_Handle;
-      Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector)
+      Pathspecs       : Version.Pathspec.Pathspec_Vectors.Vector;
+      All_Untracked   : Boolean)
       return File_Change_Vectors.Vector
    is
+      package Answer_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+        (Key_Type => String, Element_Type => Boolean);
+
       Result    : File_Change_Vectors.Vector;
       Index_Pos : constant Path_Position_Maps.Map := Index_Map (Index_Entries);
-   begin
-      if not Working_Files.Is_Empty then
-         for I in Working_Files.First_Index .. Working_Files.Last_Index loop
-            declare
-               Path : constant String :=
-                 To_String (Working_Files.Element (I).Path);
-               Pos  : constant Path_Position_Maps.Cursor :=
-                 Index_Pos.Find (Path);
-            begin
-               if not Path_Position_Maps.Has_Element (Pos)
-                 and then Version.Sparse.Included (Repo, Path)
-                 and then
-                   (Pathspecs.Is_Empty
-                    or else Version.Pathspec.Matches_Any (Pathspecs, Path))
-                 and then
-                   Version.Ignore.Is_Ignored
-                     (Rules         => Ignore_Rules,
-                      Relative_Path => Path,
-                      Is_Directory  => False)
-               then
-                  Add_Change (Result, Path, Ignored_File);
-               end if;
-            end;
+      Root      : constant String := Version.Repository.Root_Path (Repo);
+      Nested    : Answer_Maps.Map;
+      Reported  : Answer_Maps.Map;
+      --  Directories holding something that is not ignored -- a tracked
+      --  path or an untracked file no rule ignores -- which git therefore
+      --  does not report whole.
+      Blocked   : Answer_Maps.Map;
+
+      --  Whether Dir, relative to the root, is a repository of its own, as
+      --  git judges it: a `.git` file, or a `.git` directory with HEAD,
+      --  objects and refs in it. Asked once a directory.
+      function Is_Nested (Dir : String) return Boolean is
+         Pos : constant Answer_Maps.Cursor := Nested.Find (Dir);
+      begin
+         if Answer_Maps.Has_Element (Pos) then
+            return Answer_Maps.Element (Pos);
+         end if;
+         declare
+            Git    : constant String :=
+              Version.Files.Child_Path (Version.Files.Child_Path (Root, Dir), ".git");
+            Answer : constant Boolean :=
+              Version.Files.Is_Ordinary_File (Git)
+              or else
+                (Version.Files.Is_Directory (Git)
+                 and then Version.Files.Exists (Version.Files.Child_Path (Git, "HEAD"))
+                 and then Version.Files.Is_Directory (Version.Files.Child_Path (Git, "objects"))
+                 and then Version.Files.Is_Directory (Version.Files.Child_Path (Git, "refs")));
+         begin
+            Nested.Insert (Dir, Answer);
+            return Answer;
+         end;
+      end Is_Nested;
+
+      procedure Block_Parents (Path : String) is
+      begin
+         for I in reverse Path'Range loop
+            if Path (I) = '/' then
+               exit when Blocked.Contains (Path (Path'First .. I - 1));
+               Blocked.Insert (Path (Path'First .. I - 1), True);
+            end if;
          end loop;
-      end if;
+      end Block_Parents;
+
+      --  As git: a file inside a repository of its own is not listed, the
+      --  repository is, as its directory; and unless every untracked file
+      --  is asked for, so is the outermost directory with nothing in it
+      --  that is not ignored.
+      procedure Add_Ignored (Path : String) is
+         Unit_Last : Natural := Path'Last;
+         Is_Dir    : Boolean := False;
+      begin
+         for I in Path'Range loop
+            if Path (I) = '/' and then Is_Nested (Path (Path'First .. I - 1)) then
+               Unit_Last := I - 1;
+               Is_Dir := True;
+               exit;
+            end if;
+         end loop;
+         if not All_Untracked then
+            for I in Path'First .. Unit_Last loop
+               if Path (I) = '/' and then not Blocked.Contains (Path (Path'First .. I - 1)) then
+                  Unit_Last := I - 1;
+                  Is_Dir := True;
+                  exit;
+               end if;
+            end loop;
+         end if;
+         if not Is_Dir then
+            Add_Change (Result, Path, Ignored_File);
+         elsif not Reported.Contains (Path (Path'First .. Unit_Last)) then
+            Reported.Insert (Path (Path'First .. Unit_Last), True);
+            Add_Change (Result, Path (Path'First .. Unit_Last + 1), Ignored_File);
+         end if;
+      end Add_Ignored;
+
+      Ignored : array (Working_Files.First_Index .. Working_Files.Last_Index) of Boolean :=
+        [others => False];
+   begin
+      for Item of Index_Entries loop
+         Block_Parents (To_String (Item.Path));
+      end loop;
+
+      for I in Ignored'Range loop
+         declare
+            Path : constant String := To_String (Working_Files.Element (I).Path);
+         begin
+            if not Index_Pos.Contains (Path) then
+               Ignored (I) :=
+                 Version.Ignore.Is_Ignored
+                   (Rules => Ignore_Rules, Relative_Path => Path, Is_Directory => False);
+               if not Ignored (I) then
+                  Block_Parents (Path);
+               end if;
+            end if;
+         end;
+      end loop;
+
+      for I in Ignored'Range loop
+         declare
+            Path : constant String := To_String (Working_Files.Element (I).Path);
+         begin
+            if Ignored (I)
+              and then Version.Sparse.Included (Repo, Path)
+              and then
+                (Pathspecs.Is_Empty
+                 or else Version.Pathspec.Matches_Any (Pathspecs, Path))
+            then
+               Add_Ignored (Path);
+            end if;
+         end;
+      end loop;
 
       return Result;
    end Build_Ignored;
@@ -1552,6 +1658,8 @@ package body Version.Status is
       Use_Base      : Boolean := False;
       Base_Commit   : String := "") return Status_Result
    is
+      Scope : Version.Objects.Lookup_Scope;
+      pragma Unreferenced (Scope);
       Repo          : Version.Repository.Repository_Handle;
       Commit        : Unbounded_String;
       Head_Entries  : Version.Objects.Tree_Entry_Vectors.Vector;
@@ -1745,7 +1853,8 @@ package body Version.Status is
               Working_Files   => Working_Files,
               Ignore_Rules    => Ignore_Rules,
               Repo            => Repo,
-              Pathspecs       => Pathspecs);
+              Pathspecs       => Pathspecs,
+              All_Untracked   => All_Untracked);
       end if;
       Sort_Changes (Result.Ignored);
       Sort_Changes (Result.Conflicted);
@@ -1818,7 +1927,7 @@ package body Version.Status is
          Full : constant String := Version.Objects.To_String (Id);
       begin
          return Full (Full'First .. Full'First
-                      + Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7)
+                      + Version.Revisions.Unique_Abbrev_Length (Repo, Id, Version.Revisions.Auto_Abbrev)
                       - 1);
       exception
          when others =>
@@ -1958,7 +2067,7 @@ package body Version.Status is
             Emit
               ("HEAD detached at "
                & Full (Full'First .. Full'First
-                       + Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7)
+                       + Version.Revisions.Unique_Abbrev_Length (Repo, Id, Version.Revisions.Auto_Abbrev)
                        - 1));
          exception
             when others =>

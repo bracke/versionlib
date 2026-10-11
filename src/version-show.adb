@@ -57,7 +57,7 @@ package body Version.Show is
               Version.Objects.Commit_Parent_Ids (Obj);
             Full     : constant String := To_String (Commit_Id);
             C_Ab     : constant Natural :=
-              Version.Revisions.Unique_Abbrev_Length (Repo, Commit_Id, 7);
+              Version.Revisions.Unique_Abbrev_Length (Repo, Commit_Id, Version.Revisions.Auto_Abbrev);
             Subject  : constant String :=
               Version.Objects.Commit_Message_First_Line (Obj);
             Out_Text : Unbounded_String;
@@ -67,7 +67,7 @@ package body Version.Show is
                declare
                   P_Hex : constant String := Version.Objects.To_String (P);
                   P_Ab  : constant Natural :=
-                    Version.Revisions.Unique_Abbrev_Length (Repo, P, 7);
+                    Version.Revisions.Unique_Abbrev_Length (Repo, P, Version.Revisions.Auto_Abbrev);
                   --  Oneline abbreviates the parent id; the medium header
                   --  spells it in full, as git does.
                   From  : constant String :=

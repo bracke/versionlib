@@ -425,6 +425,8 @@ package body Version.History is
       Options : Rev_List_Options := (others => <>))
       return Commit_Id_Vectors.Vector
    is
+      Scope : Version.Objects.Lookup_Scope;
+      pragma Unreferenced (Scope);
       type Queue_Entry is record
          Time          : Long_Long_Integer := 0;
          Seq           : Natural := 0;

@@ -1,4 +1,5 @@
 with Ada.Containers.Vectors;
+with Ada.Finalization;
 with Ada.Strings.Unbounded;
 
 with Version.Hash;
@@ -106,6 +107,15 @@ package Version.Objects is
       Id   : Hex_Object_Id)
       return Git_Object;
 
+   procedure Read_Loose_If_Present
+     (Repo    : Version.Repository.Repository_Handle;
+      Id      : Hex_Object_Id;
+      Present : out Boolean;
+      Object  : out Git_Object);
+   --  Read_Loose_Object where the object is stored loose; Present False,
+   --  else. One look at the file answers both, where Exists then a read
+   --  looked twice.
+
    function Replacement_Of
      (Repo : Version.Repository.Repository_Handle;
       Id   : Hex_Object_Id)
@@ -204,6 +214,16 @@ package Version.Objects is
    function Content
      (Obj : Git_Object)
       return String;
+
+   type Lookup_Scope is new Ada.Finalization.Limited_Controlled with null record;
+   --  One operation's reading of objects -- a history walked, a log, a
+   --  status: while one is alive, whether the repository replaces objects
+   --  (refs/replace) is asked of the disk once, as git asks once a
+   --  command, not for every object read; and the configuration read is
+   --  held (Version.Config.Hold_Kept). Declared at the operation's start;
+   --  nested ones share the first's answer.
+   overriding procedure Initialize (Item : in out Lookup_Scope);
+   overriding procedure Finalize (Item : in out Lookup_Scope);
 
 private
 

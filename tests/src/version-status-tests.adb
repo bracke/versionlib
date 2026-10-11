@@ -1,6 +1,7 @@
 with AUnit.Assertions;
 with AUnit.Test_Cases;
 
+with Ada.Text_IO;
 with GNAT.OS_Lib;
 
 with Version.Test_Support;
@@ -682,6 +683,76 @@ package body Version.Status.Tests is
          raise;
    end Ignored_Directory_Is_Not_Reported;
 
+   procedure Ignored_Nested_Repository_And_Large_File
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      Root : constant String :=
+        Version.Temp_Fixture.Root
+          (Version.Temp_Fixture.Test_Case (T));
+      Old_Dir : constant String := Ada.Directories.Current_Directory;
+      Cache   : constant String := Version.Test_Support.Join (Root, "cache");
+      Nested  : constant String := Version.Test_Support.Join (Cache, "pin");
+      Fake    : constant String := Version.Test_Support.Join (Cache, "fake");
+   begin
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Root);
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Root, ".gitignore"), "/cache/" & Character'Val (10));
+      Version.Test_Support.Make_Directory (Cache);
+      Version.Test_Support.Make_Directory (Nested);
+      Version.Git_Fixtures.Init_Repo_With_One_Commit (Nested);
+      --  Not a repository: a .git with only HEAD in it.
+      Version.Test_Support.Make_Directory (Fake);
+      Version.Test_Support.Make_Directory (Version.Test_Support.Join (Fake, ".git"));
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Version.Test_Support.Join (Fake, ".git"), "HEAD"),
+         "ref: refs/heads/main" & Character'Val (10));
+      Version.Test_Support.Write_Text_File
+        (Version.Test_Support.Join (Fake, "kept.txt"), "kept" & Character'Val (10));
+      --  Larger than a task stack: the file is read whole on the heap.
+      declare
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Version.Test_Support.Join (Cache, "large.bin"));
+         for I in 1 .. 9 * 1024 loop
+            Ada.Text_IO.Put (File, String'(1 .. 1023 => 'x'));
+            Ada.Text_IO.New_Line (File);
+         end loop;
+         Ada.Text_IO.Close (File);
+      end;
+
+      Ada.Directories.Set_Directory (Root);
+
+      declare
+         All_Files : constant Version.Status.Status_Result :=
+           Version.Status.Current_Status_With_Ignored (All_Untracked => True);
+         Whole     : constant Version.Status.Status_Result :=
+           Version.Status.Current_Status_With_Ignored;
+      begin
+         Assert
+           (Has_Change (All_Files.Ignored, "cache/pin/", Version.Status.Ignored_File),
+            "an ignored repository of its own is reported as its directory");
+         Assert
+           (not Has_Change (All_Files.Ignored, "cache/pin/a.txt", Version.Status.Ignored_File),
+            "not the files in it");
+         Assert
+           (Has_Change (All_Files.Ignored, "cache/fake/kept.txt", Version.Status.Ignored_File),
+            "a .git that is no repository does not hide the files beside it");
+         Assert
+           (Has_Change (All_Files.Ignored, "cache/large.bin", Version.Status.Ignored_File),
+            "a file larger than a stack is listed");
+         Assert
+           (Has_Change (Whole.Ignored, "cache/", Version.Status.Ignored_File)
+            and then Natural (Whole.Ignored.Length) = 1,
+            "without every untracked file asked for, the ignored directory is reported whole");
+      end;
+
+      Ada.Directories.Set_Directory (Old_Dir);
+   exception
+      when others =>
+         Ada.Directories.Set_Directory (Old_Dir);
+         raise;
+   end Ignored_Nested_Repository_And_Large_File;
+
    procedure Ignored_Status_Reports_Ignored_Separately
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -728,9 +799,9 @@ package body Version.Status.Tests is
          Assert
            (Has_Change
               (With_Ignored.Ignored,
-               "build/generated.o",
+               "build/",
                Version.Status.Ignored_File),
-            "ignored status should report ignored directory contents separately");
+            "ignored status should report an ignored directory whole, as git does");
          Assert
            (not Has_Change
               (With_Ignored.Untracked,
@@ -1110,6 +1181,10 @@ package body Version.Status.Tests is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Ignored_Status_Reports_Ignored_Separately'Access,
          "Status: ignored output reports ignored files separately");
+
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Ignored_Nested_Repository_And_Large_File'Access,
+         "Status: an ignored repository is one entry, a large ignored file is listed");
 
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Status_Pathspec_Filters_Untracked'Access,

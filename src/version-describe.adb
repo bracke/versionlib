@@ -340,8 +340,8 @@ package body Version.Describe is
       Abbrev : Integer) return String
    is
       Hex : constant String := To_String (Id);
-      Min : constant Positive :=
-        (if Abbrev < 0 then 7
+      Min : constant Natural :=
+        (if Abbrev < 0 then Version.Revisions.Auto_Abbrev
          else Integer'Min (Integer'Max (Abbrev, 4), Hex'Length));
       N   : constant Natural :=
         Natural'Min (Hex'Length,

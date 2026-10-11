@@ -23,6 +23,16 @@ package Version.Ignore is
       Is_Directory  : Boolean)
       return Boolean;
 
+   function Is_Ignored_In
+     (Rules          : Ignore_Rules;
+      Relative_Path  : String;
+      Is_Directory   : Boolean;
+      Parent_Ignored : Boolean)
+      return Boolean;
+   --  Is_Ignored, for a caller that knows already whether the directory the
+   --  path is in is ignored -- a walk of the tree, which asked it of that
+   --  directory -- so its parents are not matched again for every entry.
+
    function Rules_From_Text
      (Root             : String;
       Text             : String;

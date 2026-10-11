@@ -26,6 +26,7 @@ with Version.Submodules;
 with Version.History;
 with Interfaces; use type Interfaces.Unsigned_32;
 with Version.Config;
+with Version.Revisions;
 with Ada.Characters.Handling;
 with Ada.Environment_Variables;
 with Version.Tree_Cache;
@@ -151,6 +152,16 @@ package body Version.Diff is
    begin
       return Text'Length > 0 and then Text (Text'Last) = Character'Val (10);
    end Ends_With_Newline;
+
+   --  The index line's width where none is asked: git's automatic one for
+   --  the repository at hand, 7 outside one.
+   function Auto_Index_Width return Positive is
+   begin
+      return Version.Revisions.Auto_Abbrev_Length (Version.Repository.Open);
+   exception
+      when others =>
+         return 7;
+   end Auto_Index_Width;
 
    function Abbrev (Id : Version.Objects.Hex_Object_Id) return String is
       Full : constant String := To_String (Id);
@@ -863,7 +874,7 @@ package body Version.Diff is
       function Abbrev (Id : Version.Objects.Hex_Object_Id) return String is
          Full : constant String := Version.Objects.To_String (Id);
          N    : constant Natural :=
-           (if Opts.Index_Abbrev = 0 then 7
+           (if Opts.Index_Abbrev = 0 then Natural'Min (Auto_Index_Width, Full'Length)
             else Natural'Min (Natural'Max (Opts.Index_Abbrev, 4), Full'Length));
       begin
          return Full (Full'First .. Full'First + N - 1);
@@ -1297,7 +1308,26 @@ package body Version.Diff is
    --  names none, no file has one, and no attributes are read to say so --
    --  a log asked for each changed file of each commit, and read the
    --  .gitattributes files from disk every time.
+   --  Any_Textconv's last answer, and the configuration it was drawn from.
+   Textconv_Generation : Integer := -1;
+   Textconv_Answer     : Boolean := False;
+
+   function Any_Textconv_Read (Repo : Version.Repository.Repository_Handle) return Boolean;
+
    function Any_Textconv (Repo : Version.Repository.Repository_Handle) return Boolean is
+   begin
+      if Textconv_Generation = Version.Config.Kept_Generation
+        and then Version.Config.Kept_Is_Current (Repo)
+      then
+         return Textconv_Answer;
+      end if;
+      Textconv_Answer := Any_Textconv_Read (Repo);
+      Textconv_Generation :=
+        (if Version.Config.Kept_Is_Current (Repo) then Version.Config.Kept_Generation else -1);
+      return Textconv_Answer;
+   end Any_Textconv;
+
+   function Any_Textconv_Read (Repo : Version.Repository.Repository_Handle) return Boolean is
    begin
       for E of Version.Config.Read_All (Repo) loop
          declare
@@ -1311,7 +1341,7 @@ package body Version.Diff is
          end;
       end loop;
       return False;
-   end Any_Textconv;
+   end Any_Textconv_Read;
 
    function Textconv_Command
      (Repo : Version.Repository.Repository_Handle; Path : String) return String
@@ -1527,7 +1557,7 @@ package body Version.Diff is
                      Full : constant String := Version.Objects.To_String (Id);
                      N    : constant Natural :=
                        (if Binary_Patch then Full'Length
-                        elsif Opts.Index_Abbrev = 0 then 7
+                        elsif Opts.Index_Abbrev = 0 then Natural'Min (Auto_Index_Width, Full'Length)
                         else Natural'Min
                                (Natural'Max (Opts.Index_Abbrev, 4),
                                 Full'Length));
@@ -1952,9 +1982,7 @@ package body Version.Diff is
      (Repo    : Version.Repository.Repository_Handle;
       Options : Diff_Options) return Boolean
    is
-      Text : constant String :=
-        (if Version.Config.Has_Key (Repo, "diff.renames")
-         then Version.Config.Get_Value (Repo, "diff.renames") else "");
+      Text : constant String := Version.Config.Value_Or (Repo, "diff.renames");
       Lower : String := Text;
    begin
       case Options.Detect_Renames is
@@ -2770,10 +2798,7 @@ package body Version.Diff is
       return Version.Merge.Diff_Algorithm
    is
       Text : constant String :=
-        (if Version.Config.Has_Key (Repo, "diff.algorithm")
-         then Ada.Characters.Handling.To_Lower
-                (Version.Config.Get_Value (Repo, "diff.algorithm"))
-         else "");
+        Ada.Characters.Handling.To_Lower (Version.Config.Value_Or (Repo, "diff.algorithm"));
    begin
       if Text = "patience" then
          return Version.Merge.Diff_Algorithm_Patience;

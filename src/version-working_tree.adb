@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Ada.Directories;       use Ada.Directories;
 with Ada.IO_Exceptions;
 with Ada.Streams;
@@ -7,6 +8,7 @@ with Ada.Containers.Indefinite_Ordered_Maps;
 with GNAT.OS_Lib;
 with System;
 with Interfaces.C;
+with Hostkit.Directory_Listing;
 with Hostkit.Metadata;
 with Version.Files;
 with Version.Platform;
@@ -151,27 +153,30 @@ package body Version.Working_Tree is
             return "";
          end if;
 
+         --  Read on the heap, straight into the text: a file-sized array
+         --  on the task stack overflows it for any file of a few MB.
          declare
-            Data   : Stream_Element_Array (1 .. Stream_Element_Offset (Size));
-            Last   : Stream_Element_Offset;
-            Result : String (1 .. Integer (Size));
+            type Text_Access is access String;
+            procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+            Text : Text_Access := new String (1 .. Integer (Size));
+            Data : Stream_Element_Array (1 .. Stream_Element_Offset (Size))
+              with Import, Address => Text.all'Address;
+            Last : Stream_Element_Offset;
          begin
             Stream_IO.Read (File, Data, Last);
             Stream_IO.Close (File);
 
             if Last /= Data'Last then
+               Free (Text);
                raise Ada.IO_Exceptions.Data_Error
                  with "working tree file changed while reading: " & Path;
             end if;
 
-            for I in Data'Range loop
-               Result (Integer (I)) := Character'Val (Data (I));
-            end loop;
-
-            return Result;
+            return Result : constant String := Text.all do
+               Free (Text);
+            end return;
          end;
       end;
-
    exception
       when others =>
          if Stream_IO.Is_Open (File) then
@@ -315,50 +320,60 @@ package body Version.Working_Tree is
       Use_Pathspec  : Boolean;
       Pathspecs     : Version.Pathspec.Pathspec_Vectors.Vector;
       Algorithm     : Version.Hash.Hash_Algorithm;
-      Result        : in out Working_File_Vectors.Vector)
+      Result        : in out Working_File_Vectors.Vector;
+      --  Whether Dir itself is ignored: what is in it, then, without its
+      --  parents matched again for each entry.
+      Dir_Ignored   : Boolean := False)
    is
-      Search : Ada.Directories.Search_Type;
-      E      : Ada.Directories.Directory_Entry_Type;
-      Opened : Boolean := False;
+      use type Hostkit.Directory_Listing.Entry_Kind;
+      Listed : Hostkit.Directory_Listing.Entry_Vectors.Vector;
    begin
-      Ada.Directories.Start_Search
-        (Search    => Search,
-         Directory => Dir,
-         Pattern   => "",
-         Filter    =>
-           [Ada.Directories.Ordinary_File => True,
-            Ada.Directories.Directory     => True,
-            Ada.Directories.Special_File  => False]);
+      --  The listing says what each entry is, where the filesystem records
+      --  it, without asking each entry again; an entry it cannot say for is
+      --  asked itself below.
+      if not Hostkit.Directory_Listing.List (Dir, Listed) then
+         raise Ada.Directories.Name_Error with Dir;
+      end if;
 
-      Opened := True;
-
-      while Ada.Directories.More_Entries (Search) loop
-         Ada.Directories.Get_Next_Entry (Search, E);
-
+      for Item of Listed loop
          declare
-            Name : constant String := Ada.Directories.Simple_Name (E);
+            Name : String renames Item.Name;
 
             --  Composed rather than asked of Ada.Directories: its
             --  Full_Name validates the simple name, and a host that forbids
             --  a control character in one refuses to name a file git is
             --  perfectly happy to track.
             Full : constant String := Version.Files.Child_Path (Dir, Name);
+            Unknown : constant Boolean :=
+              Item.Kind = Hostkit.Directory_Listing.Unknown;
+            Is_Link : constant Boolean :=
+              Item.Kind = Hostkit.Directory_Listing.Symbolic_Link
+              or else (Unknown and then GNAT.OS_Lib.Is_Symbolic_Link (Full));
+            Is_Dir  : constant Boolean :=
+              not Is_Link
+              and then (Item.Kind = Hostkit.Directory_Listing.Directory
+                        or else (Unknown and then GNAT.OS_Lib.Is_Directory (Full)));
+            Is_File : constant Boolean :=
+              not Is_Link
+              and then (Item.Kind = Hostkit.Directory_Listing.Regular_File
+                        or else (Unknown and then GNAT.OS_Lib.Is_Regular_File (Full)));
          begin
             --  Never report the repository pointer, whether it is a `.git`
             --  directory (normal repo) or a `.git` gitfile (submodule/linked
             --  worktree). git excludes it in every case.
-            if Name /= "." and then Name /= ".." and then Name /= ".git" then
-               if GNAT.OS_Lib.Is_Symbolic_Link (Full) then
+            if Name /= ".git" then
+               if Is_Link then
                   declare
                      Rel_File : constant String :=
                        Relative_Path (Root => Root, Full => Full);
                      Ignored  : constant Boolean :=
                        Use_Ignore
                        and then
-                         Version.Ignore.Is_Ignored
-                           (Rules         => Ignore_Rules,
-                            Relative_Path => Rel_File,
-                            Is_Directory  => False);
+                         Version.Ignore.Is_Ignored_In
+                           (Rules          => Ignore_Rules,
+                            Relative_Path  => Rel_File,
+                            Is_Directory   => False,
+                            Parent_Ignored => Dir_Ignored);
                   begin
                      if ((not Ignored)
                          or else Is_Tracked_Path (Tracked_Index, Rel_File))
@@ -374,7 +389,7 @@ package body Version.Working_Tree is
                               Id   => Symlink_Blob_Id (Full, Algorithm)));
                      end if;
                   end;
-               elsif Ada.Directories.Kind (E) = Ada.Directories.Directory then
+               elsif Is_Dir then
                   if Name /= ".git" then
                      declare
                         Rel_Dir : constant String :=
@@ -382,10 +397,11 @@ package body Version.Working_Tree is
                         Ignored : constant Boolean :=
                           Use_Ignore
                           and then
-                            Version.Ignore.Is_Ignored
-                              (Rules         => Ignore_Rules,
-                               Relative_Path => Rel_Dir,
-                               Is_Directory  => True);
+                            Version.Ignore.Is_Ignored_In
+                              (Rules          => Ignore_Rules,
+                               Relative_Path  => Rel_Dir,
+                               Is_Directory   => True,
+                               Parent_Ignored => Dir_Ignored);
                      begin
                         if Is_Tracked_Gitlink (Tracked_Index, Rel_Dir) then
                            if (not Use_Pathspec)
@@ -431,22 +447,23 @@ package body Version.Working_Tree is
                               Use_Pathspec  => Use_Pathspec,
                               Pathspecs     => Pathspecs,
                               Algorithm     => Algorithm,
-                              Result        => Result);
+                              Result        => Result,
+                              Dir_Ignored   => Ignored);
                         end if;
                      end;
                   end if;
-               elsif Ada.Directories.Kind (E) = Ada.Directories.Ordinary_File
-               then
+               elsif Is_File then
                   declare
                      Rel_File : constant String :=
                        Relative_Path (Root => Root, Full => Full);
                      Ignored  : constant Boolean :=
                        Use_Ignore
                        and then
-                         Version.Ignore.Is_Ignored
-                           (Rules         => Ignore_Rules,
-                            Relative_Path => Rel_File,
-                            Is_Directory  => False);
+                         Version.Ignore.Is_Ignored_In
+                           (Rules          => Ignore_Rules,
+                            Relative_Path  => Rel_File,
+                            Is_Directory   => False,
+                            Parent_Ignored => Dir_Ignored);
                   begin
                      if ((not Ignored)
                          or else Is_Tracked_Path (Tracked_Index, Rel_File))
@@ -488,16 +505,6 @@ package body Version.Working_Tree is
          <<Next_Entry>>
          null;
       end loop;
-
-      Ada.Directories.End_Search (Search);
-
-   exception
-      when others =>
-         if Opened then
-            Ada.Directories.End_Search (Search);
-         end if;
-
-         raise;
    end Scan_Directory;
 
    function Scan

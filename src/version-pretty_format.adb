@@ -17,7 +17,8 @@ with Version.Timestamps;
 
 package body Version.Pretty_Format is
 
-   Default_Abbrev : constant := 7;
+   --  core.abbrev=auto: git's width from the object count.
+   Default_Abbrev : constant Natural := Version.Revisions.Auto_Abbrev;
 
    LF : constant Character := Character'Val (10);
 
@@ -1369,11 +1370,11 @@ package body Version.Pretty_Format is
 
       Result : Unbounded_String;
 
-      --  Abbreviation policy from core.abbrev (default "auto" -> floor 7,
-      --  extended to uniqueness; a number -> that width, still extended if
+      --  Abbreviation policy from core.abbrev (default "auto" -> git's
+      --  width from the object count, extended to uniqueness; a number -> that width, still extended if
       --  ambiguous; "no"/"false" -> the full id).
       Abbrev_Full : Boolean := False;
-      Abbrev_Min  : Positive := Default_Abbrev;
+      Abbrev_Min  : Natural := Default_Abbrev;
 
       Mailmap : Version.Mailmap.Entries;
 
@@ -1447,8 +1448,8 @@ package body Version.Pretty_Format is
          end;
       exception
          when others =>
-            return (if Hex'Length >= Abbrev_Min
-                    then Hex (Hex'First .. Hex'First + Abbrev_Min - 1)
+            return (if Hex'Length >= Natural'Max (Abbrev_Min, 7)
+                    then Hex (Hex'First .. Hex'First + Natural'Max (Abbrev_Min, 7) - 1)
                     else Hex);
       end Abbrev;
 

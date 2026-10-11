@@ -43,10 +43,8 @@ package body Version.Notes is
         and then Ada.Environment_Variables.Value ("GIT_NOTES_REF")'Length > 0
       then
          return Ada.Environment_Variables.Value ("GIT_NOTES_REF");
-      elsif Version.Config.Has_Key (Repo, "core.notesref") then
-         return Version.Config.Get_Value (Repo, "core.notesref");
       else
-         return Default_Ref;
+         return Version.Config.Value_Or (Repo, "core.notesref", Default_Ref);
       end if;
    end Default_Notes_Ref;
 

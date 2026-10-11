@@ -77,6 +77,20 @@ package Version.Config is
      (Repo : Version.Repository.Repository_Handle)
       return Config_Entry_Vectors.Vector;
 
+   procedure Hold_Kept;
+   procedure Release_Kept;
+   --  Between the two -- one operation, a log or a status -- the files Read_All
+   --  last read are taken as they were, not looked at again for every value
+   --  asked: git reads its configuration once a command. Nested holds count.
+
+   function Kept_Generation return Natural;
+   --  Changes whenever what Read_All returns may have: a caller that drew
+   --  an answer from the configuration keeps it while this stands still
+   --  and Kept_Is_Current says the kept read is still the files'.
+
+   function Kept_Is_Current
+     (Repo : Version.Repository.Repository_Handle) return Boolean;
+
    function Config_Entry_Name
      (Current_Entry : Config_Entry)
       return String;
@@ -89,6 +103,15 @@ package Version.Config is
      (Repo : Version.Repository.Repository_Handle;
       Name : String)
       return String;
+
+   function Value_Or
+     (Repo    : Version.Repository.Repository_Handle;
+      Name    : String;
+      Default : String := "")
+      return String;
+   --  A key's value -- the last given, as Get_Value's -- or Default where
+   --  it is not set: one reading of the configuration, where Has_Key then
+   --  Get_Value is two.
 
    function Get_Text
      (Repo : Version.Repository.Repository_Handle;

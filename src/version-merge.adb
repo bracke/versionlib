@@ -4086,7 +4086,7 @@ package body Version.Merge is
    is
       Full : constant String := To_String (Id);
       Len  : constant Natural :=
-        Version.Revisions.Unique_Abbrev_Length (Repo, Id, 7);
+        Version.Revisions.Unique_Abbrev_Length (Repo, Id, Version.Revisions.Auto_Abbrev);
    begin
       return Full (Full'First .. Full'First + Len - 1);
    end Abbreviate;

@@ -283,7 +283,7 @@ package body Version.Tags is
       Full       : constant String := To_String (Deleted_Id);
       Short      : constant String :=
         Full (Full'First .. Full'First
-              + Version.Revisions.Unique_Abbrev_Length (Repo, Deleted_Id, 7)
+              + Version.Revisions.Unique_Abbrev_Length (Repo, Deleted_Id, Version.Revisions.Auto_Abbrev)
               - 1);
    begin
       Delete_Tag (Name);

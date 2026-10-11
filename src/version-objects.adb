@@ -1,3 +1,8 @@
+with Version.Config;
+with Ada.Unchecked_Deallocation;
+with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Strings.Hash;
+with Hostkit.Metadata;
 with Ada.Containers.Ordered_Maps;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
@@ -84,32 +89,44 @@ package body Version.Objects is
    end Loose_Object_Path;
 
    function Read_File_As_String (Path : String) return String is
+      use type Stream_IO.Count;
       File : Stream_IO.File_Type;
    begin
       Stream_IO.Open
         (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path));
 
       declare
-         Size   : constant Stream_IO.Count := Stream_IO.Size (File);
-         Data   : Stream_Element_Array (1 .. Stream_Element_Offset (Size));
-         Last   : Stream_Element_Offset;
-         Result : String (1 .. Integer (Size));
+         Size : constant Stream_IO.Count := Stream_IO.Size (File);
       begin
-         Stream_IO.Read (File, Data, Last);
-         Stream_IO.Close (File);
-
-         if Last /= Data'Last then
-            raise Ada.IO_Exceptions.Data_Error
-              with "could not read complete object file";
+         if Size = 0 then
+            Stream_IO.Close (File);
+            return "";
          end if;
 
-         for I in Data'Range loop
-            Result (Integer (I)) := Character'Val (Data (I));
-         end loop;
+         --  Read on the heap, straight into the text: a file-sized array
+         --  on the task stack overflows it for any file of a few MB.
+         declare
+            type Text_Access is access String;
+            procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+            Text : Text_Access := new String (1 .. Integer (Size));
+            Data : Stream_Element_Array (1 .. Stream_Element_Offset (Size))
+              with Import, Address => Text.all'Address;
+            Last : Stream_Element_Offset;
+         begin
+            Stream_IO.Read (File, Data, Last);
+            Stream_IO.Close (File);
 
-         return Result;
+            if Last /= Data'Last then
+               Free (Text);
+               raise Ada.IO_Exceptions.Data_Error
+                 with "could not read complete object file";
+            end if;
+
+            return Result : constant String := Text.all do
+               Free (Text);
+            end return;
+         end;
       end;
-
    exception
       when others =>
          if Stream_IO.Is_Open (File) then
@@ -163,7 +180,79 @@ package body Version.Objects is
       return
         (Kind_Value => Kind, Content_Value => To_Unbounded_String (Content));
    end Create_Object;
+   function Read_Loose_Uncached
+     (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
+      return Git_Object;
+
+   --  Loose objects read, kept by their file and its change stamp: a tree
+   --  a log diffs as one commit's new side is the next one's old side, and
+   --  was read, inflated and hashed again. A file rewritten under the same
+   --  name -- a corrupted object a check is to find -- has another stamp
+   --  and is read afresh. Emptied past its bound, as the packs' is.
+   type Loose_Held is record
+      Stamp  : Unbounded_String;
+      Object : Git_Object;
+   end record;
+   package Loose_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Loose_Held, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   Loose_Held_Map   : Loose_Maps.Map;
+   Loose_Held_Bytes : Natural := 0;
+   Loose_Held_Limit : constant Natural := 64 * 1024 * 1024;
+
+   procedure Read_Loose_If_Present
+     (Repo    : Version.Repository.Repository_Handle;
+      Id      : Hex_Object_Id;
+      Present : out Boolean;
+      Object  : out Git_Object)
+   is
+      Path      : constant String := Loose_Object_Path (Repo, Id);
+      Available : Boolean;
+      Stamp     : constant String := Hostkit.Metadata.Change_Stamp (Path, Available);
+      Position  : constant Loose_Maps.Cursor := Loose_Held_Map.Find (Path);
+   begin
+      --  No stamp: absent, or a host that gives none -- asked once more.
+      Present := Available or else Version.Files.Exists (Path);
+      if not Present then
+         return;
+      end if;
+      if Available and then Loose_Maps.Has_Element (Position)
+        and then To_String (Loose_Maps.Element (Position).Stamp) = Stamp
+      then
+         Object := Loose_Maps.Element (Position).Object;
+         return;
+      end if;
+      declare
+         Read : constant Git_Object := Read_Loose_Uncached (Repo, Id);
+         Size : constant Natural := Length (Read.Content_Value);
+      begin
+         if Available then
+            if Loose_Held_Bytes + Size > Loose_Held_Limit then
+               Loose_Held_Map.Clear;
+               Loose_Held_Bytes := 0;
+            end if;
+            Loose_Held_Map.Include (Path, (Stamp => To_Unbounded_String (Stamp), Object => Read));
+            Loose_Held_Bytes := Loose_Held_Bytes + Size;
+         end if;
+         Object := Read;
+      end;
+   end Read_Loose_If_Present;
+
    function Read_Loose_Object
+     (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
+      return Git_Object
+   is
+      Present : Boolean;
+      Object  : Git_Object;
+   begin
+      Read_Loose_If_Present (Repo, Id, Present, Object);
+      if not Present then
+         --  As the read of an absent file always said.
+         return Read_Loose_Uncached (Repo, Id);
+      end if;
+      return Object;
+   end Read_Loose_Object;
+
+   function Read_Loose_Uncached
      (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
       return Git_Object
    is
@@ -250,7 +339,7 @@ package body Version.Objects is
             end if;
          end;
       end;
-   end Read_Loose_Object;
+   end Read_Loose_Uncached;
 
    --  Resolve a `refs/replace/<oid>` chain (loose refs), as `git` does when
    --  reading objects, unless GIT_NO_REPLACE_OBJECTS is set. Read directly
@@ -258,6 +347,31 @@ package body Version.Objects is
    --  The replacement directory of the last repository asked about.
    Replace_Of_Dir : Unbounded_String;
    Replace_Dir    : Unbounded_String;
+
+   --  Within an operation's Lookup_Scope: whether that directory was there
+   --  when first asked.
+   Scope_Depth   : Natural := 0;
+   Scope_Asked   : Boolean := False;
+   Scope_Present : Boolean := False;
+
+   overriding procedure Initialize (Item : in out Lookup_Scope) is
+      pragma Unreferenced (Item);
+   begin
+      Scope_Depth := Scope_Depth + 1;
+      Version.Config.Hold_Kept;
+   end Initialize;
+
+   overriding procedure Finalize (Item : in out Lookup_Scope) is
+      pragma Unreferenced (Item);
+   begin
+      Version.Config.Release_Kept;
+      if Scope_Depth > 0 then
+         Scope_Depth := Scope_Depth - 1;
+      end if;
+      if Scope_Depth = 0 then
+         Scope_Asked := False;
+      end if;
+   end Finalize;
 
    function Replacement_Of
      (Repo : Version.Repository.Repository_Handle; Id : Hex_Object_Id)
@@ -275,9 +389,24 @@ package body Version.Objects is
       if To_String (Replace_Of_Dir) /= Version.Repository.Common_Git_Dir (Repo) then
          Replace_Of_Dir := To_Unbounded_String (Version.Repository.Common_Git_Dir (Repo));
          Replace_Dir := To_Unbounded_String (Join (Join (Version.Repository.Common_Git_Dir (Repo), "refs"), "replace"));
+         Scope_Asked := False;
       end if;
-      if not Version.Files.Exists (To_String (Replace_Dir)) then
-         return Id;
+      if Scope_Depth > 0 and then Scope_Asked then
+         if not Scope_Present then
+            return Id;
+         end if;
+      else
+         declare
+            Present : constant Boolean := Version.Files.Exists (To_String (Replace_Dir));
+         begin
+            if Scope_Depth > 0 then
+               Scope_Asked := True;
+               Scope_Present := Present;
+            end if;
+            if not Present then
+               return Id;
+            end if;
+         end;
       end if;
 
       for Depth in 1 .. 30 loop

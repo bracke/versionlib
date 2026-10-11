@@ -660,9 +660,26 @@ package body Version.Pack is
 
       Location : Pack_Location;
    begin
-      --  The listing kept, first; asked of the directory again only where
-      --  it did not find the object or held an index since gone.
-      if Search (Indexes_In (Pack_Dir, Trusted => True), Location) and then Location.Found then
+      --  The listing kept, first, searched where it is kept; asked of the
+      --  directory again only where it did not find the object or held an
+      --  index since gone -- and searched again only where the directory
+      --  changed since it was listed: a loose object, missed in the packs,
+      --  is not searched for in the same packs twice.
+      if To_String (Listed_Directory) = Pack_Dir then
+         if Search (Listed_Indexes, Location) then
+            if Location.Found then
+               return Location;
+            end if;
+            declare
+               Available : Boolean;
+               Stamp     : constant String := Hostkit.Metadata.Change_Stamp (Pack_Dir, Available);
+            begin
+               if Available and then Stamp = To_String (Listed_Stamp) then
+                  return Location;
+               end if;
+            end;
+         end if;
+      elsif Search (Indexes_In (Pack_Dir, Trusted => True), Location) and then Location.Found then
          return Location;
       end if;
       if Search (Indexes_In (Pack_Dir), Location) then

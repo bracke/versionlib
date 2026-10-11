@@ -66,7 +66,7 @@ package Version.Diff is
       Algorithm      : Version.Merge.Diff_Algorithm :=
         Version.Merge.Diff_Algorithm_Default;
       --  The `index <old>..<new>` line's abbreviation: --abbrev=<n> and
-      --  --full-index (the full id); 0 is git's default of 7.  Separate from
+      --  --full-index (the full id); 0 is git's automatic width.  Separate from
       --  Abbrev, which the raw format reads and which diff-tree sets to the
       --  full length while its patches keep the short index line.
       Index_Abbrev   : Natural := 0;

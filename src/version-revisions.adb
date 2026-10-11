@@ -66,15 +66,54 @@ package body Version.Revisions is
    Abbrev_Packs_Valid : Boolean := False;
    Abbrev_Packs_Stamp : Ada.Calendar.Time := Ada.Calendar.Time_Of (1970, 1, 1);
 
+   --  The pack indexes are loaded once per process: a command that
+   --  abbreviates many ids (blame, log) would otherwise rebuild the whole
+   --  location map for each.  A new or repacked pack changes the
+   --  directory's timestamp, which reloads them.
+   procedure Refresh_Abbrev_Packs (Repo : Version.Repository.Repository_Handle) is
+      use type Ada.Calendar.Time;
+      Pack_Dir : constant String :=
+        Join (Join (Version.Repository.Common_Git_Dir (Repo), "objects"), "pack");
+      Stamp    : Ada.Calendar.Time := Abbrev_Packs_Stamp;
+   begin
+      if Version.Files.Exists (Pack_Dir) then
+         Stamp := Ada.Directories.Modification_Time (Pack_Dir);
+      end if;
+      if not Abbrev_Packs_Valid or else Stamp /= Abbrev_Packs_Stamp then
+         Version.Pack_Index_Cache.Clear (Abbrev_Packs);
+         Version.Pack_Index_Cache.Load (Repo => Repo, Item => Abbrev_Packs);
+         Abbrev_Packs_Stamp := Stamp;
+         Abbrev_Packs_Valid := True;
+      end if;
+   end Refresh_Abbrev_Packs;
+
+   function Auto_Abbrev_Length
+     (Repo : Version.Repository.Repository_Handle)
+      return Positive
+   is
+      Count : Natural;
+      Bits  : Natural := 0;
+   begin
+      Refresh_Abbrev_Packs (Repo);
+      Count := Version.Pack_Index_Cache.Cached_Location_Count (Abbrev_Packs);
+      while Count > 0 loop
+         Bits := Bits + 1;
+         Count := Count / 2;
+      end loop;
+      return Positive'Max (7, (Bits + 1) / 2);
+   end Auto_Abbrev_Length;
+
    function Unique_Abbrev_Length
      (Repo    : Version.Repository.Repository_Handle;
       Id      : Version.Objects.Hex_Object_Id;
-      Minimum : Positive)
+      Minimum : Natural)
       return Natural
    is
       Full : constant String := Lower (To_String (Id));
+      Floor : constant Positive :=
+        (if Minimum = Auto_Abbrev then Auto_Abbrev_Length (Repo) else Minimum);
       Min  : constant Positive :=
-        (if Minimum > Full'Length then Full'Length else Minimum);
+        (if Floor > Full'Length then Full'Length else Floor);
       Fanout : constant String := Full (Full'First .. Full'First + 1);
       Objects_Dir : constant String :=
         Join (Version.Repository.Common_Git_Dir (Repo), "objects");
@@ -86,24 +125,7 @@ package body Version.Revisions is
       use type Ada.Directories.File_Kind;
       use type Ada.Calendar.Time;
    begin
-      --  The pack indexes are loaded once per process: a command that
-      --  abbreviates many ids (blame, log) would otherwise rebuild the
-      --  whole location map for each.  A new or repacked pack changes the
-      --  directory's timestamp, which reloads them.
-      declare
-         Pack_Dir : constant String := Join (Objects_Dir, "pack");
-         Stamp    : Ada.Calendar.Time := Abbrev_Packs_Stamp;
-      begin
-         if Version.Files.Exists (Pack_Dir) then
-            Stamp := Ada.Directories.Modification_Time (Pack_Dir);
-         end if;
-         if not Abbrev_Packs_Valid or else Stamp /= Abbrev_Packs_Stamp then
-            Version.Pack_Index_Cache.Clear (Abbrev_Packs);
-            Version.Pack_Index_Cache.Load (Repo => Repo, Item => Abbrev_Packs);
-            Abbrev_Packs_Stamp := Stamp;
-            Abbrev_Packs_Valid := True;
-         end if;
-      end;
+      Refresh_Abbrev_Packs (Repo);
 
       --  Collect loose object ids sharing the two-char fanout directory; only
       --  those can collide with Full on a prefix of length >= 2. Skip a loose

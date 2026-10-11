@@ -992,8 +992,6 @@ package body Version.Maintenance.Tests is
          Remote_Lock : constant String :=
            Join (Join (Root, ".git"), "refs/remotes/origin/main.lock");
          Lock_Content : constant String := "not-a-ref" & Character'Val (10);
-         Object_Path : constant String := Object_File_Path (Root, Head_Id);
-         Object_Existed : constant Boolean := Ada.Directories.Exists (Object_Path);
          Result : Version.Maintenance.Maintenance_Result;
          pragma Unreferenced (Result);
       begin
@@ -1047,8 +1045,6 @@ package body Version.Maintenance.Tests is
          Remote_Log_Lock : constant String :=
            Version.Reflog.Path (Repo, "refs/remotes/origin/main") & ".lock";
          Lock_Content : constant String := "not-a-reflog" & Character'Val (10);
-         Object_Path : constant String := Object_File_Path (Root, Head_Id);
-         Object_Existed : constant Boolean := Ada.Directories.Exists (Object_Path);
          Result : Version.Maintenance.Maintenance_Result;
          pragma Unreferenced (Result);
       begin

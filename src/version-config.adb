@@ -3,7 +3,9 @@ with Ada.Calendar.Time_Zones;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Strings.Fixed;
+with Ada.Strings.Hash;
 with Ada.Text_IO;
 
 with Hostkit.Metadata;
@@ -753,52 +755,132 @@ package body Version.Config is
    --  The last configuration read, and what its files were then: each
    --  path and its change stamp. Read for every file a status looks at, a
    --  configuration of four files was parsed thousands of times.
+   --  Whether this host gives files change stamps: asked once, of a
+   --  directory that is there.
+   type Stamp_Answer is (Unknown, Yes, No);
+   Stamping : Stamp_Answer := Unknown;
+
+   function Stamps_Work return Boolean is
+      Available : Boolean;
+      Ignored   : constant String :=
+        (if Stamping = Unknown then Hostkit.Metadata.Change_Stamp (Ada.Directories.Current_Directory, Available)
+         else "");
+      pragma Unreferenced (Ignored);
+   begin
+      if Stamping = Unknown then
+         Stamping := (if Available then Yes else No);
+      end if;
+      return Stamping = Yes;
+   end Stamps_Work;
+
+   package Value_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type        => String,
+      Element_Type    => String,
+      Hash            => Ada.Strings.Hash,
+      Equivalent_Keys => "=");
+
    Last_Key     : Unbounded_String;
    Last_Entries : Config_Entry_Vectors.Vector;
+   --  The kept read's last value for each name, lower-cased: a value asked
+   --  is found, not every entry named and compared.
+   Last_Values  : Value_Maps.Map;
+   Last_Config  : Unbounded_String;
+   Generation   : Natural := 0;
+   Held         : Natural := 0;
+
+   --  The files it reads as they stand; "" where one cannot be told
+   --  apart from a rewrite of it, and nothing is kept.
+   function Stamp_Key
+     (Repo : Version.Repository.Repository_Handle) return String
+   is
+      Text : Unbounded_String;
+
+      --  One look a file: where the host stamps files at all, a file it
+      --  gives no stamp for is not there -- and only where it does not is
+      --  there asked once more.
+      procedure Stamp (Path : String) is
+         Available : Boolean;
+      begin
+         Append (Text, Path & "=");
+         if Path /= "" then
+            declare
+               Seen : constant String := Hostkit.Metadata.Change_Stamp (Path, Available);
+            begin
+               if Available then
+                  Append (Text, Seen);
+               elsif not Stamps_Work and then Version.Files.Exists (Path) then
+                  Text := To_Unbounded_String ("?");
+                  return;
+               end if;
+            end;
+         end if;
+         Append (Text, ASCII.LF);
+      end Stamp;
+   begin
+      Stamp (System_Config_File);
+      if Ada.Environment_Variables.Exists ("GIT_CONFIG_GLOBAL") then
+         Stamp (Env_Value ("GIT_CONFIG_GLOBAL"));
+      else
+         Stamp (Xdg_Global_Config_File);
+         Stamp (Home_Global_Config_File);
+      end if;
+      Stamp (Config_Path (Repo));
+      Stamp (Version.Files.Join (Version.Repository.Git_Dir (Repo), "config.worktree"));
+      return (if Index (Text, "?") = 1 then "" else To_String (Text));
+   end Stamp_Key;
+
+   function Kept_Is_Current
+     (Repo : Version.Repository.Repository_Handle) return Boolean is
+   begin
+      if Length (Last_Key) = 0
+        or else To_String (Last_Config) /= Config_Path (Repo)
+      then
+         return False;
+      end if;
+      return Held > 0 or else To_String (Last_Key) = Stamp_Key (Repo);
+   end Kept_Is_Current;
+
+   function Kept_Generation return Natural is (Generation);
+
+   procedure Hold_Kept is
+   begin
+      Held := Held + 1;
+   end Hold_Kept;
+
+   procedure Release_Kept is
+   begin
+      if Held > 0 then
+         Held := Held - 1;
+      end if;
+   end Release_Kept;
+
+   --  Read_All with the files looked at, held or not.
+   function Read_All_Fresh
+     (Repo : Version.Repository.Repository_Handle)
+      return Config_Entry_Vectors.Vector;
 
    function Read_All
+     (Repo : Version.Repository.Repository_Handle)
+      return Config_Entry_Vectors.Vector
+   is
+   begin
+      if Held > 0
+        and then Length (Last_Key) > 0
+        and then To_String (Last_Config) = Config_Path (Repo)
+      then
+         return Last_Entries;
+      end if;
+      return Read_All_Fresh (Repo);
+   end Read_All;
+
+   function Read_All_Fresh
      (Repo : Version.Repository.Repository_Handle)
       return Config_Entry_Vectors.Vector
    is
       R      : aliased constant Version.Repository.Repository_Handle := Repo;
       Result : Config_Entry_Vectors.Vector;
 
-      --  The files it reads as they stand; "" where one cannot be told
-      --  apart from a rewrite of it, and nothing is kept.
-      function Key return String is
-         Text : Unbounded_String;
-
-         procedure Stamp (Path : String) is
-            Available : Boolean;
-         begin
-            Append (Text, Path & "=");
-            if Path /= "" and then Version.Files.Exists (Path) then
-               declare
-                  Seen : constant String := Hostkit.Metadata.Change_Stamp (Path, Available);
-               begin
-                  if not Available then
-                     Text := To_Unbounded_String ("?");
-                     return;
-                  end if;
-                  Append (Text, Seen);
-               end;
-            end if;
-            Append (Text, ASCII.LF);
-         end Stamp;
-      begin
-         Stamp (System_Config_File);
-         if Ada.Environment_Variables.Exists ("GIT_CONFIG_GLOBAL") then
-            Stamp (Env_Value ("GIT_CONFIG_GLOBAL"));
-         else
-            Stamp (Xdg_Global_Config_File);
-            Stamp (Home_Global_Config_File);
-         end if;
-         Stamp (Config_Path (Repo));
-         Stamp (Version.Files.Join (Version.Repository.Git_Dir (Repo), "config.worktree"));
-         return (if Index (Text, "?") = 1 then "" else To_String (Text));
-      end Key;
-
-      Now : constant String := Key;
+      Now : constant String := Stamp_Key (Repo);
 
       procedure Read (Path : String) is
       begin
@@ -839,15 +921,21 @@ package body Version.Config is
       --  Kept where every file it read is in the key: an include reads
       --  another, whose changes the key would not see.
       Last_Key := Null_Unbounded_String;
+      Generation := Generation + 1;
       if Now /= ""
         and then (for all E of Result =>
                     Ada.Strings.Fixed.Index (Lower (Config_Entry_Name (E)), "include") /= 1)
       then
          Last_Key := To_Unbounded_String (Now);
          Last_Entries := Result;
+         Last_Values.Clear;
+         for E of Result loop
+            Last_Values.Include (Lower (Config_Entry_Name (E)), To_String (E.Value));
+         end loop;
+         Last_Config := To_Unbounded_String (Config_Path (Repo));
       end if;
       return Result;
-   end Read_All;
+   end Read_All_Fresh;
 
    procedure Write_Entries_To
      (Path    : String;
@@ -861,6 +949,7 @@ package body Version.Config is
    begin
       --  What was read before this write is not the configuration now.
       Last_Key := Null_Unbounded_String;
+      Generation := Generation + 1;
       Version.Files.Create_Parent_Directories (Temp_Path);
       --  Text_Translation=No: git's files are LF on every host, and GNAT's
       --  Text_IO would otherwise write the host's own terminator.
@@ -1391,6 +1480,33 @@ package body Version.Config is
       raise Ada.IO_Exceptions.Data_Error
         with "config key does not exist: " & Name;
    end Get_Value;
+
+   function Value_Or
+     (Repo    : Version.Repository.Repository_Handle;
+      Name    : String;
+      Default : String := "")
+      return String
+   is
+      Wanted : constant String := Lower (Name);
+      Found  : Boolean := False;
+      Value  : Unbounded_String;
+   begin
+      Require_Config_Name (Name);
+      if Kept_Is_Current (Repo) then
+         declare
+            Position : constant Value_Maps.Cursor := Last_Values.Find (Wanted);
+         begin
+            return (if Value_Maps.Has_Element (Position) then Value_Maps.Element (Position) else Default);
+         end;
+      end if;
+      for E of Read_All (Repo) loop
+         if Lower (Config_Entry_Name (E)) = Wanted then
+            Found := True;
+            Value := E.Value;
+         end if;
+      end loop;
+      return (if Found then To_String (Value) else Default);
+   end Value_Or;
 
    function Get_Text
      (Repo : Version.Repository.Repository_Handle; Name : String) return String

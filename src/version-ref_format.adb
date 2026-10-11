@@ -1622,7 +1622,7 @@ package body Version.Ref_Format is
       function Abbrev (Id : String) return String is
         (Id (Id'First .. Id'First
              + Version.Revisions.Unique_Abbrev_Length
-                 (Repo, Version.Objects.To_Object_Id (Id), 7) - 1));
+                 (Repo, Version.Objects.To_Object_Id (Id), Version.Revisions.Auto_Abbrev) - 1));
    begin
       --  A rebase or bisect in progress names the branch it works on.
       if Version.Files.Exists (Version.Files.Join (Git_Dir, "rebase-merge"))
