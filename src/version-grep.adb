@@ -60,21 +60,42 @@ package body Version.Grep is
       return To_String (Result);
    end BRE_To_ERE;
 
+   --  A pattern compiled into its caller's expression, or refused. Into the
+   --  caller's: returned, the expression -- some 150 KB -- was a copy in a
+   --  frame of its own, and a pattern's record already held one.
+   procedure Compile_Pattern_Into
+     (Pattern : String; Kind : Pattern_Kind; Into : out Regexp.Regexp)
+   is
+      use type Regexp.Compile_Status;
+
+      --  One result in one frame: chosen by a case expression, each way's
+      --  result was a frame of its own size, three of them, 440 KB.
+      procedure Take (Result : Regexp.Compile_Result) is
+      begin
+         if Result.Status /= Regexp.Compile_Ok then
+            raise Ada.IO_Exceptions.Data_Error
+              with "invalid grep pattern: " & Pattern;
+         end if;
+         Into := Result.Expression;
+      end Take;
+   begin
+      case Kind is
+         when Fixed_String =>
+            Take (Regexp.Compile_Literal (Pattern));
+         when Basic_Regex =>
+            Take (Regexp.Compile (BRE_To_ERE (Pattern)));
+         when Extended_Regex | Perl_Regex =>
+            Take (Regexp.Compile (Pattern));
+      end case;
+   end Compile_Pattern_Into;
+
    function Compile_Pattern
      (Pattern : String; Kind : Pattern_Kind) return Regexp.Regexp
    is
-      use type Regexp.Compile_Status;
-      Result : constant Regexp.Compile_Result :=
-        (case Kind is
-            when Fixed_String  => Regexp.Compile_Literal (Pattern),
-            when Basic_Regex   => Regexp.Compile (BRE_To_ERE (Pattern)),
-            when Extended_Regex | Perl_Regex => Regexp.Compile (Pattern));
    begin
-      if Result.Status /= Regexp.Compile_Ok then
-         raise Ada.IO_Exceptions.Data_Error
-           with "invalid grep pattern: " & Pattern;
-      end if;
-      return Result.Expression;
+      return Result : Regexp.Regexp do
+         Compile_Pattern_Into (Pattern, Kind, Result);
+      end return;
    end Compile_Pattern;
 
    function Compile
@@ -584,7 +605,7 @@ package body Version.Grep is
                   CP.Empty := Pat'Length = 0;
                   if not CP.Empty then
                      begin
-                        CP.Expr := Compile_Pattern (Pat, Opts.Kind);
+                        Compile_Pattern_Into (Pat, Opts.Kind, CP.Expr);
                      exception
                         when Ada.IO_Exceptions.Data_Error =>
                            --  compile_regexp_failed
