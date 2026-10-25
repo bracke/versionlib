@@ -609,7 +609,7 @@ package body Version.Fetch is
          Ada.Streams.Stream_IO.Create
            (File => Item.File,
             Mode => Ada.Streams.Stream_IO.Out_File,
-            Name => Version.Files.To_Native_Path (To_String (Item.Path)));
+            Name => Version.Files.To_Native_Path (To_String (Item.Path)), Form => "shared=no");
          Item.Opened := True;
       end if;
 

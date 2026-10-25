@@ -130,7 +130,7 @@ package body Version.Hooks is
    begin
       Ada.Streams.Stream_IO.Open
         (File, Ada.Streams.Stream_IO.In_File,
-         Version.Files.To_Native_Path (Path));
+         Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while Last < Line'Last
         and then not Ada.Streams.Stream_IO.End_Of_File (File)

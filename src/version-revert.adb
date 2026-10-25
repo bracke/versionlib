@@ -352,7 +352,7 @@ package body Version.Revert is
       end loop;
       Version.Files.Create_Parent_Directories (Path);
       Ada.Streams.Stream_IO.Create
-        (File, Ada.Streams.Stream_IO.Out_File, Version.Files.To_Native_Path (Path));
+        (File, Ada.Streams.Stream_IO.Out_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
       Ada.Streams.Stream_IO.Write (File, Data);
       Ada.Streams.Stream_IO.Close (File);
    exception
@@ -438,7 +438,7 @@ package body Version.Revert is
       then
          return False;
       end if;
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
             Line : constant String := Ada.Text_IO.Get_Line (File);

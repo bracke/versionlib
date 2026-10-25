@@ -222,7 +222,7 @@ package body Version.Files is
       Create_Parent_Directories (Path);
 
       Ada.Streams.Stream_IO.Create
-        (File, Ada.Streams.Stream_IO.Out_File, To_Native_Path (Path));
+        (File, Ada.Streams.Stream_IO.Out_File, To_Native_Path (Path), Form => "shared=no");
 
       if Content'Length > 0 then
          declare
@@ -266,7 +266,7 @@ package body Version.Files is
       File : Ada.Streams.Stream_IO.File_Type;
    begin
       Ada.Streams.Stream_IO.Open
-        (File, Ada.Streams.Stream_IO.In_File, To_Native_Path (Path));
+        (File, Ada.Streams.Stream_IO.In_File, To_Native_Path (Path), Form => "shared=no");
 
       declare
          Size : constant Ada.Streams.Stream_IO.Count :=

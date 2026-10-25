@@ -69,7 +69,7 @@ package body Version.Pack is
       File : Stream_IO.File_Type;
    begin
       Stream_IO.Open
-        (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path));
+        (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       declare
          Size : constant Stream_IO.Count := Stream_IO.Size (File);
@@ -183,7 +183,7 @@ package body Version.Pack is
          Fresh : Stream_Array_Access;
          Last  : Stream_Element_Offset;
       begin
-         Stream_IO.Open (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path));
+         Stream_IO.Open (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
          Fresh := new Stream_Element_Array (1 .. Stream_Element_Offset (Stream_IO.Size (File)));
          Stream_IO.Read (File, Fresh.all, Last);
          Stream_IO.Close (File);

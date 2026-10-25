@@ -146,7 +146,7 @@ package body Version.Reachability is
                         Ada.Text_IO.Open
                           (File,
                            Ada.Text_IO.In_File,
-                           Version.Files.To_Native_Path (Full));
+                           Version.Files.To_Native_Path (Full), Form => "shared=no");
                         if not Ada.Text_IO.End_Of_File (File) then
                            declare
                               Line : constant String :=
@@ -193,7 +193,7 @@ package body Version.Reachability is
       File : Ada.Text_IO.File_Type;
    begin
       Ada.Text_IO.Open
-        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
@@ -350,7 +350,7 @@ package body Version.Reachability is
          return;
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
       while not Ada.Text_IO.End_Of_File (File) loop
          Scan_Line (Ada.Text_IO.Get_Line (File));
       end loop;

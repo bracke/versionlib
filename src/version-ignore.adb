@@ -930,7 +930,7 @@ package body Version.Ignore is
       end if;
 
       Ada.Text_IO.Open
-        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
@@ -1011,7 +1011,7 @@ package body Version.Ignore is
          return "";
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, "/etc/passwd");
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, "/etc/passwd", Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
@@ -1490,7 +1490,7 @@ package body Version.Ignore is
       end if;
 
       Ada.Text_IO.Open
-        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
@@ -1763,7 +1763,7 @@ package body Version.Ignore is
       Read_Remote_Urls_Config (Path, Config_Remote_Urls);
 
       Ada.Text_IO.Open
-        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
@@ -2080,7 +2080,7 @@ package body Version.Ignore is
       Read_Remote_Urls_Config (Path, Config_Remote_Urls);
 
       Ada.Text_IO.Open
-        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+        (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare

@@ -834,7 +834,7 @@ package body Version.Pathspec is
          return;
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, File_Path);
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, File_Path, Form => "shared=no");
       while not Ada.Text_IO.End_Of_File (File) loop
          declare
             Line : constant String := Trimmed (Ada.Text_IO.Get_Line (File));

@@ -57,7 +57,7 @@ package body Version.Write is
 
       Version.Files.Create_Parent_Directories (Path);
       Ada.Streams.Stream_IO.Create
-        (File, Ada.Streams.Stream_IO.Out_File, Version.Files.To_Native_Path (Path));
+        (File, Ada.Streams.Stream_IO.Out_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       Ada.Streams.Stream_IO.Write (File, Data);
       Ada.Streams.Stream_IO.Close (File);

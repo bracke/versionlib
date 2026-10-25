@@ -301,7 +301,7 @@ package body Version.Repository_Format is
       Ada.Text_IO.Open
         (File,
          Ada.Text_IO.In_File,
-         Version.Files.To_Native_Path (Path));
+         Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare

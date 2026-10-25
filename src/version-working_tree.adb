@@ -143,7 +143,7 @@ package body Version.Working_Tree is
       File : Stream_IO.File_Type;
    begin
       Stream_IO.Open
-        (File, Stream_IO.In_File, Native_Scan_Path (Path));
+        (File, Stream_IO.In_File, Native_Scan_Path (Path), Form => "shared=no");
 
       declare
          Size : constant Stream_IO.Count := Stream_IO.Size (File);

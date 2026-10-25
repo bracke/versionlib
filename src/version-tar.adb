@@ -320,7 +320,7 @@ package body Version.Tar is
       Ada.Streams.Stream_IO.Create
         (Writer.File,
          Ada.Streams.Stream_IO.Out_File,
-         Version.Files.To_Native_Path (Output_Path));
+         Version.Files.To_Native_Path (Output_Path), Form => "shared=no");
       Writer.Open := True;
       Writer.Mtime := Mtime;
       Writer.Names.Clear;

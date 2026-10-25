@@ -139,7 +139,7 @@ package body Version.Packed_Refs is
          return Result;
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       while not Ada.Text_IO.End_Of_File (File) loop
          declare

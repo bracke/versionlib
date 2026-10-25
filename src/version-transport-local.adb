@@ -168,7 +168,7 @@ package body Version.Transport.Local is
    is
       File : Ada.Text_IO.File_Type;
    begin
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       declare
          Line : constant String :=

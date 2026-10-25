@@ -226,7 +226,7 @@ package body Version.Revert_State is
            "malformed revert state: not a regular file";
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       if Ada.Text_IO.Get_Line (File) /= "version 1" then
          raise Ada.IO_Exceptions.Data_Error with "malformed revert state: version";

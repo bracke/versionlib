@@ -415,7 +415,7 @@ package body Version.Merge_State is
          raise Ada.IO_Exceptions.Data_Error with "no integration to finalize";
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path));
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       declare
          First_Line : constant String := Ada.Text_IO.Get_Line (File);

@@ -81,7 +81,7 @@ package body Version.Pack_Index_Cache is
    is
       File : Stream_IO.File_Type;
    begin
-      Stream_IO.Open (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path));
+      Stream_IO.Open (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       declare
          Size : constant Stream_IO.Count := Stream_IO.Size (File);

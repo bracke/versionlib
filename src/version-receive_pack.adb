@@ -480,7 +480,7 @@ package body Version.Receive_Pack is
       Ada.Streams.Stream_IO.Open
         (File,
          Ada.Streams.Stream_IO.In_File,
-         Version.Files.To_Native_Path (Pack_Path));
+         Version.Files.To_Native_Path (Pack_Path), Form => "shared=no");
       Ada.Streams.Stream_IO.Read (File, Result (Pos .. Result'Last), Last);
       Ada.Streams.Stream_IO.Close (File);
 
@@ -1734,7 +1734,7 @@ package body Version.Receive_Pack is
       Append_Bytes (Result, Pos, Section);
       Ada.Streams.Stream_IO.Open
         (File, Ada.Streams.Stream_IO.In_File,
-         Version.Files.To_Native_Path (Pack_Path));
+         Version.Files.To_Native_Path (Pack_Path), Form => "shared=no");
       Ada.Streams.Stream_IO.Read (File, Result (Pos .. Result'Last), Last);
       Ada.Streams.Stream_IO.Close (File);
       if Last /= Result'Last then

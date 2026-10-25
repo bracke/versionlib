@@ -70,7 +70,7 @@ package body Version.Pack_Write is
       Ada.Streams.Stream_IO.Create
         (File,
          Ada.Streams.Stream_IO.Out_File,
-         Version.Files.To_Native_Path (Path));
+         Version.Files.To_Native_Path (Path), Form => "shared=no");
       Ada.Streams.Stream_IO.Write (File, Data);
       Ada.Streams.Stream_IO.Close (File);
 
@@ -277,7 +277,7 @@ package body Version.Pack_Write is
       Ada.Streams.Stream_IO.Create
         (Pack_File,
          Ada.Streams.Stream_IO.Out_File,
-         Version.Files.To_Native_Path (Pack_Path));
+         Version.Files.To_Native_Path (Pack_Path), Form => "shared=no");
 
       Version.Hash.Initialize (Sha);
 

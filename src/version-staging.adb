@@ -25,7 +25,7 @@ package body Version.Staging is
    is
       File : Stream_IO.File_Type;
    begin
-      Stream_IO.Open (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path));
+      Stream_IO.Open (File, Stream_IO.In_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
 
       declare
          Size : constant Stream_IO.Count := Stream_IO.Size (File);
@@ -538,7 +538,7 @@ package body Version.Staging is
       end loop;
 
       Version.Files.Create_Parent_Directories (Path);
-      Stream_IO.Create (File, Stream_IO.Out_File, Version.Files.To_Native_Path (Path));
+      Stream_IO.Create (File, Stream_IO.Out_File, Version.Files.To_Native_Path (Path), Form => "shared=no");
       Stream_IO.Write (File, Data);
       Stream_IO.Close (File);
 

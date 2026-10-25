@@ -1,6 +1,7 @@
 with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.IO_Exceptions;
+with Ada.Text_IO;
 with AUnit.Assertions;
 with AUnit.Test_Cases;
 
@@ -395,6 +396,27 @@ package body Version.Config.Tests is
               (Version.Config.Get_Value (Repo, "REMOTE.ORIGIN.URL")
                = "https://example.invalid/repo.git",
                "config get must resolve rendered dotted names case-insensitively");
+            --  Held open elsewhere in the program -- another task reading
+            --  it -- the configuration is read all the same: the run time
+            --  refuses a second open of a file under its default form.
+            declare
+               Held : Ada.Text_IO.File_Type;
+               Got  : Unbounded_String;
+            begin
+               Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, ".git/config");
+               begin
+                  --  Changed, so that it is read again rather than kept.
+                  Version.Config.Replace_Section (Repo => Repo, Section => "user", Entries => User_Entries);
+                  Got := To_Unbounded_String (Version.Config.Get_Value (Repo, "user.name"));
+               exception
+                  when others =>
+                     Got := To_Unbounded_String ("(raised)");
+               end;
+               Ada.Text_IO.Close (Held);
+               Assert
+                 (To_String (Got) = "Ada User",
+                  "config get must read a configuration held open elsewhere: " & To_String (Got));
+            end;
             Assert
               (Version.Config.List_Text (Repo) = Before,
                "config get must be read-only");
